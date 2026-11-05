@@ -1,0 +1,569 @@
+"""Familia B: mesa industrial de estructura tubular soldada con encimera y balda de chapa plegada.
+
+Sistema de coordenadas del conjunto: X = longitud, Y = anchura (fondo, Y=0 frente de trabajo),
+Z = altura (Z=0 suelo). Todas las cotas en milímetros.
+
+Reglas constructivas principales:
+
+* La encimera es una bandeja de chapa con pestañas hacia abajo en los 4 bordes. La estructura
+  queda retranqueada ``c = t + holgura`` respecto al canto exterior, de modo que las pestañas
+  cubren el bastidor y se atornillan a él mediante tuercas remachables.
+* Patas de tubo cuadrado en las esquinas, bastidor superior (largueros + travesaños extremos)
+  enrasado con la cara exterior de las patas y travesaños intermedios que dividen el vano
+  apoyando la chapa.
+* Bastidor inferior opcional para la balda; la balda lleva escotaduras alrededor de las patas.
+* Placas base soldadas con tuerca de soldar y pie nivelador roscado.
+* Las uniones soldadas declaran la conectividad estructural utilizada por el modelo de cálculo.
+"""
+from __future__ import annotations
+
+import math
+
+import numpy as np
+
+from .. import catalog
+from ..cad import geometry as G
+from ..cad.sheetmetal import EDGES, FlangeSpec, SheetMetalSpec
+from ..core.model import Joint, PlatePart, ProductModel, ProfilePart, SheetPart, StandardPart
+from ..core.params import AUTO, ParamContext, ParameterSet, ParamSpec
+from .base import ProductFamily, register
+
+SHS = [c for c, p in catalog.profiles().items() if p.type == "SHS"]
+ALLP = list(catalog.profiles())
+STRUCT_MATERIALS = ["S235JRH", "S355J2H", "1.4301", "1.4404", "EN AW-6082 T6"]
+SHEET_MATERIALS = ["S235JR", "DC01", "1.4301", "1.4404", "EN AW-5754 H22"]
+FEET = [c for c, d in catalog.components().items() if d["category"] == "patas"]
+
+# Candidatos de dimensionado (orden creciente de masa por metro)
+CANDIDATES = {
+    "PERFIL_PATA": ["SHS 40x40x2", "SHS 40x40x3", "SHS 50x50x2", "SHS 50x50x3", "SHS 60x60x3", "SHS 70x70x3",
+                    "SHS 80x80x3", "SHS 80x80x4"],
+    "PERFIL_LARGUERO": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2", "RHS 80x40x2", "RHS 60x40x3",
+                        "RHS 80x40x3", "RHS 100x50x3"],
+    "PERFIL_TRAVESANO": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2", "RHS 80x40x2"],
+    "PERFIL_BASTIDOR": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2"],
+}
+CONSTRUCTIVE_DEFAULTS = {"PERFIL_PATA": "SHS 40x40x2", "PERFIL_LARGUERO": "RHS 60x40x2",
+                         "PERFIL_TRAVESANO": "RHS 40x20x2", "PERFIL_BASTIDOR": "RHS 40x20x2",
+                         "ESPESOR_CHAPA": 2.0, "ESPESOR_BALDA": 1.5}
+
+
+def frame_z(origin, zdir) -> np.ndarray:
+    z = np.asarray(zdir, float)
+    z /= np.linalg.norm(z)
+    x = np.array([1.0, 0, 0]) if abs(z[0]) < 0.9 else np.array([0, 1.0, 0])
+    x = x - z * np.dot(x, z)
+    x /= np.linalg.norm(x)
+    return G.frame(origin, x, np.cross(z, x))
+
+
+def rounded_perimeter(B: float, H: float, r: float) -> float:
+    return 2 * (B + H) - (8 - 2 * math.pi) * r
+
+
+def even_positions(a: float, b: float, n: int) -> list[float]:
+    if n == 1:
+        return [(a + b) / 2]
+    return [a + i * (b - a) / (n - 1) for i in range(n)]
+
+
+@register
+class MesaIndustrial(ProductFamily):
+    id = "mesa_industrial"
+    name = "Mesa industrial"
+    prefix = "MI"
+    category = "B"
+    description = ("Mesa de estructura tubular soldada con encimera de chapa plegada, balda inferior opcional, "
+                   "pies niveladores y fijación atornillada de chapas.")
+    configurations = ["Mesa abierta", "Mesa con balda inferior", "Mesa de montaje", "Mesa de trabajo pesado"]
+    verification_inputs = ["CARGA_TOTAL"]
+
+    # ------------------------------------------------------------------ parámetros
+    def param_specs(self) -> list[ParamSpec]:
+        P = ParamSpec
+        return [
+            P("LONGITUD", "Longitud", "float", 1800.0, "mm", "dimensiones", 600, 3000),
+            P("ANCHURA", "Anchura (fondo)", "float", 800.0, "mm", "dimensiones", 400, 1200),
+            P("ALTURA", "Altura de la superficie de trabajo", "float", 900.0, "mm", "dimensiones", 600, 1200,
+              help="Medida desde el suelo con los pies niveladores en su posición nominal."),
+            P("MATERIAL_ESTRUCTURAL", "Material de la estructura", "choice", "S235JRH", None, "materiales",
+              choices=STRUCT_MATERIALS),
+            P("MATERIAL_CHAPA", "Material de chapa", "choice", "S235JR", None, "materiales", choices=SHEET_MATERIALS),
+            P("ESPESOR_CHAPA", "Espesor de chapa de encimera", "float", 2.0, "mm", "materiales", 0.8, 6,
+              allow_auto=True),
+            P("ESPESOR_BALDA", "Espesor de chapa de balda", "float", 1.5, "mm", "materiales", 0.8, 4,
+              allow_auto=True),
+            P("ESPESOR_PLACA_BASE", "Espesor de placa base", "float", 5.0, "mm", "materiales", 3, 12),
+            P("ACABADO", "Acabado", "choice", "RAL7035_POLVO", None, "materiales", choices=list(catalog.finishes())),
+            P("PERFIL_PATA", "Perfil de patas", "choice", "SHS 40x40x2", None, "construccion", choices=SHS,
+              allow_auto=True),
+            P("PERFIL_LARGUERO", "Perfil de largueros superiores", "choice", "RHS 60x40x2", None, "construccion",
+              choices=ALLP, allow_auto=True),
+            P("PERFIL_TRAVESANO", "Perfil de travesaños superiores", "choice", "RHS 40x20x2", None, "construccion",
+              choices=ALLP, allow_auto=True),
+            P("PERFIL_BASTIDOR", "Perfil del bastidor inferior", "choice", "RHS 40x20x2", None, "construccion",
+              choices=ALLP, allow_auto=True),
+            P("NUMERO_TRAVESANOS", "Travesaños intermedios bajo encimera", "int", AUTO, "ud", "construccion", 0, 20,
+              allow_auto=True, help="'auto': mínimo número que verifica la chapa (o la separación máxima si no "
+                                    "hay carga definida)."),
+            P("NUMERO_TRAVESANOS_BALDA", "Travesaños intermedios bajo balda", "int", AUTO, "ud", "construccion", 0,
+              20, allow_auto=True),
+            P("SEPARACION_MAX_APOYOS", "Separación máxima entre apoyos de chapa (regla constructiva)", "float",
+              600.0, "mm", "construccion", 150, 1200, advanced=True),
+            P("ALA_ENCIMERA", "Altura de pestaña de encimera", "float", 40.0, "mm", "construccion", 20, 100),
+            P("ALA_BALDA", "Altura de pestaña de balda", "float", 25.0, "mm", "construccion", 15, 60),
+            P("RADIO_PLEGADO", "Radio interior de plegado", "float", AUTO, "mm", "construccion", 0.5, 20,
+              allow_auto=True, advanced=True),
+            P("FACTOR_K", "Factor K", "float", AUTO, None, "construccion", 0.2, 0.5, allow_auto=True, advanced=True,
+              help="'auto': DIN 6935."),
+            P("HOLGURA_ENCIMERA", "Holgura estructura–pestaña", "float", AUTO, "mm", "construccion", 0.5, 5,
+              allow_auto=True, advanced=True,
+              help="'auto': máx(radio interior de plegado, cabeza de tuerca remachable). Con holgura menor que el "
+                   "radio, las aristas vivas del bastidor interfieren con la zona de plegado."),
+            P("HOLGURA_ESCOTADURA", "Holgura de escotadura de balda", "float", 2.0, "mm", "construccion", 1, 6,
+              advanced=True),
+            P("PASO_FIJACIONES", "Paso máximo de fijaciones", "float", 400.0, "mm", "construccion", 150, 800,
+              advanced=True),
+            P("FIJACION_ENCIMERA", "Fijación de chapas", "choice", "atornillada", None, "construccion",
+              choices=["atornillada"]),
+            P("TIPO_APOYO", "Tipo de apoyo", "choice", "pie_nivelador", None, "accesorios",
+              choices=["pie_nivelador"]),
+            P("PIE_NIVELADOR", "Pie nivelador", "choice", "PIE_NIV_M12_D60", None, "accesorios", choices=FEET),
+            P("NUMERO_BALDAS", "Balda inferior", "int", 1, "ud", "accesorios", 0, 1),
+            P("ALTURA_BALDA", "Altura de la balda (cara superior)", "float", 200.0, "mm", "accesorios", 100, 600),
+            P("TOLERANCIAS", "Tolerancias generales", "choice", "ISO 2768-mK", None, "construccion",
+              choices=["ISO 2768-mK", "ISO 2768-fH", "ISO 2768-cL"], advanced=True),
+            P("CLASE_EJECUCION", "Clase de ejecución (EN 1090-2)", "choice", "EXC1", None, "construccion",
+              choices=["EXC1", "EXC2"], advanced=True),
+            P("CARGA_TOTAL", "Carga distribuida sobre encimera", "float", None, "kg", "cargas", 0, 5000,
+              nullable=True),
+            P("CARGA_BALDA", "Carga distribuida sobre balda", "float", None, "kg", "cargas", 0, 3000, nullable=True),
+            P("CARGA_PUNTUAL", "Carga puntual sobre encimera", "float", None, "kg", "cargas", 0, 2000, nullable=True,
+              help="Aplicada sobre una huella cuadrada de 100 mm en la posición más desfavorable."),
+            P("CARGA_HORIZONTAL", "Empuje horizontal en canto de encimera", "float", 300.0, "N", "cargas", 0, 5000),
+            P("USO", "Uso previsto", "choice", "montaje", None, "cargas",
+              choices=["montaje_ligero", "montaje", "trabajo_pesado", "inspeccion", "laboratorio", "embalaje"]),
+            P("FRECUENCIA", "Frecuencia de trabajo", "choice", "diaria", None, "cargas",
+              choices=["ocasional", "diaria", "intensiva"]),
+            P("ENTORNO", "Entorno", "choice", "interior_seco", None, "cargas",
+              choices=["interior_seco", "interior_humedo", "exterior", "alimentario", "sala_limpia"]),
+            P("TIPO_SUELO", "Tipo de suelo", "choice", "nivelado", None, "cargas", choices=["nivelado", "irregular"]),
+            P("ANCLAJE", "Anclaje al suelo", "choice", "ninguno", None, "cargas", choices=["ninguno", "al_suelo"]),
+        ]
+
+    def templates(self):
+        base = {"CARGA_TOTAL": 300.0, "NUMERO_BALDAS": 1}
+        return [
+            {"id": "MI-1200", "name": "Mesa industrial de 1.200 mm", "family": self.id,
+             "values": {**base, "LONGITUD": 1200.0, "ANCHURA": 700.0, "ALTURA": 900.0, "CARGA_TOTAL": 200.0}},
+            {"id": "MI-1800", "name": "Mesa industrial de 1.800 mm", "family": self.id,
+             "values": {**base, "LONGITUD": 1800.0, "ANCHURA": 800.0, "ALTURA": 900.0}},
+            {"id": "MI-2200", "name": "Mesa industrial de 2.200 mm", "family": self.id,
+             "values": {**base, "LONGITUD": 2200.0, "ANCHURA": 800.0, "ALTURA": 900.0, "CARGA_TOTAL": 400.0}},
+            {"id": "BM-1500", "name": "Banco de montaje 1.500 mm (trabajo pesado)", "family": self.id,
+             "values": {"LONGITUD": 1500.0, "ANCHURA": 750.0, "ALTURA": 850.0, "CARGA_TOTAL": 500.0,
+                        "CARGA_PUNTUAL": 100.0, "ESPESOR_CHAPA": 3.0, "USO": "trabajo_pesado",
+                        "NUMERO_BALDAS": 1, "CARGA_BALDA": 150.0}},
+        ]
+
+    # ------------------------------------------------------------------ construcción
+    def construct(self, ps: ParameterSet) -> ProductModel:
+        for k, v in ps.values.items():
+            if v == AUTO and k not in ("RADIO_PLEGADO", "FACTOR_K", "NUMERO_TRAVESANOS", "NUMERO_TRAVESANOS_BALDA",
+                                       "HOLGURA_ENCIMERA"):
+                raise ValueError(f"Parámetro sin resolver: {k}")
+        ctx = ParamContext(ps)
+        L, W, H = ps.values["LONGITUD"], ps.values["ANCHURA"], ps.values["ALTURA"]
+        model = ProductModel(self.id, self.name, f"MI{L:.0f}-{W:.0f}-{H:.0f}", ps, ctx)
+        model.requested = ps
+        d = self._derive(ctx, model)
+        mat_s, mat_c, fin = ps.values["MATERIAL_ESTRUCTURAL"], ps.values["MATERIAL_CHAPA"], ps.values["ACABADO"]
+
+        model.add_subassembly("EST", "Estructura soldada", welded=True, step=1)
+        model.add_subassembly("APO", "Apoyos niveladores", explode=(0, 0, -160), step=2)
+        if d["shelf"]:
+            model.add_subassembly("BAL", "Balda inferior", explode=(0, 0, 90), step=3)
+        model.add_subassembly("ENC", "Encimera", explode=(0, 0, 380), step=4)
+
+        leg, rail, trv, bas = d["leg"], d["rail"], d["trv"], d["bas"]
+        c, a = d["c"], d["a"]
+        legs: dict[str, str] = {}
+        corners = {"DI": (c + a / 2, c + a / 2), "DD": (L - c - a / 2, c + a / 2),
+                   "TI": (c + a / 2, W - c - a / 2), "TD": (L - c - a / 2, W - c - a / 2)}
+        corner_names = {"DI": "delantera izquierda", "DD": "delantera derecha", "TI": "trasera izquierda",
+                        "TD": "trasera derecha"}
+        foot = catalog.component(ps.values["PIE_NIVELADOR"])
+        thread = float(foot["thread"][1:])
+        nut_code = f"TUERCA_SOLDAR_M{thread:.0f}"
+        rn = catalog.component("TUERCA_REMACHABLE_M6")
+        sc = catalog.component("TORNILLO_ISO7380_M6x12")
+
+        def weld(jid, a_id, end, b_id, prof, desc):
+            tmin = min(model.instance(a_id).part.profile.t, model.instance(b_id).part.profile.t)
+            ia = model.instance(a_id)
+            loc = ia.axis[end]
+            model.add_joint(Joint(jid, "soldadura", (a_id, b_id), tuple(float(v) for v in loc), desc,
+                                  weld={"type": "fillet", "a": d["weld_a"](tmin), "all_around": True,
+                                        "length": round(rounded_perimeter(prof.B, prof.H, prof.r_out), 1),
+                                        "process": "135 (MAG)", "fem": {"member": a_id, "end": end, "onto": b_id}}))
+
+        # ---------------------------------------------------------------- estructura
+        with ctx.feature("F10", "Estructura soldada"):
+            with ctx.feature("F11", "Patas, placas base y tuercas"):
+                ctx.uses("LONGITUD_PATA", "PERFIL_PATA", "RETRANQUEO", "LONGITUD", "ANCHURA", "ESPESOR_PLACA_BASE",
+                         "PIE_NIVELADOR", "MATERIAL_ESTRUCTURAL", "ACABADO")
+                leg_part = ProfilePart("pata", f"Pata {leg.code}", leg.code, d["leg_len"], mat_s, fin)
+                plate_mat = "S235JR" if catalog.material(mat_s).family == "acero_carbono" else mat_s
+                plate = PlatePart("placa_base", f"Placa base {a:.0f}x{a:.0f}x{d['tp']:.0f}", a, a, d["tp"],
+                                  plate_mat, fin, corner_r=min(3.0, a / 10), holes=((a / 2, a / 2, thread + 1.0),))
+                nut = StandardPart("tuerca_soldar", nut_code)
+                for k, (x, y) in corners.items():
+                    iid = f"EST.PATA.{k}"
+                    p0, p1 = np.array([x, y, d["z_leg0"]]), np.array([x, y, d["z_tf"]])
+                    model.add(iid, f"Pata {corner_names[k]}", leg_part, G.axis_frame(p0, p1, (0, 1, 0)), "EST",
+                              axis=(p0, p1), up=np.array([0, 1.0, 0]), structural=True)
+                    legs[k] = iid
+                    model.add(f"EST.PLACA.{k}", f"Placa base {corner_names[k]}", plate,
+                              G.translation(x - a / 2, y - a / 2, d["hn"]), "EST")
+                    model.add(f"EST.TUERCA.{k}", f"Tuerca soldada {corner_names[k]}", nut,
+                              G.translation(x, y, d["hn"] + d["tp"]), "EST")
+                    model.add_joint(Joint(f"J.PLACA.{k}", "soldadura", (iid, f"EST.PLACA.{k}"), (x, y, d["z_leg0"]),
+                                          "Placa base a pata", weld={"type": "fillet", "a": d["weld_a"](min(leg.t, d["tp"])),
+                                                                     "all_around": True, "process": "135 (MAG)",
+                                                                     "length": round(rounded_perimeter(a, a, leg.r_out), 1)}))
+                    s = float(catalog.component(nut_code)["s"])
+                    model.add_joint(Joint(f"J.TUERCA.{k}", "soldadura", (f"EST.TUERCA.{k}", f"EST.PLACA.{k}"),
+                                          (x, y, d["hn"] + d["tp"]), "Tuerca de soldar a placa base",
+                                          weld={"type": "fillet", "a": 2.0, "all_around": False, "process": "135 (MAG)",
+                                                "length": round(3 * s / math.sqrt(3), 1),
+                                                "note": "3 cordones en caras alternas de la tuerca"}))
+
+            with ctx.feature("F12", "Bastidor superior"):
+                ctx.uses("LONGITUD_LARGUERO", "LONGITUD_TRAVESANO_EXT", "LONGITUD_TRAVESANO_INT", "N_TRAVESANOS_INT",
+                         "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "COTA_BASTIDOR_SUP", "PASO_FIJACIONES", "ALA_ENCIMERA",
+                         "MATERIAL_ESTRUCTURAL", "ACABADO")
+                self._frame_level(model, d, ctx, level="SUP", z_top=d["z_tf"], prof_long=rail, prof_end=trv,
+                                  inset=0.0, n_int=d["n_top"], legs=legs, fixings=d["fix_top"], weld=weld,
+                                  mat=mat_s, fin=fin)
+            if d["shelf"]:
+                with ctx.feature("F13", "Bastidor inferior"):
+                    ctx.uses("PERFIL_BASTIDOR", "N_TRAVESANOS_BALDA", "COTA_BALDA", "ESP_BAL", "LONGITUD", "ANCHURA",
+                             "RETRANQUEO", "PERFIL_PATA", "PASO_FIJACIONES", "ALA_BALDA", "MATERIAL_ESTRUCTURAL")
+                    self._frame_level(model, d, ctx, level="INF", z_top=d["z_lf"], prof_long=bas, prof_end=bas,
+                                      inset=d["e_shelf"], n_int=d["n_shelf"], legs=legs, fixings=d["fix_shelf"],
+                                      weld=weld, mat=mat_s, fin=fin)
+
+        # ---------------------------------------------------------------- apoyos
+        with ctx.feature("F40", "Apoyos niveladores"):
+            ctx.uses("PIE_NIVELADOR", "LONGITUD", "ANCHURA", "RETRANQUEO", "PERFIL_PATA")
+            fpart = StandardPart("pie_nivelador", ps.values["PIE_NIVELADOR"])
+            for k, (x, y) in corners.items():
+                model.add(f"APO.PIE.{k}", f"Pie nivelador {corner_names[k]}", fpart, G.translation(x, y, 0.0), "APO")
+                model.add_joint(Joint(f"J.PIE.{k}", "roscada", (f"APO.PIE.{k}", f"EST.TUERCA.{k}"),
+                                      (x, y, d["hn"]), f"Pie roscado {foot['thread']} en tuerca soldada"))
+
+        # ---------------------------------------------------------------- chapas
+        with ctx.feature("F20", "Encimera de chapa plegada"):
+            ctx.uses("LONGITUD", "ANCHURA", "ALTURA", "ESP_ENC", "RADIO_ENC", "K_ENC", "ALA_ENCIMERA", "MATERIAL_CHAPA",
+                     "PASO_FIJACIONES", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ACABADO")
+            spec = d["top_spec"]
+            tray = SheetPart("encimera", f"Encimera chapa {spec.t:g} mm", spec, mat_c, fin)
+            model.add("ENC.BANDEJA", "Encimera", tray, G.translation(0, 0, H), "ENC")
+            self._fasteners(model, d["fix_top"], "ENC", rn, sc, ctx)
+        if d["shelf"]:
+            with ctx.feature("F30", "Balda inferior de chapa plegada"):
+                ctx.uses("LONGITUD", "ANCHURA", "COTA_BALDA", "ESP_BAL", "ALA_BALDA", "MATERIAL_CHAPA", "PERFIL_PATA",
+                         "HOLGURA_ESCOTADURA", "PERFIL_BASTIDOR", "ACABADO")
+                spec = d["shelf_spec"]
+                tray = SheetPart("balda", f"Balda chapa {spec.t:g} mm", spec, mat_c, fin)
+                model.add("BAL.BANDEJA", "Balda inferior", tray, G.translation(c, c, d["z_shelf"]), "BAL")
+                self._fasteners(model, d["fix_shelf"], "BAL", rn, sc, ctx)
+
+        # ---------------------------------------------------------------- datos estructurales
+        model.structure = self._structure(model, d, legs)
+        model.dims = {"LONGITUD": L, "ANCHURA": W, "ALTURA": H, "ALTURA_BALDA": d["z_shelf"] if d["shelf"] else None,
+                      "LONGITUD_PATA": d["leg_len"]}
+        model.number_parts()
+        return model
+
+    # ------------------------------------------------------------------ derivados
+    def _derive(self, ctx: ParamContext, model: ProductModel) -> dict:
+        v = ctx.params.values
+        d: dict = {}
+        with ctx.feature("F00", "Parámetros derivados y reglas constructivas"):
+            mat_c = catalog.material(v["MATERIAL_CHAPA"])
+            fam = mat_c.family
+            rules = catalog.sheet_data()["press_brake"]
+            rmin = rules["min_inner_radius_factor"].get(fam, 1.0)
+
+            def radius(t):
+                return v["RADIO_PLEGADO"] if v["RADIO_PLEGADO"] != AUTO else round(max(t, rmin * t), 2)
+
+            def kf(r, t):
+                return v["FACTOR_K"] if v["FACTOR_K"] != AUTO else round(catalog.din6935_k_factor(r, t), 4)
+
+            t = ctx.derive("ESP_ENC", lambda c: c["ESPESOR_CHAPA"], "mm", "Espesor encimera")
+            r = ctx.derive("RADIO_ENC", lambda c: radius(c["ESP_ENC"]) if c["RADIO_PLEGADO"] == AUTO else c["RADIO_PLEGADO"],
+                           "mm", "Radio interior de plegado (encimera)")
+            K = ctx.derive("K_ENC", lambda c: kf(c["RADIO_ENC"], c["ESP_ENC"]) if c["FACTOR_K"] == AUTO else c["FACTOR_K"],
+                           None, "Factor K (encimera)")
+            from ..cad.sheetmetal import bend_deduction
+            ctx.derive("DEDUCCION_PLEGADO_ENC", lambda c: round(bend_deduction(c["ESP_ENC"], c["RADIO_ENC"], c["K_ENC"]), 4),
+                       "mm", "Deducción de plegado 90° (encimera)")
+            head_h = float(catalog.component("TUERCA_REMACHABLE_M6")["head_h"])
+            g = ctx.derive("HOLGURA_ENC", lambda p: max(p["RADIO_ENC"], head_h) if p["HOLGURA_ENCIMERA"] == AUTO
+                           else p["HOLGURA_ENCIMERA"], "mm", "Holgura estructura–pestaña (encimera)")
+            if g < r - 1e-9:
+                model.note("error", "GEO-HOLGURA-RADIO", f"Holgura {g} mm menor que el radio interior de plegado "
+                           f"{r} mm: las aristas del bastidor interfieren con el pliegue de la encimera.")
+            c = ctx.derive("RETRANQUEO", lambda p: p["ESP_ENC"] + p["HOLGURA_ENC"], "mm",
+                           "Retranqueo de la estructura respecto al canto exterior")
+            leg = catalog.profile(ctx["PERFIL_PATA"])
+            rail = catalog.profile(ctx["PERFIL_LARGUERO"])
+            trv = catalog.profile(ctx["PERFIL_TRAVESANO"])
+            bas = catalog.profile(ctx["PERFIL_BASTIDOR"])
+            if leg.B != leg.H:
+                raise ValueError("Las patas deben ser de tubo cuadrado")
+            a = leg.B
+            ctx.set_derived("SECCION_PATA", f"{leg.B:g}x{leg.H:g}", "mm", "Sección de pata", ["PERFIL_PATA"])
+            ctx.set_derived("ESPESOR_PERFIL_PATA", leg.t, "mm", "Espesor de pata", ["PERFIL_PATA"])
+            foot = catalog.component(ctx["PIE_NIVELADOR"])
+            hn = float(foot["nominal_height"])
+            tp = ctx["ESPESOR_PLACA_BASE"]
+            z_tf = ctx.derive("COTA_BASTIDOR_SUP", lambda p: p["ALTURA"] - p["ESP_ENC"], "mm",
+                              "Cota cara superior del bastidor")
+            z_leg0 = ctx.derive("COTA_INICIO_PATA", lambda p: float(catalog.component(p["PIE_NIVELADOR"])["nominal_height"])
+                                + p["ESPESOR_PLACA_BASE"], "mm", "Cota inicio de pata")
+            leg_len = ctx.derive("LONGITUD_PATA", lambda p: p["COTA_BASTIDOR_SUP"] - p["COTA_INICIO_PATA"], "mm",
+                                 "Longitud de corte de pata")
+            L, W, H = ctx["LONGITUD"], ctx["ANCHURA"], ctx["ALTURA"]
+            ctx.derive("LONGITUD_LARGUERO", lambda p: p["LONGITUD"] - 2 * p["RETRANQUEO"]
+                       - 2 * catalog.profile(p["PERFIL_PATA"]).B, "mm",
+                       "Longitud de largueros")
+            ctx.derive("LONGITUD_TRAVESANO_EXT", lambda p: p["ANCHURA"] - 2 * p["RETRANQUEO"]
+                       - 2 * catalog.profile(p["PERFIL_PATA"]).B, "mm",
+                       "Longitud de travesaños extremos")
+            ctx.derive("LONGITUD_TRAVESANO_INT", lambda p: p["ANCHURA"] - 2 * p["RETRANQUEO"]
+                       - 2 * catalog.profile(p["PERFIL_LARGUERO"]).B, "mm",
+                       "Longitud de travesaños intermedios")
+            if rail.B > a or trv.B > a:
+                model.note("error", "DFM-ANCHO-BASTIDOR", "El ancho de largueros/travesaños supera el de la pata: "
+                           "no pueden enrasarse con la cara exterior.")
+            # vanos y número de travesaños
+            xe0, xe1 = c + trv.B / 2, L - c - trv.B / 2
+            n_top = ctx["NUMERO_TRAVESANOS"]
+            if n_top == AUTO:   # regla constructiva sin carga
+                n_top = max(0, math.ceil((xe1 - xe0) / ctx["SEPARACION_MAX_APOYOS"]) - 1)
+            ctx.set_derived("N_TRAVESANOS_INT", n_top, "ud", "Travesaños intermedios", ["NUMERO_TRAVESANOS",
+                            "SEPARACION_MAX_APOYOS", "LONGITUD"])
+            ctx.set_derived("VANO_ENCIMERA", round((xe1 - xe0) / (n_top + 1), 2), "mm", "Vano entre apoyos de encimera",
+                            ["LONGITUD", "NUMERO_TRAVESANOS", "PERFIL_TRAVESANO", "RETRANQUEO"])
+            shelf = ctx["NUMERO_BALDAS"] >= 1
+            d.update(leg=leg, rail=rail, trv=trv, bas=bas, a=a, c=c, t=t, r=r, K=K, hn=hn, tp=tp, z_tf=z_tf,
+                     z_leg0=z_leg0, leg_len=leg_len, n_top=n_top, xe=(xe0, xe1), shelf=shelf)
+            d["weld_a"] = lambda tmin: 3.0 if tmin >= 3 else float(tmin)
+
+            rn = catalog.component("TUERCA_REMACHABLE_M6")
+            sc = catalog.component("TORNILLO_ISO7380_M6x12")
+            if rn["head_h"] > g + 1e-9:
+                model.note("error", "DFM-HOLGURA-REMACHABLE", f"La cabeza de la tuerca remachable ({rn['head_h']} mm) "
+                           f"no cabe en la holgura de {g} mm.")
+
+            # ---- encimera y fijaciones
+            ala = ctx["ALA_ENCIMERA"]
+            pitch = ctx["PASO_FIJACIONES"]
+            fix_top = self._fix_layout(model, ctx, L, W, c, a, t, r + t, ala, rail, trv, z_ref=H, inset=0.0,
+                                       hole_d=sc["clearance_hole"], rn=rn, pitch=pitch, short_min=2, tag="encimera")
+            fix_top["gap"] = g
+            flanges = []
+            for e in EDGES:
+                holes = tuple((s, fix_top["h"][e], sc["clearance_hole"]) for s in fix_top["s"][e])
+                flanges.append(FlangeSpec(e, ala, "down", holes))
+            d["top_spec"] = SheetMetalSpec(L, W, t, r, K, tuple(flanges))
+            d["fix_top"] = fix_top
+
+            # ---- balda
+            if shelf:
+                ts = ctx.derive("ESP_BAL", lambda p: p["ESPESOR_BALDA"], "mm", "Espesor balda")
+                rs = radius(ts)
+                Ks = kf(rs, ts)
+                z_s = ctx.derive("COTA_BALDA", lambda p: p["ALTURA_BALDA"], "mm", "Cota cara superior de balda")
+                g_s = ctx.derive("HOLGURA_BAL", lambda p: max(rs, head_h) if p["HOLGURA_ENCIMERA"] == AUTO
+                                 else p["HOLGURA_ENCIMERA"], "mm", "Holgura bastidor–pestaña (balda)")
+                if g_s < rs - 1e-9:
+                    model.note("error", "GEO-HOLGURA-RADIO-BAL", "Holgura menor que el radio de plegado de la balda.")
+                e_sh = ts + g_s
+                z_lf = z_s - ts
+                notch = a + ctx["HOLGURA_ESCOTADURA"]
+                xb0, xb1 = c + e_sh + bas.B / 2, L - c - e_sh - bas.B / 2
+                n_sh = ctx["NUMERO_TRAVESANOS_BALDA"]
+                if n_sh == AUTO:
+                    n_sh = max(0, math.ceil((xb1 - xb0) / ctx["SEPARACION_MAX_APOYOS"]) - 1)
+                ctx.set_derived("N_TRAVESANOS_BALDA", n_sh, "ud", "Travesaños bajo balda",
+                                ["NUMERO_TRAVESANOS_BALDA", "LONGITUD"])
+                if e_sh + bas.B > a:
+                    model.note("error", "DFM-BASTIDOR-INF", "El bastidor inferior retranqueado no cabe en la sección de la pata.")
+                if z_lf - bas.H < z_leg0 + 20:
+                    model.note("error", "GEO-BALDA-BAJA", "La balda está demasiado baja para el bastidor inferior.")
+                ala_b = ctx["ALA_BALDA"]
+                fix_sh = self._fix_layout(model, ctx, L - 2 * c, W - 2 * c, 0.0, a, ts, rs + ts, ala_b, bas, bas,
+                                          z_ref=z_s, inset=e_sh, hole_d=sc["clearance_hole"], rn=rn, pitch=pitch * 1.5,
+                                          short_min=1, tag="balda", notch=notch, offset=c)
+                fix_sh["gap"] = g_s
+                flanges = []
+                for e in EDGES:
+                    holes = tuple((s, fix_sh["h"][e], sc["clearance_hole"]) for s in fix_sh["s"][e])
+                    flanges.append(FlangeSpec(e, ala_b, "down", holes))
+                d["shelf_spec"] = SheetMetalSpec(L - 2 * c, W - 2 * c, ts, rs, Ks, tuple(flanges), notch=(notch, notch))
+                d.update(z_shelf=z_s, z_lf=z_lf, e_shelf=e_sh, n_shelf=n_sh, xb=(xb0, xb1), fix_shelf=fix_sh)
+                if z_s > d["z_tf"] - ctx["ALA_ENCIMERA"] - 150:
+                    model.note("advertencia", "ERG-BALDA-ALTA", "Hueco libre entre balda y encimera inferior a 150 mm.")
+            if H - ctx["ALA_ENCIMERA"] < 600:
+                model.note("advertencia", "ERG-ALTURA", "Altura libre bajo encimera inferior a 600 mm.")
+        return d
+
+    def _fix_layout(self, model, ctx, Lx, Ly, c, a, t, R, ala, prof_long, prof_end, z_ref, inset, hole_d, rn,
+                    pitch, short_min, tag, notch=0.0, offset=0.0):
+        """Posiciones de fijación por borde en coordenadas de la chapa y altura del taladro.
+
+        ``offset`` traslada coordenadas de chapa a coordenadas globales (balda situada en x=c, y=c)."""
+        margin = 60.0
+        # rango útil a lo largo de cada borde (coordenadas de chapa): sobre largueros/travesaños, fuera de patas
+        long_rng = (c + a + margin, Lx - c - a - margin)
+        short_rng = (c + a + margin / 2, Ly - c - a - margin / 2)
+
+        def count(span, nmin):
+            return max(nmin, math.ceil(span / pitch) + 1)
+
+        n_long = count(long_rng[1] - long_rng[0], 2)
+        n_short = count(short_rng[1] - short_rng[0], short_min)
+        s = {"y0": even_positions(*long_rng, n_long), "y1": even_positions(*long_rng, n_long),
+             "x0": even_positions(*short_rng, n_short), "x1": even_positions(*short_rng, n_short)}
+        h = {}
+        for e in EDGES:
+            prof = prof_long if e in ("y0", "y1") else prof_end
+            fl_lo, fl_hi = R + 2 * t + hole_d / 2, ala - max(t, 3.0) - hole_d / 2
+            depth0 = t    # la cara superior del bastidor está a 't' bajo la cara superior de la chapa
+            rail_lo = depth0 + prof.r_out + rn["hole_d"] / 2
+            rail_hi = depth0 + prof.H - prof.r_out - rn["hole_d"] / 2
+            lo, hi = max(fl_lo, rail_lo), min(fl_hi, rail_hi)
+            if lo > hi:
+                model.note("error", f"DFM-FIJ-{tag.upper()}-{e}", f"No hay zona válida para el taladro de fijación "
+                           f"de {tag} en el borde {e}: pestaña de {ala} mm y perfil {prof.code}.")
+                h[e] = round((rail_lo + rail_hi) / 2, 1)
+            else:
+                h[e] = round((lo + hi) / 2, 1)
+        return {"s": s, "h": h, "z_ref": z_ref, "t": t, "inset": inset, "offset": offset, "Lx": Lx, "Ly": Ly,
+                "c": c}
+
+    # ------------------------------------------------------------------ bastidores
+    def _frame_level(self, model, d, ctx, level, z_top, prof_long, prof_end, inset, n_int, legs, fixings, weld,
+                     mat, fin):
+        L, W = ctx["LONGITUD"], ctx["ANCHURA"]
+        c, a = d["c"], d["a"]
+        lab = "superior" if level == "SUP" else "inferior"
+        # ---- largueros (frontal en +X, trasero en -X para que ambos sean la misma pieza)
+        zl = z_top - prof_long.H / 2
+        y_f = c + inset + prof_long.B / 2
+        y_b = W - c - inset - prof_long.B / 2
+        x0, x1 = c + a, L - c - a
+        hz = fixings["z_ref"] - fixings["h"]["y0"]
+        offs = fixings["offset"]
+        holes_long = tuple(("-x", s + offs - x0, hz - zl, catalog.component("TUERCA_REMACHABLE_M6")["hole_d"])
+                           for s in fixings["s"]["y0"])
+        lp = ProfilePart(f"larguero_{level.lower()}", f"Larguero {lab} {prof_long.code}", prof_long.code, x1 - x0,
+                         mat, fin, holes=holes_long)
+        specs = [("D", "delantero", (x0, y_f, zl), (x1, y_f, zl), "DI", "DD"),
+                 ("T", "trasero", (x1, y_b, zl), (x0, y_b, zl), "TD", "TI")]
+        long_ids = []
+        for k, nm, p0, p1, l0, l1 in specs:
+            iid = f"EST.LAR_{level}.{k}"
+            p0, p1 = np.array(p0, float), np.array(p1, float)
+            model.add(iid, f"Larguero {lab} {nm}", lp, G.axis_frame(p0, p1, (0, 0, 1)), "EST", axis=(p0, p1),
+                      up=np.array([0, 0, 1.0]), structural=True)
+            weld(f"J.{iid}.0", iid, 0, legs[l0], prof_long, f"Larguero {lab} {nm} a pata")
+            weld(f"J.{iid}.1", iid, 1, legs[l1], prof_long, f"Larguero {lab} {nm} a pata")
+            long_ids.append(iid)
+        # ---- travesaños extremos
+        ze = z_top - prof_end.H / 2
+        x_l = c + inset + prof_end.B / 2
+        x_r = L - c - inset - prof_end.B / 2
+        y0, y1 = c + a, W - c - a
+        hz = fixings["z_ref"] - fixings["h"]["x0"]
+        holes_end = tuple(("+x", s + offs - y0, hz - ze, catalog.component("TUERCA_REMACHABLE_M6")["hole_d"])
+                          for s in fixings["s"]["x0"])
+        ep = ProfilePart(f"travesano_ext_{level.lower()}", f"Travesaño extremo {lab} {prof_end.code}", prof_end.code,
+                         y1 - y0, mat, fin, holes=holes_end)
+        end_ids = []
+        for k, nm, p0, p1, l0, l1 in [("I", "izquierdo", (x_l, y0, ze), (x_l, y1, ze), "DI", "TI"),
+                                       ("D", "derecho", (x_r, y1, ze), (x_r, y0, ze), "TD", "DD")]:
+            iid = f"EST.TRV_{level}.{k}"
+            p0, p1 = np.array(p0, float), np.array(p1, float)
+            model.add(iid, f"Travesaño extremo {lab} {nm}", ep, G.axis_frame(p0, p1, (0, 0, 1)), "EST",
+                      axis=(p0, p1), up=np.array([0, 0, 1.0]), structural=True)
+            weld(f"J.{iid}.0", iid, 0, legs[l0], prof_end, f"Travesaño extremo {lab} {nm} a pata")
+            weld(f"J.{iid}.1", iid, 1, legs[l1], prof_end, f"Travesaño extremo {lab} {nm} a pata")
+            end_ids.append(iid)
+        # ---- travesaños intermedios
+        xs = [x_l + i * (x_r - x_l) / (n_int + 1) for i in range(1, n_int + 1)]
+        yi0, yi1 = c + inset + prof_long.B, W - c - inset - prof_long.B
+        int_ids = []
+        if n_int:
+            ip = ProfilePart(f"travesano_int_{level.lower()}", f"Travesaño intermedio {lab} {prof_end.code}",
+                             prof_end.code, yi1 - yi0, mat, fin)
+            for n, x in enumerate(xs, start=1):
+                iid = f"EST.TRI_{level}.{n:02d}"
+                p0, p1 = np.array([x, yi0, ze]), np.array([x, yi1, ze])
+                model.add(iid, f"Travesaño intermedio {lab} {n}", ip, G.axis_frame(p0, p1, (0, 0, 1)), "EST",
+                          axis=(p0, p1), up=np.array([0, 0, 1.0]), structural=True)
+                weld(f"J.{iid}.0", iid, 0, long_ids[0], prof_end, f"Travesaño intermedio {lab} a larguero")
+                weld(f"J.{iid}.1", iid, 1, long_ids[1], prof_end, f"Travesaño intermedio {lab} a larguero")
+                int_ids.append(iid)
+        model.structure.setdefault("levels", {})[level] = {
+            "long": long_ids, "end": end_ids, "int": int_ids, "grid_x": [x_l] + xs + [x_r], "grid_y": [y_f, y_b],
+            "z": z_top}
+
+    def _fasteners(self, model, fix, group, rn, sc, ctx):
+        """Tuercas remachables en el bastidor y tornillos a través de las pestañas."""
+        rn_part = StandardPart("tuerca_remachable", "TUERCA_REMACHABLE_M6")
+        sc_part = StandardPart("tornillo", "TORNILLO_ISO7380_M6x12")
+        t, off, Lx, Ly = fix["t"], fix["offset"], fix["Lx"], fix["Ly"]
+        n = 0
+        for e in EDGES:
+            for s in fix["s"][e]:
+                n += 1
+                z = fix["z_ref"] - fix["h"][e]
+                p_flange, nrm = {"y0": ((off + s, off, z), (0, -1, 0)), "y1": ((off + s, off + Ly, z), (0, 1, 0)),
+                                 "x0": ((off, off + s, z), (-1, 0, 0)), "x1": ((off + Lx, off + s, z), (1, 0, 0))}[e]
+                nrm = np.array(nrm, float)
+                pf = np.array(p_flange, float)
+                # cara exterior del perfil = cara interior de la pestaña + holgura
+                gap = fix["gap"]
+                pr = pf - nrm * (t + gap)
+                sid = f"{group}.TORN.{n:02d}"
+                rid = f"{group}.TREM.{n:02d}"
+                model.add(rid, f"Tuerca remachable {n}", rn_part, frame_z(pr, nrm), group,
+                          tags={"explode_extra": tuple(nrm * 30)})
+                model.add(sid, f"Tornillo {n}", sc_part, frame_z(pf, nrm), group,
+                          tags={"explode_extra": tuple(nrm * 80)})
+                model.add_joint(Joint(f"J.{sid}", "atornillada", (f"{group}.BANDEJA", rid), tuple(pf),
+                                      f"Tornillo {sc['thread']} en tuerca remachable", fasteners=(sid, rid)))
+
+    # ------------------------------------------------------------------ modelo estructural
+    def _structure(self, model, d, legs):
+        ps = model.params.values
+        lv = model.structure.get("levels", {})
+        surfaces = [{"id": "encimera", "label": "Encimera", "level": "SUP", "load_param": "CARGA_TOTAL",
+                     "sheet_instance": "ENC.BANDEJA", "area_mm2": ps["LONGITUD"] * ps["ANCHURA"],
+                     "count_param": "NUMERO_TRAVESANOS"}]
+        if d["shelf"]:
+            surfaces.append({"id": "balda", "label": "Balda inferior", "level": "INF", "load_param": "CARGA_BALDA",
+                             "sheet_instance": "BAL.BANDEJA",
+                             "area_mm2": (ps["LONGITUD"] - 2 * d["c"]) * (ps["ANCHURA"] - 2 * d["c"]),
+                             "count_param": "NUMERO_TRAVESANOS_BALDA"})
+        feet = [{"instance": f"APO.PIE.{k}", "leg": legs[k], "point": tuple(model.instance(legs[k]).axis[0]),
+                 "component": ps["PIE_NIVELADOR"]} for k in ("DI", "DD", "TI", "TD")]
+        return {"levels": lv, "surfaces": surfaces, "supports": feet,
+                "horizontal_points": [legs["DI"], legs["DD"]], "worktop_height": ps["ALTURA"],
+                "leg_ids": list(legs.values()), "member_roles": {
+                    i.id: i.part.role for i in model.instances if i.structural}}

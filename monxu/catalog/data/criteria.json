@@ -1,0 +1,46 @@
+{
+  "_meta": {
+    "version": "2026.11-1",
+    "note": "Criterios de verificación por defecto. Son hipótesis de proyecto configurables; cualquier modificación queda registrada en la revisión del proyecto."
+  },
+  "partial_factors": {
+    "gamma_G": 1.35,
+    "gamma_Q": 1.5,
+    "gamma_G_stb": 0.9,
+    "gamma_Q_dst": 1.5,
+    "psi0_Q": 0.7
+  },
+  "deflection_limits": {
+    "member_span_ratio": 300,
+    "panel_span_ratio": 200,
+    "sway_height_ratio": 150
+  },
+  "effective_length_factors": {
+    "leg_sway": 2.0,
+    "braced_member": 1.0
+  },
+  "buckling_curve_cold_formed_hollow": "c",
+  "imperfection_factors": {
+    "a0": 0.13,
+    "a": 0.21,
+    "b": 0.34,
+    "c": 0.49,
+    "d": 0.76
+  },
+  "horizontal_service_load_N": 300,
+  "horizontal_service_load_note": "Hipótesis por defecto de empuje horizontal en el borde de la encimera. Debe confirmarse según el uso real del puesto.",
+  "point_load_patch_mm": 100,
+  "stability_min_ratio": 1.0,
+  "max_utilization": 1.0,
+  "g": 9.81,
+  "min_sheet_thickness_by_use_mm": {
+    "_note": "Regla constructiva de taller (resistencia a abolladuras e impactos); no es un requisito normativo.",
+    "montaje_ligero": 1.5,
+    "inspeccion": 1.5,
+    "laboratorio": 1.5,
+    "embalaje": 1.5,
+    "montaje": 2.0,
+    "trabajo_pesado": 3.0
+  },
+  "min_support_spacing_mm": 250
+}

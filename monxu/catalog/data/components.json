@@ -1,0 +1,171 @@
+{
+  "_meta": {
+    "version": "2026.11-1",
+    "note": "Componentes normalizados y comerciales. Las capacidades de carga de componentes comerciales (pies, ruedas) son datos de catálogo de referencia genéricos y DEBEN confirmarse con la ficha técnica del proveedor seleccionado; el informe de cálculo las marca como tales."
+  },
+  "components": {
+    "PIE_NIV_M10_D50": {
+      "category": "patas",
+      "name": "Pie nivelador M10, base Ø50 articulada",
+      "standard": "Comercial",
+      "thread": "M10",
+      "base_d": 50,
+      "base_h": 8,
+      "stem_len": 40,
+      "nominal_height": 30,
+      "adjust": 20,
+      "rated_load_kg": 300,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 0.12
+    },
+    "PIE_NIV_M12_D60": {
+      "category": "patas",
+      "name": "Pie nivelador M12, base Ø60 articulada",
+      "standard": "Comercial",
+      "thread": "M12",
+      "base_d": 60,
+      "base_h": 9,
+      "stem_len": 50,
+      "nominal_height": 35,
+      "adjust": 25,
+      "rated_load_kg": 500,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 0.19
+    },
+    "PIE_NIV_M16_D80": {
+      "category": "patas",
+      "name": "Pie nivelador M16, base Ø80 articulada",
+      "standard": "Comercial",
+      "thread": "M16",
+      "base_d": 80,
+      "base_h": 10,
+      "stem_len": 60,
+      "nominal_height": 40,
+      "adjust": 30,
+      "rated_load_kg": 1000,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 0.38
+    },
+    "RUEDA_100_GIR_FRENO": {
+      "category": "ruedas",
+      "name": "Rueda giratoria Ø100 con freno, placa 80x60",
+      "standard": "EN 12527",
+      "wheel_d": 100,
+      "height": 128,
+      "plate_l": 80,
+      "plate_w": 60,
+      "hole_px": 60,
+      "hole_py": 40,
+      "hole_d": 9,
+      "rated_load_kg": 100,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 0.95
+    },
+    "RUEDA_125_GIR_FRENO": {
+      "category": "ruedas",
+      "name": "Rueda giratoria Ø125 con freno, placa 100x85",
+      "standard": "EN 12527",
+      "wheel_d": 125,
+      "height": 160,
+      "plate_l": 100,
+      "plate_w": 85,
+      "hole_px": 80,
+      "hole_py": 60,
+      "hole_d": 11,
+      "rated_load_kg": 200,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 1.6
+    },
+    "TUERCA_SOLDAR_M10": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M10",
+      "standard": "DIN 929",
+      "thread": "M10",
+      "s": 17,
+      "m": 8,
+      "mass_kg": 0.011
+    },
+    "TUERCA_SOLDAR_M12": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M12",
+      "standard": "DIN 929",
+      "thread": "M12",
+      "s": 19,
+      "m": 10,
+      "mass_kg": 0.016
+    },
+    "TUERCA_SOLDAR_M16": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M16",
+      "standard": "DIN 929",
+      "thread": "M16",
+      "s": 24,
+      "m": 13,
+      "mass_kg": 0.034
+    },
+    "TUERCA_REMACHABLE_M6": {
+      "category": "tornilleria",
+      "name": "Tuerca remachable M6 cabeza plana, cuerpo Ø9",
+      "standard": "Comercial (tipo DIN 7340)",
+      "thread": "M6",
+      "body_d": 9,
+      "body_l": 12,
+      "head_d": 13,
+      "head_h": 1.5,
+      "hole_d": 9.1,
+      "grip_max": 3.0,
+      "mass_kg": 0.003
+    },
+    "TORNILLO_ISO7380_M6x12": {
+      "category": "tornilleria",
+      "name": "Tornillo cabeza abombada hexágono interior M6x12 8.8 zincado",
+      "standard": "ISO 7380-1",
+      "thread": "M6",
+      "d": 6,
+      "length": 12,
+      "head_d": 10.5,
+      "head_h": 3.3,
+      "clearance_hole": 6.6,
+      "mass_kg": 0.004
+    },
+    "TORNILLO_ISO7380_M8x16": {
+      "category": "tornilleria",
+      "name": "Tornillo cabeza abombada hexágono interior M8x16 8.8 zincado",
+      "standard": "ISO 7380-1",
+      "thread": "M8",
+      "d": 8,
+      "length": 16,
+      "head_d": 14.0,
+      "head_h": 4.4,
+      "clearance_hole": 9.0,
+      "mass_kg": 0.009
+    },
+    "TAPON_SHS40": {
+      "category": "accesorios",
+      "name": "Tapón de cierre PE para tubo 40x40x1,5-3",
+      "standard": "Comercial",
+      "fits": "SHS 40x40",
+      "mass_kg": 0.004
+    }
+  },
+  "consumables": {
+    "HILO_G3Si1": {
+      "name": "Hilo de soldadura MAG ER70S-6 / G3Si1 Ø0,8",
+      "standard": "EN ISO 14341-A",
+      "unit": "kg",
+      "deposit_density_kg_dm3": 7.85,
+      "efficiency": 0.9
+    },
+    "GAS_M21": {
+      "name": "Gas de protección M21 (Ar + 18% CO2)",
+      "standard": "EN ISO 14175",
+      "unit": "l",
+      "flow_l_min": 12,
+      "deposit_rate_kg_h": 1.8
+    },
+    "PINTURA_POLVO": {
+      "name": "Pintura en polvo epoxi-poliéster",
+      "unit": "kg"
+    }
+  }
+}
