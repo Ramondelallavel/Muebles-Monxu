@@ -91,5 +91,5 @@ def family(fid: str) -> ProductFamily:
 def library() -> list[dict[str, Any]]:
     out = [{"id": f.id, "name": f.name, "category": f.category, "description": f.description,
             "status": f.status, "configurations": f.configurations} for f in REGISTRY.values()]
-    out += [{**p, "status": "en_desarrollo", "configurations": []} for p in PLANNED]
+    out += [{**p, "status": "en_desarrollo", "configurations": []} for p in PLANNED if p["id"] not in REGISTRY]
     return out

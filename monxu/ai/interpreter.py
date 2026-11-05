@@ -238,6 +238,18 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
             mm = re.search(rf"(\d+)\s+(?:{rx})", t)
             it.unsupported.append(label + (f" ({mm.group(1)} uds)" if mm else ""))
             it.accessories.append(key)
+    if it.family == "estanteria":
+        if "LONGITUD" in it.values:            # en estanterías el "largo" es la anchura de frente
+            L, ev = it.values.pop("LONGITUD"), it.evidence.pop("LONGITUD")
+            if "PROFUNDIDAD" not in it.values and "ANCHURA" in it.values and it.evidence.get("ANCHURA") == ev:
+                it.set("PROFUNDIDAD", it.values["ANCHURA"], ev)
+            it.set("ANCHURA", L, ev)
+        if "CARGA_TOTAL" in it.values and "CARGA_POR_NIVEL" not in it.values and it.values.get("NUMERO_NIVELES"):
+            n = it.values["NUMERO_NIVELES"]
+            it.set("CARGA_POR_NIVEL", round(it.values.pop("CARGA_TOTAL") / n, 1), it.evidence.pop("CARGA_TOTAL"))
+            it.notes.append(f"Carga total repartida por igual entre los {n} niveles (hipótesis).")
+        it.values.pop("NUMERO_BALDAS", None)
+        it.notes = [n for n in it.notes if "total de la mesa" not in n]
     return it
 
 
@@ -249,6 +261,8 @@ def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = N
     """Preguntas concretas para la familia (sólo mesa industrial implementada)."""
     asked = asked or set()
     q: list[Question] = []
+    if family == "estanteria":
+        return _missing_shelf(values, asked)
     if family != "mesa_industrial":
         return q
     for p, lbl, prop in (("LONGITUD", "longitud", 1800.0), ("ANCHURA", "anchura (fondo)", 800.0),
@@ -294,8 +308,49 @@ def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = N
     return q
 
 
+def _missing_shelf(values: dict[str, Any], asked: set[str]) -> list[Question]:
+    q: list[Question] = []
+    for p, lbl, prop in (("ANCHURA", "anchura de frente", 1500.0), ("PROFUNDIDAD", "profundidad", 600.0),
+                         ("ALTURA", "altura total", 2000.0)):
+        if p not in values:
+            q.append(Question(p, f"¿Qué {lbl} necesita (mm)?", "Dimensión principal necesaria para generar la geometría.",
+                              blocking="generacion", proposal=prop))
+    if "NUMERO_NIVELES" not in values:
+        q.append(Question("NUMERO_NIVELES", "¿Cuántos niveles de bandejas?", "Define el número de bastidores y bandejas.",
+                          [{"label": "4 niveles", "value": 4}, {"label": "5 niveles", "value": 5}], "generacion", 5))
+    if values.get("CARGA_POR_NIVEL") is None:
+        q.append(Question("CARGA_POR_NIVEL", "¿Qué carga soportará cada nivel (kg) y estará repartida (cajas) o "
+                                             "concentrada (piezas pesadas)?",
+                          "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.",
+                          [{"label": "80 kg", "value": 80}, {"label": "150 kg", "value": 150},
+                           {"label": "250 kg", "value": 250}], "verificacion"))
+    if "ANCLAJE" not in values and "ANCLAJE" not in asked:
+        q.append(Question("ANCLAJE", "¿Se anclará la estantería al suelo o a la pared?",
+                          "Una estantería alta y estrecha sin anclaje puede volcar con un empuje moderado.",
+                          [{"label": "Anclada al suelo", "value": "al_suelo"}, {"label": "Sin anclaje", "value": "ninguno"}],
+                          "verificacion", "al_suelo"))
+    if "MATERIAL_ESTRUCTURAL" not in values and "MATERIAL_ESTRUCTURAL" not in asked:
+        q.append(Question("MATERIAL_ESTRUCTURAL", "¿Material y acabado? Propuesta: acero S235 con pintura en polvo RAL 7035.",
+                          "Determina propiedades mecánicas, espesores comerciales y acabado.",
+                          [{"label": "Acero S235 pintado RAL 7035", "value": "S235JRH"},
+                           {"label": "Acero inoxidable AISI 304", "value": "1.4301"}], "confirmacion", "S235JRH"))
+    if "ENTORNO" not in values and "ENTORNO" not in asked:
+        q.append(Question("ENTORNO", "¿Entorno de uso (almacén interior seco, húmedo, cámara, exterior)?",
+                          "Afecta al material y al acabado (corrosión).",
+                          [{"label": "Interior seco", "value": "interior_seco"},
+                           {"label": "Interior húmedo", "value": "interior_humedo"}], "confirmacion", "interior_seco"))
+    return q
+
+
 def proposal_for(family: str, values: dict[str, Any]) -> dict[str, Any]:
     """Configuración constructiva preliminar (propuesta IA) para completar lo no indicado."""
+    if family == "estanteria":
+        p = {k: v for k, v in (("ANCHURA", 1500.0), ("PROFUNDIDAD", 600.0), ("ALTURA", 2000.0), ("NUMERO_NIVELES", 5))
+             if k not in values}
+        for k in ("PERFIL_MONTANTE", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ESPESOR_BALDA"):
+            if k not in values:
+                p[k] = "auto"
+        return p
     if family != "mesa_industrial":
         return {}
     p: dict[str, Any] = {}
@@ -315,7 +370,8 @@ def proposal_for(family: str, values: dict[str, Any]) -> dict[str, Any]:
 def describe(it: Interpretation) -> list[str]:
     v = it.values
     out = [f"Familia: {LABELS.get(it.family, 'no identificada')}."]
-    lab = {"LONGITUD": "Longitud", "ANCHURA": "Anchura/fondo", "PROFUNDIDAD": "Profundidad", "ALTURA": "Altura"}
+    lab = {"LONGITUD": "Longitud", "ANCHURA": "Anchura (frente)" if it.family == "estanteria" else "Anchura/fondo",
+           "PROFUNDIDAD": "Profundidad", "ALTURA": "Altura"}
     for k, l in lab.items():
         if k in v:
             out.append(f"{l}: {v[k]:,.0f} mm.".replace(",", "."))
@@ -332,6 +388,8 @@ def describe(it: Interpretation) -> list[str]:
     if "CARGA_PUNTUAL" in v:
         out.append(f"Carga puntual: {v['CARGA_PUNTUAL']:g} kg.")
     out.append("Material: " + (v["MATERIAL_ESTRUCTURAL"] if "MATERIAL_ESTRUCTURAL" in v else "pendiente de selección") + ".")
+    if it.family == "estanteria":
+        out.append("Anclaje: " + {"al_suelo": "al suelo", "ninguno": "sin anclaje"}.get(v.get("ANCLAJE"), "pendiente") + ".")
     if it.family == "mesa_industrial":
         out.append("Balda inferior: " + ("sí" if v.get("NUMERO_BALDAS", None) == 1 else
                                          "no" if v.get("NUMERO_BALDAS") == 0 else "no indicada") + ".")

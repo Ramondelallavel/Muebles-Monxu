@@ -154,7 +154,7 @@ def test_assistant_asks_and_flags_unsupported():
     assert any("Cajones" in u for u in r["state"]["unsupported"])
     r2 = assistant.handle(r["state"], "La balda llevará 100 kg")
     assert r2["parameters"]["CARGA_BALDA"] == 100
-    r3 = assistant.handle(assistant.new_state(), "Una estantería de 5 niveles")
+    r3 = assistant.handle(assistant.new_state(), "Un armario de herramientas con 4 puertas")
     assert not r3["family_implemented"] and not r3["ready_to_generate"]
 
 

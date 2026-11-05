@@ -241,8 +241,10 @@ class Drawing:
             self.arrow((x1, y_dim), (1, 0))
             self.arrow((x2, y_dim), (-1, 0))
         txt = prefix + fmt(value)
-        tx = (x1 + x2) / 2 if (x2 - x1) > len(txt) * 2.2 + 2 else x2 + 3 + len(txt) * 1.2
-        self.text(tx, y_dim + 1.0, txt, 3.0, "c")
+        if (x2 - x1) > len(txt) * 2.2 + 2:
+            self.text((x1 + x2) / 2, y_dim + 1.0, txt, 3.0, "c")
+        else:
+            self.text((x1 + x2) / 2, y_dim + (1.0 if sgn > 0 else -4.2), txt, 3.0, "c")
         if name:
             self.record_dim(name, value, source)
 
@@ -262,8 +264,10 @@ class Drawing:
             self.arrow((x_dim, y1), (0, 1))
             self.arrow((x_dim, y2), (0, -1))
         txt = prefix + fmt(value)
-        ty = (y1 + y2) / 2 if (y2 - y1) > len(txt) * 2.2 + 2 else y2 + 3 + len(txt) * 1.2
-        self.text(x_dim - 1.0, ty, txt, 3.0, "c", angle=90)
+        if (y2 - y1) > len(txt) * 2.2 + 2:
+            self.text(x_dim - 1.0, (y1 + y2) / 2, txt, 3.0, "c", angle=90)
+        else:   # cota corta: texto desplazado al exterior para no pisar las cotas contiguas de la cadena
+            self.text(x_dim - 4.6 * sgn, (y1 + y2) / 2, txt, 3.0, "c", angle=90)
         if name:
             self.record_dim(name, value, source)
 

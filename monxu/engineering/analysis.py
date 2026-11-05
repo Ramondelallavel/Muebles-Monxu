@@ -303,7 +303,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         Wz = sp.Wpl_z if cls <= 2 else sp.Wel_z
         NRd, MyRd, MzRd = sp.A * fy / gM0, Wy * fy / gM0, Wz * fy / gM0
         VzRd, VyRd = sp.Av_z * fy / math.sqrt(3) / gM0, sp.Av_y * fy / math.sqrt(3) / gM0
-        is_leg = mm["role"] == "pata"
+        is_leg = mm["role"] in ("pata", "montante")
         beta = beta_leg if is_leg else crit["effective_length_factors"]["braced_member"]
         Lcr = beta * mm["length"]
         lam1 = math.pi * math.sqrt(mat.E / fy)
@@ -508,12 +508,27 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             Mstb = pf["gamma_G_stb"] * Wtot * lev
             Mdst = pf["gamma_Q_dst"] * H_N * hgt
             ratio = Mdst / Mstb if Mstb > 0 else float("inf")
+            what = st.get("product_word", "mesa")
+            det = {"peso_N": Wtot, "cdg_mm": [round(v, 1) for v in cog], "brazo_mm": lev}
             if ps.get("ANCLAJE") == "al_suelo":
-                pending.append("Anclaje al suelo declarado: la capacidad de los anclajes no está verificada.")
-            checks.append(Check("E.VUELCO", "estabilidad", "Conjunto", f"Vuelco de la mesa vacía bajo empuje horizontal "
-                                f"de {H_N:g} N en el canto (dirección {dirn})", "EN 1990 EQU (γG,stb = 0,9; γQ = 1,5)",
-                                round(Mdst / 1e3, 2), round(Mstb / 1e3, 2), "N·m", round(ratio, 4), _status(ratio),
-                                "EQU", {"peso_N": Wtot, "cdg_mm": [round(v, 1) for v in cog], "brazo_mm": lev}))
+                # base de vuelco: distancia entre líneas de apoyo en la dirección más desfavorable
+                base = (ymax - ymin) if dirn in ("+Y", "-Y") else (xmax - xmin)
+                T = max(0.0, (Mdst - Mstb) / base) if base > 0 else float("inf")
+                n_anchor = max(1, len(sups) // 2)
+                det.update({"traccion_total_N": round(T, 1), "anclajes_traccionados": n_anchor,
+                            "traccion_por_anclaje_N": round(T / n_anchor, 1)})
+                pending.append(f"Anclaje al suelo: tracción de cálculo {T / n_anchor:.0f} N por anclaje "
+                               f"({n_anchor} anclajes en el lado traccionado). La capacidad del anclaje y del soporte "
+                               "no está verificada (depende del taco y del suelo).")
+                checks.append(Check("E.ANCLAJE", "estabilidad", "Anclajes", f"Vuelco impedido por anclaje al suelo: "
+                                    f"tracción de cálculo por anclaje bajo empuje de {H_N:g} N (dirección {dirn})",
+                                    "EN 1990 EQU + EN 1992-4 (anclajes, no evaluado)", round(T / n_anchor, 1), None,
+                                    "N", None, PENDING, "EQU", det))
+            else:
+                checks.append(Check("E.VUELCO", "estabilidad", "Conjunto", f"Vuelco de la {what} vacía bajo empuje "
+                                    f"horizontal de {H_N:g} N en la parte superior (dirección {dirn})",
+                                    "EN 1990 EQU (γG,stb = 0,9; γQ = 1,5)", round(Mdst / 1e3, 2), round(Mstb / 1e3, 2),
+                                    "N·m", round(ratio, 4), _status(ratio), "EQU", det))
         stability = {"weight_N": Wtot, "cog": cog.tolist(), "levers": levers}
 
     # ---------------------------------------------------------------- resultado global

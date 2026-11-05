@@ -62,20 +62,23 @@ def model_checks(model, interf: dict, eng: dict, dfm: list, bom: dict) -> QA:
             q.add(BLOCK, nte["code"], nte["message"])
         elif nte["level"] == "advertencia":
             q.add(WARN, nte["code"], nte["message"])
-    # dimensiones
-    top = next((i for i in model.instances if i.id == "ENC.BANDEJA"), None)
-    if top is not None:
-        lo, hi = top.bbox
-        devs = {"LONGITUD": hi[0] - lo[0] - ps["LONGITUD"], "ANCHURA": hi[1] - lo[1] - ps["ANCHURA"],
-                "ALTURA": hi[2] - ps["ALTURA"]}
+    # dimensiones (envolvente declarada por la familia)
+    env = model.dims.get("envelope")
+    if env:
+        insts = [model.instance(i) for i in env["ids"]] if env.get("ids") else \
+            [i for i in model.instances if i.group in env.get("groups", ())]
+        lo = np.min([i.bbox[0] for i in insts], axis=0)
+        hi = np.max([i.bbox[1] for i in insts], axis=0)
+        nx, ny = env.get("names", ("LONGITUD", "ANCHURA"))
+        devs = {nx: hi[0] - lo[0] - env["dx"], ny: hi[1] - lo[1] - env["dy"], "ALTURA": hi[2] - env["zmax"]}
         bad = {k: round(v, 4) for k, v in devs.items() if abs(v) > 0.01}
         q.add(BLOCK if bad else OK, "GEO-DIMENSIONES", f"Desviación entre geometría y parámetros: {bad}" if bad else
               "Dimensiones generales de la geometría coinciden con los parámetros (±0,01 mm).")
-    blo, bhi = model.bounding_box()
-    over = max(-blo[0], -blo[1], bhi[0] - ps["LONGITUD"], bhi[1] - ps["ANCHURA"])
-    if over > 0.5:
-        q.add(WARN, "GEO-SALIENTE", f"Elementos sobresalen {over:.1f} mm del contorno de la encimera (bases de pies "
-                                    "niveladores): considerar en implantación.")
+        blo, bhi = model.bounding_box()
+        over = max(lo[0] - blo[0], lo[1] - blo[1], bhi[0] - hi[0], bhi[1] - hi[1])
+        if over > 0.5:
+            q.add(WARN, "GEO-SALIENTE", f"Elementos sobresalen {over:.1f} mm del contorno del producto (bases de pies "
+                                        "niveladores): considerar en implantación.")
     # holguras
     g = model.ctx.derived.get("HOLGURA_ENC")
     r = model.ctx.derived.get("RADIO_ENC")
@@ -183,10 +186,14 @@ def export_checks(q: QA, model, files: dict[str, Any], bom: dict) -> QA:
 
 def drawing_consistency(model, drawings: dict) -> dict:
     """Compara las cotas registradas al dibujar con los parámetros y la geometría de las piezas."""
-    ps = model.params.values
-    expected = {"LONGITUD": ps["LONGITUD"], "ANCHURA": ps["ANCHURA"], "ALTURA": ps["ALTURA"]}
-    if model.dims.get("ALTURA_BALDA"):
-        expected["ALTURA_BALDA"] = model.dims["ALTURA_BALDA"]
+    env = model.dims.get("envelope", {})
+    names = env.get("names", ("LONGITUD", "ANCHURA"))
+    expected = {names[0]: env.get("dx"), names[1]: env.get("dy"), "ALTURA": env.get("zmax")}
+    expected = {k: v for k, v in expected.items() if v is not None}
+    for name, _iid in model.dims.get("levels", []):
+        if model.dims.get(name) is not None:
+            expected[name] = model.dims[name]
+    expected.update(model.dims.get("drawing_expected", {}))
     for p in model.parts.values():
         if isinstance(p, SheetPart):
             fp = p.flat

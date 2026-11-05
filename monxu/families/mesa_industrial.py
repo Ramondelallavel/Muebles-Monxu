@@ -77,6 +77,38 @@ class MesaIndustrial(ProductFamily):
                    "pies niveladores y fijación atornillada de chapas.")
     configurations = ["Mesa abierta", "Mesa con balda inferior", "Mesa de montaje", "Mesa de trabajo pesado"]
     verification_inputs = ["CARGA_TOTAL"]
+    candidates = CANDIDATES
+    constructive_defaults = CONSTRUCTIVE_DEFAULTS
+    leg_param = "PERFIL_PATA"
+    frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR")
+    auto_in_construct = ("RADIO_PLEGADO", "FACTOR_K", "NUMERO_TRAVESANOS", "NUMERO_TRAVESANOS_BALDA", "HOLGURA_ENCIMERA")
+
+    def param_for_role(self, role: str) -> str | None:
+        return {"pata": "PERFIL_PATA", "larguero_sup": "PERFIL_LARGUERO", "travesano_ext_sup": "PERFIL_TRAVESANO",
+                "travesano_int_sup": "PERFIL_TRAVESANO", "larguero_inf": "PERFIL_BASTIDOR",
+                "travesano_ext_inf": "PERFIL_BASTIDOR", "travesano_int_inf": "PERFIL_BASTIDOR"}.get(role)
+
+    def vertical_load_present(self, v) -> bool:
+        return bool(v.get("CARGA_TOTAL"))
+
+    def plate_targets(self, v) -> list[dict]:
+        out = []
+        if v.get("CARGA_TOTAL"):
+            out.append({"surface": "encimera", "t_param": "ESPESOR_CHAPA", "n_param": "NUMERO_TRAVESANOS",
+                        "load_param": "CARGA_TOTAL", "trv_param": "PERFIL_TRAVESANO", "min_t_by_use": True})
+        if v.get("CARGA_BALDA") and v.get("NUMERO_BALDAS", 0) >= 1:
+            out.append({"surface": "balda", "t_param": "ESPESOR_BALDA", "n_param": "NUMERO_TRAVESANOS_BALDA",
+                        "load_param": "CARGA_BALDA", "trv_param": "PERFIL_BASTIDOR", "min_t_by_use": False})
+        return out
+
+    def sheet_defaults_without_load(self, v) -> dict:
+        """Espesores por defecto cuando no hay carga para dimensionar."""
+        out = {}
+        if not v.get("CARGA_TOTAL"):
+            out["ESPESOR_CHAPA"] = CONSTRUCTIVE_DEFAULTS["ESPESOR_CHAPA"]
+        if not (v.get("CARGA_BALDA") and v.get("NUMERO_BALDAS", 0) >= 1):
+            out["ESPESOR_BALDA"] = CONSTRUCTIVE_DEFAULTS["ESPESOR_BALDA"]
+        return out
 
     # ------------------------------------------------------------------ parámetros
     def param_specs(self) -> list[ParamSpec]:
@@ -169,8 +201,7 @@ class MesaIndustrial(ProductFamily):
     # ------------------------------------------------------------------ construcción
     def construct(self, ps: ParameterSet) -> ProductModel:
         for k, v in ps.values.items():
-            if v == AUTO and k not in ("RADIO_PLEGADO", "FACTOR_K", "NUMERO_TRAVESANOS", "NUMERO_TRAVESANOS_BALDA",
-                                       "HOLGURA_ENCIMERA"):
+            if v == AUTO and k not in self.auto_in_construct:
                 raise ValueError(f"Parámetro sin resolver: {k}")
         ctx = ParamContext(ps)
         L, W, H = ps.values["LONGITUD"], ps.values["ANCHURA"], ps.values["ALTURA"]
@@ -198,14 +229,7 @@ class MesaIndustrial(ProductFamily):
         rn = catalog.component("TUERCA_REMACHABLE_M6")
         sc = catalog.component("TORNILLO_ISO7380_M6x12")
 
-        def weld(jid, a_id, end, b_id, prof, desc):
-            tmin = min(model.instance(a_id).part.profile.t, model.instance(b_id).part.profile.t)
-            ia = model.instance(a_id)
-            loc = ia.axis[end]
-            model.add_joint(Joint(jid, "soldadura", (a_id, b_id), tuple(float(v) for v in loc), desc,
-                                  weld={"type": "fillet", "a": d["weld_a"](tmin), "all_around": True,
-                                        "length": round(rounded_perimeter(prof.B, prof.H, prof.r_out), 1),
-                                        "process": "135 (MAG)", "fem": {"member": a_id, "end": end, "onto": b_id}}))
+        weld = self._make_welder(model, d)
 
         # ---------------------------------------------------------------- estructura
         with ctx.feature("F10", "Estructura soldada"):
@@ -282,9 +306,25 @@ class MesaIndustrial(ProductFamily):
         # ---------------------------------------------------------------- datos estructurales
         model.structure = self._structure(model, d, legs)
         model.dims = {"LONGITUD": L, "ANCHURA": W, "ALTURA": H, "ALTURA_BALDA": d["z_shelf"] if d["shelf"] else None,
-                      "LONGITUD_PATA": d["leg_len"]}
+                      "LONGITUD_PATA": d["leg_len"],
+                      "envelope": {"ids": ["ENC.BANDEJA"], "dx": L, "dy": W, "zmax": H, "names": ("LONGITUD", "ANCHURA")},
+                      "levels": [("ALTURA_BALDA", "BAL.BANDEJA")] if d["shelf"] else [],
+                      "load_text": f"Carga distribuida de proyecto sobre encimera: "
+                                   f"{(str(ps.values['CARGA_TOTAL']) + ' kg') if ps.values.get('CARGA_TOTAL') else 'NO DEFINIDA'}"}
         model.number_parts()
         return model
+
+    # ------------------------------------------------------------------ utilidades comunes
+    @staticmethod
+    def _make_welder(model, d):
+        def weld(jid, a_id, end, b_id, prof, desc):
+            tmin = min(model.instance(a_id).part.profile.t, model.instance(b_id).part.profile.t)
+            loc = model.instance(a_id).axis[end]
+            model.add_joint(Joint(jid, "soldadura", (a_id, b_id), tuple(float(v) for v in loc), desc,
+                                  weld={"type": "fillet", "a": d["weld_a"](tmin), "all_around": True,
+                                        "length": round(rounded_perimeter(prof.B, prof.H, prof.r_out), 1),
+                                        "process": "135 (MAG)", "fem": {"member": a_id, "end": end, "onto": b_id}}))
+        return weld
 
     # ------------------------------------------------------------------ derivados
     def _derive(self, ctx: ParamContext, model: ProductModel) -> dict:
@@ -359,7 +399,7 @@ class MesaIndustrial(ProductFamily):
             ctx.set_derived("VANO_ENCIMERA", round((xe1 - xe0) / (n_top + 1), 2), "mm", "Vano entre apoyos de encimera",
                             ["LONGITUD", "NUMERO_TRAVESANOS", "PERFIL_TRAVESANO", "RETRANQUEO"])
             shelf = ctx["NUMERO_BALDAS"] >= 1
-            d.update(leg=leg, rail=rail, trv=trv, bas=bas, a=a, c=c, t=t, r=r, K=K, hn=hn, tp=tp, z_tf=z_tf,
+            d.update(Lx=L, Ly=W, leg=leg, rail=rail, trv=trv, bas=bas, a=a, c=c, t=t, r=r, K=K, hn=hn, tp=tp, z_tf=z_tf,
                      z_leg0=z_leg0, leg_len=leg_len, n_top=n_top, xe=(xe0, xe1), shelf=shelf)
             d["weld_a"] = lambda tmin: 3.0 if tmin >= 3 else float(tmin)
 
@@ -458,10 +498,10 @@ class MesaIndustrial(ProductFamily):
 
     # ------------------------------------------------------------------ bastidores
     def _frame_level(self, model, d, ctx, level, z_top, prof_long, prof_end, inset, n_int, legs, fixings, weld,
-                     mat, fin):
-        L, W = ctx["LONGITUD"], ctx["ANCHURA"]
+                     mat, fin, label=None):
+        L, W = d["Lx"], d["Ly"]
         c, a = d["c"], d["a"]
-        lab = "superior" if level == "SUP" else "inferior"
+        lab = label or ("superior" if level == "SUP" else "inferior")
         # ---- largueros (frontal en +X, trasero en -X para que ambos sean la misma pieza)
         zl = z_top - prof_long.H / 2
         y_f = c + inset + prof_long.B / 2
@@ -523,7 +563,7 @@ class MesaIndustrial(ProductFamily):
             "long": long_ids, "end": end_ids, "int": int_ids, "grid_x": [x_l] + xs + [x_r], "grid_y": [y_f, y_b],
             "z": z_top}
 
-    def _fasteners(self, model, fix, group, rn, sc, ctx):
+    def _fasteners(self, model, fix, group, rn, sc, ctx, prefix=None, tray_id=None):
         """Tuercas remachables en el bastidor y tornillos a través de las pestañas."""
         rn_part = StandardPart("tuerca_remachable", "TUERCA_REMACHABLE_M6")
         sc_part = StandardPart("tornillo", "TORNILLO_ISO7380_M6x12")
@@ -540,13 +580,14 @@ class MesaIndustrial(ProductFamily):
                 # cara exterior del perfil = cara interior de la pestaña + holgura
                 gap = fix["gap"]
                 pr = pf - nrm * (t + gap)
-                sid = f"{group}.TORN.{n:02d}"
-                rid = f"{group}.TREM.{n:02d}"
+                pre = prefix or group
+                sid = f"{pre}.TORN.{n:02d}"
+                rid = f"{pre}.TREM.{n:02d}"
                 model.add(rid, f"Tuerca remachable {n}", rn_part, frame_z(pr, nrm), group,
                           tags={"explode_extra": tuple(nrm * 30)})
                 model.add(sid, f"Tornillo {n}", sc_part, frame_z(pf, nrm), group,
                           tags={"explode_extra": tuple(nrm * 80)})
-                model.add_joint(Joint(f"J.{sid}", "atornillada", (f"{group}.BANDEJA", rid), tuple(pf),
+                model.add_joint(Joint(f"J.{sid}", "atornillada", (tray_id or f"{group}.BANDEJA", rid), tuple(pf),
                                       f"Tornillo {sc['thread']} en tuerca remachable", fasteners=(sid, rid)))
 
     # ------------------------------------------------------------------ modelo estructural

@@ -11,7 +11,8 @@ from typing import Any
 
 from . import interpreter as I
 
-STRUCTURAL_KEYS = ("LONGITUD", "ANCHURA", "ALTURA", "CARGA_TOTAL", "CARGA_BALDA", "CARGA_PUNTUAL", "CARGA_HORIZONTAL",
+STRUCTURAL_KEYS = ("PROFUNDIDAD", "NUMERO_NIVELES", "CARGA_POR_NIVEL", "ALTURA_PRIMER_NIVEL", "DISTANCIA_BALDAS",
+                   "PERFIL_MONTANTE", "LONGITUD", "ANCHURA", "ALTURA", "CARGA_TOTAL", "CARGA_BALDA", "CARGA_PUNTUAL", "CARGA_HORIZONTAL",
                    "MATERIAL_ESTRUCTURAL", "MATERIAL_CHAPA", "ACABADO", "ESPESOR_CHAPA", "NUMERO_BALDAS", "ALTURA_BALDA",
                    "USO", "FRECUENCIA", "ENTORNO", "ANCLAJE", "TIPO_SUELO", "TIPO_APOYO", "PERFIL_PATA")
 
@@ -63,7 +64,8 @@ def handle(state: dict[str, Any], message: str = "", answers: dict[str, Any] | N
     st["asked"] = sorted(asked)
     st["last_questions"] = [q.__dict__ for q in questions]
     st["engine"] = engine
-    implemented = fam == "mesa_industrial"
+    from ..families import REGISTRY
+    implemented = fam in REGISTRY
     proposal = I.proposal_for(fam, values) if implemented else {}
     reply: list[str] = []
     if not fam:
@@ -92,8 +94,17 @@ def handle(state: dict[str, Any], message: str = "", answers: dict[str, Any] | N
         reply.append("Puede generar ya un diseño preliminar; los datos pendientes quedarán marcados como tales."
                      if not gen_block else "Faltan dimensiones para generar la geometría.")
     params = {**proposal, **{k: v for k, v in values.items() if k in STRUCTURAL_KEYS}}
-    if implemented and "CARGA_HORIZONTAL" not in values:
-        params.pop("CARGA_HORIZONTAL", None)
+    if implemented:     # sólo parámetros que existen en la familia y con valores admisibles
+        specs = {sp.name: sp for sp in REGISTRY[fam].param_specs()}
+        clean = {}
+        for k, val in params.items():
+            if k in specs:
+                try:
+                    specs[k].coerce(val)
+                    clean[k] = val
+                except Exception:
+                    st["notes"] = list(dict.fromkeys(st["notes"] + [f"Valor «{val}» no admisible para {k}: se ignora."]))
+        params = clean
     sources = {k: ("usuario" if k in values else "ia_propuesta") for k in params}
     st.setdefault("history", []).append({"user": message, "answers": answers or {}})
     return {"state": st, "reply": "\n".join(reply), "interpretation": I.to_dict(it),

@@ -126,8 +126,11 @@ def plan_general(d: Drawing, X: _Ctx):
     insts = m.instances
     projs = {v: X.proj("all", insts, v, hidden=False) for v in ("alzado", "perfil", "planta")}
     s, V = layout_ortho(projs, (28, 18, 405, 272), [TB_RESERVED])
-    top = X.inst("ENC.BANDEJA")
-    lo, hi = top.bbox
+    env = m.dims["envelope"]
+    env_insts = [X.inst(i) for i in env["ids"]] if env.get("ids") else [i for i in insts if i.group in env["groups"]]
+    lo = np.min([i.bbox[0] for i in env_insts], axis=0)
+    hi = np.max([i.bbox[1] for i in env_insts], axis=0)
+    nx, ny = env.get("names", ("LONGITUD", "ANCHURA"))
     d.new_sheet("01", "Conjunto general", scale_label(s), "Ver despiece (plano 08)")
     for n, v in V.items():
         v.label = {"alzado": "ALZADO", "perfil": "PERFIL IZQUIERDO", "planta": "PLANTA"}[n]
@@ -136,18 +139,26 @@ def plan_general(d: Drawing, X: _Ctx):
     # alzado: longitud y altura
     x0, ztop = _P(a, "alzado", (lo[0], 0, hi[2]))
     x1, _ = _P(a, "alzado", (hi[0], 0, hi[2]))
-    d.dim_h(x0, x1, ztop, ztop, ztop + 9, hi[0] - lo[0], "LONGITUD")
+    d.dim_h(x0, x1, ztop, ztop, ztop + 9, hi[0] - lo[0], nx)
     _, yfloor = _P(a, "alzado", (0, 0, 0))
     xl = a.ox
-    d.dim_v(yfloor, ztop, xl, xl, xl - 9, hi[2], "ALTURA")
-    if "BAL.BANDEJA" in [i.id for i in insts]:
-        sh = X.inst("BAL.BANDEJA")
-        _, ys = _P(a, "alzado", (0, 0, sh.bbox[1][2]))
-        d.dim_v(yfloor, ys, xl, xl, xl - 17, sh.bbox[1][2], "ALTURA_BALDA")
+    levels = [(name, X.inst(iid).bbox[1][2]) for name, iid in m.dims.get("levels", [])]
+    if len(levels) <= 1:
+        d.dim_v(yfloor, ztop, xl, xl, xl - 9, hi[2], "ALTURA")
+        for name, z in levels:
+            _, ys = _P(a, "alzado", (0, 0, z))
+            d.dim_v(yfloor, ys, xl, xl, xl - 17, z, name)
+    else:     # cadena de cotas de niveles y altura total
+        d.dim_v(yfloor, ztop, xl, xl, xl - 17, hi[2], "ALTURA")
+        zs = [0.0] + sorted(z for _, z in levels)
+        for k in range(len(zs) - 1):
+            _, ya_ = _P(a, "alzado", (0, 0, zs[k]))
+            _, yb_ = _P(a, "alzado", (0, 0, zs[k + 1]))
+            d.dim_v(ya_, yb_, xl, xl, xl - 9, zs[k + 1] - zs[k], f"DIST_NIVEL_{k + 1}")
     # perfil: anchura
     u0, zt = _P(p, "perfil", (0, hi[1], hi[2]))
     u1, _ = _P(p, "perfil", (0, lo[1], hi[2]))
-    d.dim_h(u0, u1, zt, zt, zt + 9, hi[1] - lo[1], "ANCHURA")
+    d.dim_h(u0, u1, zt, zt, zt + 9, hi[1] - lo[1], ny)
     # planta
     xa, ya = _P(pl, "planta", (lo[0], lo[1], 0))
     xb, yb = _P(pl, "planta", (hi[0], hi[1], 0))
@@ -172,8 +183,7 @@ def plan_general(d: Drawing, X: _Ctx):
     ps = m.params.values
     lines = [f"Producto: {m.family_name} {m.product_code}",
              f"Masa total calculada desde la geometría: {X.bom['totals']['total_mass']:.1f} kg",
-             f"Carga distribuida de proyecto sobre encimera: "
-             f"{(str(ps['CARGA_TOTAL']) + ' kg') if ps.get('CARGA_TOTAL') else 'NO DEFINIDA'}",
+             m.dims.get("load_text", ""),
              f"Estado de verificación: {eng['status_label']}",
              "Altura con pies niveladores en posición nominal (regulación "
              f"±{catalog.component(ps['PIE_NIVELADOR'])['adjust'] / 2:g} mm).",
@@ -204,11 +214,16 @@ def plan_structure(d: Drawing, X: _Ctx):
     d.dim_h(x0, x1, yz, yz, yz + 9, hi[0] - lo[0], "EST_LONGITUD")
     _, yb = _P(a, "alzado", (0, 0, lo[2]))
     d.dim_v(yb, yz, a.ox, a.ox, a.ox - 9, hi[2] - lo[2], "EST_ALTURA")
-    for lvl, off in (("INF", 17),):
-        if lvl in lv:
-            r = X.inst(lv[lvl]["long"][0])
-            _, yr = _P(a, "alzado", (0, 0, r.bbox[1][2]))
-            d.dim_v(yb, yr, a.ox, a.ox, a.ox - off, r.bbox[1][2] - lo[2], f"COTA_BASTIDOR_{lvl}")
+    lower = sorted((X.inst(lv[k]["long"][0]).bbox[1][2], k) for k in lv if k != "SUP")
+    if len(lower) == 1:
+        z, k = lower[0]
+        _, yr = _P(a, "alzado", (0, 0, z))
+        d.dim_v(yb, yr, a.ox, a.ox, a.ox - 17, z - lo[2], f"COTA_BASTIDOR_{k}")
+    elif lower:
+        zs = [lo[2]] + [z for z, _ in lower]
+        for k in range(len(zs) - 1):
+            ya_, yb_ = _P(a, "alzado", (0, 0, zs[k]))[1], _P(a, "alzado", (0, 0, zs[k + 1]))[1]
+            d.dim_v(ya_, yb_, a.ox, a.ox, a.ox - 17, zs[k + 1] - zs[k])
     # planta: paso de travesaños intermedios (cadena)
     top = lv["SUP"]
     ids = [top["end"][0]] + top["int"] + [top["end"][1]]
@@ -578,6 +593,7 @@ def plan_assembly(d: Drawing, X: _Ctx):
         "ENC": "Colocar la encimera sobre el bastidor superior y fijarla con tornillos ISO 7380 M6x12 por las "
                "pestañas (par 8 N·m). Apretar en cruz desde el centro.",
     }
+    texts.update(m.structure.get("assembly_texts", {}))
     shown: list = []
     for n, sa in enumerate(order[:4]):
         shown += [i for i in m.instances if i.group == sa.id]
