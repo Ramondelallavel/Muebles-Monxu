@@ -1,0 +1,344 @@
+"""Intérprete de solicitudes en lenguaje natural (español) → parámetros técnicos.
+
+Determinista y trazable: cada valor extraído guarda el fragmento de texto que lo justifica.
+La IA no inventa geometría: sólo produce parámetros que el motor CAD construye y el motor de
+cálculo verifica. Distingue datos del usuario, propuestas preliminares y datos pendientes.
+"""
+from __future__ import annotations
+
+import re
+import unicodedata
+from dataclasses import asdict, dataclass, field
+from typing import Any
+
+NUM_WORDS = {"un": 1, "una": 1, "uno": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7,
+             "ocho": 8, "nueve": 9, "diez": 10, "once": 11, "doce": 12}
+NUM = r"(\d{1,3}(?:[.\s]\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)"
+UNIT = r"(?:(mm|milimetros?|cm|centimetros?|m|metros?)\b)"
+
+FAMILY_KEYWORDS = [
+    ("mesa_industrial", r"\bmesas?\b|banco de (trabajo|montaje)|\bbancos?\b"),
+    ("estanteria", r"estanteri"),
+    ("puesto_trabajo", r"puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion)"),
+    ("armario", r"\barmario|\bcarro\b|carros industriales"),
+]
+
+UNSUPPORTED_ACCESSORIES = [
+    ("cajones", r"cajon|cajonera", "Cajones / cajonera"),
+    ("panel_trasero", r"panel (trasero|perforado)|panel de herramientas|panel posterior", "Panel trasero perforado"),
+    ("ruedas", r"\bruedas?\b|movil\b", "Ruedas (mesa móvil)"),
+    ("puertas", r"\bpuertas?\b|armario inferior", "Puertas / armario inferior"),
+    ("iluminacion", r"iluminacion|\bluz\b|luminaria", "Iluminación"),
+    ("tomas", r"tomas? electric|enchufes|regleta", "Tomas eléctricas"),
+    ("monitor", r"monitor|pantalla", "Soporte para monitor"),
+    ("regulable", r"regulable en altura|altura regulable", "Regulación de altura"),
+]
+
+
+def norm(s: str) -> str:
+    s = unicodedata.normalize("NFKD", s.lower())
+    return "".join(c for c in s if not unicodedata.combining(c)).replace("×", "x").replace("*", "x")
+
+
+def to_number(tok: str) -> float:
+    tok = tok.strip()
+    if tok in NUM_WORDS:
+        return float(NUM_WORDS[tok])
+    t = tok.replace(" ", "")
+    if re.fullmatch(r"\d{1,3}(\.\d{3})+(,\d+)?", t):
+        t = t.replace(".", "").replace(",", ".")
+    else:
+        t = t.replace(",", ".")
+    return float(t)
+
+
+def to_mm(value: float, unit: str | None, default_unit: str = "mm") -> float:
+    u = (unit or default_unit)
+    if u.startswith("m") and not u.startswith("mm") and not u.startswith("mil"):
+        return value * 1000
+    if u.startswith("c"):
+        return value * 10
+    return value
+
+
+@dataclass
+class Question:
+    param: str
+    question: str
+    why: str
+    options: list[dict[str, Any]] = field(default_factory=list)
+    blocking: str = "verificacion"        # generacion | verificacion | confirmacion
+    proposal: Any = None
+
+
+@dataclass
+class Interpretation:
+    family: str | None = None
+    family_label: str = ""
+    values: dict[str, Any] = field(default_factory=dict)
+    evidence: dict[str, str] = field(default_factory=dict)
+    unsupported: list[str] = field(default_factory=list)
+    accessories: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def set(self, k, v, ev):
+        self.values[k] = v
+        self.evidence[k] = ev.strip()
+
+
+def parse(text: str, pending: list[str] | None = None) -> Interpretation:
+    t = norm(text)
+    it = Interpretation()
+    # ------------------------------------------------------------- familia
+    for fid, rx in FAMILY_KEYWORDS:
+        if re.search(rx, t):
+            it.family = fid
+            break
+    for word, n in NUM_WORDS.items():
+        t = re.sub(rf"\b{word}\b(?=\s+(niveles|baldas|estantes|cajones|travesanos))", str(n), t)
+    # ------------------------------------------------------------- dimensiones
+    m = re.search(rf"{NUM}\s*{UNIT}?\s*x\s*{NUM}\s*{UNIT}?\s*x\s*{NUM}\s*{UNIT}?", t)
+    if m:
+        unit = m.group(6) or m.group(4) or m.group(2)
+        a, b, c = (to_mm(to_number(m.group(i)), m.group(i + 1) or unit) for i in (1, 3, 5))
+        it.set("LONGITUD", a, m.group(0))
+        it.set("ANCHURA", b, m.group(0))
+        it.set("ALTURA", c, m.group(0))
+    dim_words = {"LONGITUD": r"largo|longitud|long\.", "ANCHURA": r"ancho|anchura|profundidad|fondo",
+                 "ALTURA": r"altura|alto"}
+    for param, words in dim_words.items():
+        if param in it.values:
+            continue
+        for rx in (rf"{NUM}\s*{UNIT}?\s*(?:de\s+)?(?:{words})",
+                   rf"(?:{words})\s*(?:de|:|=)?\s*{NUM}\s*{UNIT}?"):
+            mm = re.search(rx, t)
+            if mm:
+                it.set(param, to_mm(to_number(mm.group(1)), mm.group(2)), mm.group(0))
+                break
+    if it.family == "estanteria" and "ANCHURA" in it.values:
+        # en estanterías: anchura = frente, profundidad = fondo
+        pm = re.search(rf"{NUM}\s*{UNIT}?\s*(?:de\s+)?(?:profundidad|fondo)", t)
+        if pm:
+            it.set("PROFUNDIDAD", to_mm(to_number(pm.group(1)), pm.group(2)), pm.group(0))
+        am = re.search(rf"{NUM}\s*{UNIT}?\s*(?:de\s+)?(?:ancho|anchura)", t)
+        if am:
+            it.set("ANCHURA", to_mm(to_number(am.group(1)), am.group(2)), am.group(0))
+    # ------------------------------------------------------------- niveles
+    mm = re.search(r"(\d+)\s+(?:niveles|baldas|estantes)", t)
+    if mm:
+        it.set("NUMERO_NIVELES", int(mm.group(1)), mm.group(0))
+    # ------------------------------------------------------------- cargas
+    for mm in re.finditer(rf"{NUM}\s*(kg|kilos?|kilogramos?)\b", t):
+        val = to_number(mm.group(1))
+        ctx = t[max(0, mm.start() - 60): mm.end() + 60]
+        after = t[mm.end(): mm.end() + 40]
+        before = t[max(0, mm.start() - 40): mm.start()]
+        if re.search(r"por nivel|cada nivel|por balda|cada balda|por estante", ctx):
+            it.set("CARGA_POR_NIVEL", val, mm.group(0) + " por nivel")
+        elif re.search(r"puntual|concentrada", ctx):
+            it.set("CARGA_PUNTUAL", val, ctx)
+        elif re.search(r"balda|estante inferior", after) or re.search(r"balda", before):
+            it.set("CARGA_BALDA", val, ctx)
+        elif pending and pending[0] in ("CARGA_BALDA", "CARGA_PUNTUAL", "CARGA_TOTAL") and \
+                not re.search(r"distribuid|encimera", ctx):
+            it.set(pending[0], val, mm.group(0))
+        else:
+            it.set("CARGA_TOTAL", val, ctx)
+            if re.search(r"total de la mesa|en total|entre encimera y balda", ctx):
+                it.notes.append("La carga indicada es total de la mesa: se asigna a la encimera (hipótesis "
+                                "conservadora) hasta que se indique el reparto con la balda.")
+    if re.search(r"balda (sin carga|vacia)|sin carga en la balda", t):
+        it.set("CARGA_BALDA", 0.0, "balda sin carga")
+    mm = re.search(rf"{NUM}\s*(n|newton)\b", t)
+    if mm and re.search(r"horizontal|empuje", t):
+        it.set("CARGA_HORIZONTAL", to_number(mm.group(1)), mm.group(0))
+    elif re.search(r"(sin|no hay|despreciables?) (empujes|esfuerzos horizontales)|empujes? (ligeros?|despreciables?)|empujes? horizontales? ligeros?", t):
+        it.set("CARGA_HORIZONTAL", 100.0, "empujes horizontales ligeros")
+        it.notes.append("Empuje horizontal ligero: se adopta 100 N como hipótesis de uso ligero.")
+    elif re.search(r"tornillo de banco|golpe|martill", t):
+        it.set("CARGA_HORIZONTAL", 600.0, "trabajo con esfuerzos horizontales")
+        it.notes.append("Trabajo con esfuerzos horizontales: se adopta 600 N como hipótesis.")
+    # ------------------------------------------------------------- materiales
+    if re.search(r"inox|inoxidable|aisi\s*3(04|16)|1\.4301|1\.4404", t):
+        code = "1.4404" if re.search(r"316|1\.4404", t) else "1.4301"
+        it.set("MATERIAL_ESTRUCTURAL", code, "acero inoxidable")
+        it.set("MATERIAL_CHAPA", code, "acero inoxidable")
+        it.set("ACABADO", "INOX_SATINADO", "acero inoxidable")
+    elif re.search(r"alumini", t):
+        it.set("MATERIAL_ESTRUCTURAL", "EN AW-6082 T6", "aluminio")
+        it.set("MATERIAL_CHAPA", "EN AW-5754 H22", "aluminio")
+        it.set("ACABADO", "ANODIZADO_NATURAL", "aluminio")
+    elif re.search(r"\bacero\b|chapa de acero|chapa negra|s235|s355", t):
+        it.set("MATERIAL_CHAPA", "S235JR", "acero")
+        it.set("MATERIAL_ESTRUCTURAL", "S355J2H" if "s355" in t else "S235JRH", "acero")
+    if re.search(r"encimera de (madera|contrachapado|tablero|hpl|fenolic)", t):
+        it.unsupported.append("Encimera de madera/tablero técnico (sólo chapa metálica en esta versión)")
+    mm = re.search(rf"chapa (?:de\s+)?{NUM}\s*mm|{NUM}\s*mm de (?:espesor|chapa)", t)
+    if mm:
+        it.set("ESPESOR_CHAPA", to_number(mm.group(1) or mm.group(2)), mm.group(0))
+    for ral in re.findall(r"ral\s*(\d{4})", t):
+        code = f"RAL{ral}_POLVO"
+        from .. import catalog
+        if code in catalog.finishes():
+            it.set("ACABADO", code, f"RAL {ral}")
+        else:
+            it.notes.append(f"Color RAL {ral} no está en el catálogo de acabados: se mantiene el acabado propuesto.")
+    if re.search(r"galvaniz", t):
+        it.set("ACABADO", "GALVANIZADO", "galvanizado")
+    # ------------------------------------------------------------- configuración
+    if re.search(r"sin balda|sin estante", t):
+        it.set("NUMERO_BALDAS", 0, "sin balda")
+    elif re.search(r"balda inferior|con balda|estante inferior|bandeja inferior|una balda|1 balda", t):
+        it.set("NUMERO_BALDAS", 1, "balda inferior")
+    mm = re.search(rf"balda (?:a|situada a)\s*{NUM}\s*{UNIT}?", t)
+    if mm:
+        it.set("ALTURA_BALDA", to_mm(to_number(mm.group(1)), mm.group(2)), mm.group(0))
+    mm = re.search(r"tubo (?:cuadrado )?(?:de\s+)?(\d{2,3})\s*x\s*(\d{2,3})(?:\s*x\s*(\d(?:[.,]\d)?))?", t)
+    if mm:
+        a, b, tt = mm.group(1), mm.group(2), (mm.group(3) or "2").replace(",", ".")
+        code = f"SHS {a}x{b}x{float(tt):g}" if a == b else f"RHS {max(a, b, key=int)}x{min(a, b, key=int)}x{float(tt):g}"
+        from .. import catalog
+        if code in catalog.profiles() and a == b:
+            it.set("PERFIL_PATA", code, mm.group(0))
+        elif code not in catalog.profiles():
+            it.notes.append(f"Perfil {code} no disponible en el catálogo: se propondrá el más próximo.")
+    if re.search(r"tubular|tubo", t):
+        it.accessories.append("estructura tubular")
+    # ------------------------------------------------------------- uso y entorno
+    for rx, val in [(r"trabajo pesado|uso intensivo pesado|heavy", "trabajo_pesado"), (r"montaje ligero", "montaje_ligero"),
+                    (r"inspeccion|control de calidad", "inspeccion"), (r"laboratorio", "laboratorio"),
+                    (r"embalaje|preparacion de pedidos|expedicion", "embalaje"), (r"montaje|ensamblaje", "montaje")]:
+        if re.search(rx, t):
+            it.set("USO", val, rx.split("|")[0])
+            break
+    for rx, val in [(r"intensiv|tres turnos|24 ?h", "intensiva"), (r"diari|a diario|cada dia", "diaria"),
+                    (r"ocasional|esporadic", "ocasional")]:
+        if re.search(rx, t):
+            it.set("FRECUENCIA", val, rx)
+            break
+    for rx, val in [(r"exterior|intemperie", "exterior"), (r"humed", "interior_humedo"),
+                    (r"alimentari|alimentos", "alimentario"), (r"sala limpia", "sala_limpia"),
+                    (r"interior|nave|taller", "interior_seco")]:
+        if re.search(rx, t):
+            it.set("ENTORNO", val, rx)
+            break
+    if re.search(r"anclad|anclaje al suelo|atornillada al suelo|fijada al suelo", t) and not re.search(r"sin anclaj|no anclad", t):
+        it.set("ANCLAJE", "al_suelo", "anclaje al suelo")
+    elif re.search(r"sin anclaj|no anclad|apoyada|libre", t):
+        it.set("ANCLAJE", "ninguno", "sin anclaje")
+    if re.search(r"suelo irregular|desnivel", t):
+        it.set("TIPO_SUELO", "irregular", "suelo irregular")
+    elif re.search(r"suelo (nivelado|plano|liso)", t):
+        it.set("TIPO_SUELO", "nivelado", "suelo nivelado")
+    if re.search(r"pies? nivelador", t):
+        it.set("TIPO_APOYO", "pie_nivelador", "pies niveladores")
+    # ------------------------------------------------------------- accesorios no implementados
+    for key, rx, label in UNSUPPORTED_ACCESSORIES:
+        if re.search(rx, t) and not re.search(rf"sin ({rx})", t):
+            mm = re.search(rf"(\d+)\s+(?:{rx})", t)
+            it.unsupported.append(label + (f" ({mm.group(1)} uds)" if mm else ""))
+            it.accessories.append(key)
+    return it
+
+
+LABELS = {"mesa_industrial": "Mesa industrial", "estanteria": "Estantería industrial",
+          "puesto_trabajo": "Puesto de trabajo industrial", "armario": "Armario / mobiliario auxiliar"}
+
+
+def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = None) -> list[Question]:
+    """Preguntas concretas para la familia (sólo mesa industrial implementada)."""
+    asked = asked or set()
+    q: list[Question] = []
+    if family != "mesa_industrial":
+        return q
+    for p, lbl, prop in (("LONGITUD", "longitud", 1800.0), ("ANCHURA", "anchura (fondo)", 800.0),
+                         ("ALTURA", "altura de trabajo", 900.0)):
+        if p not in values:
+            q.append(Question(p, f"¿Qué {lbl} necesita (mm)?", "Dimensión principal necesaria para generar la geometría.",
+                              blocking="generacion", proposal=prop))
+    if values.get("CARGA_TOTAL") is None:
+        q.append(Question("CARGA_TOTAL", "¿Qué carga debe soportar la encimera (kg) y está distribuida o concentrada?",
+                          "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.",
+                          [{"label": "150 kg", "value": 150}, {"label": "300 kg", "value": 300},
+                           {"label": "500 kg", "value": 500}], "verificacion"))
+    if values.get("NUMERO_BALDAS", 1) >= 1 and values.get("CARGA_BALDA") is None and "CARGA_BALDA" not in asked:
+        q.append(Question("CARGA_BALDA", "¿Qué carga soportará la balda inferior (kg)? ¿La carga indicada para la encimera "
+                                         "incluye la de la balda?",
+                          "La balda se dimensiona y verifica de forma independiente.",
+                          [{"label": "Sin carga", "value": 0}, {"label": "100 kg", "value": 100},
+                           {"label": "200 kg", "value": 200}], "verificacion"))
+    if "MATERIAL_ESTRUCTURAL" not in values and "MATERIAL_ESTRUCTURAL" not in asked:
+        q.append(Question("MATERIAL_ESTRUCTURAL", "¿Material y acabado? Propuesta: acero S235 con pintura en polvo RAL 7035.",
+                          "Determina propiedades mecánicas, espesores comerciales y acabado.",
+                          [{"label": "Acero S235 pintado RAL 7035", "value": "S235JRH"},
+                           {"label": "Acero inoxidable AISI 304", "value": "1.4301"},
+                           {"label": "Aluminio", "value": "EN AW-6082 T6"}], "confirmacion", "S235JRH"))
+    if "USO" not in values and "USO" not in asked:
+        q.append(Question("USO", "¿Qué uso tendrá (montaje, trabajo pesado, inspección, embalaje...)?",
+                          "Fija el espesor mínimo de encimera y la clase de ejecución.",
+                          [{"label": "Montaje", "value": "montaje"}, {"label": "Trabajo pesado", "value": "trabajo_pesado"},
+                           {"label": "Inspección / ligero", "value": "inspeccion"}], "confirmacion", "montaje"))
+    if "CARGA_HORIZONTAL" not in values and "CARGA_HORIZONTAL" not in asked:
+        q.append(Question("CARGA_HORIZONTAL", "¿Habrá esfuerzos horizontales relevantes (empujes, tornillo de banco, "
+                                              "golpes)? ¿Se anclará al suelo?",
+                          "Condiciona la verificación de vuelco y del desplome.",
+                          [{"label": "Empuje ligero (100 N)", "value": 100},
+                           {"label": "Uso general (300 N)", "value": 300},
+                           {"label": "Tornillo de banco (600 N)", "value": 600}], "verificacion", 300.0))
+    if "ENTORNO" not in values and "ENTORNO" not in asked:
+        q.append(Question("ENTORNO", "¿Entorno de uso (interior seco, húmedo, exterior, alimentario)?",
+                          "Afecta al material y al acabado (corrosión).",
+                          [{"label": "Interior seco", "value": "interior_seco"},
+                           {"label": "Interior húmedo", "value": "interior_humedo"},
+                           {"label": "Alimentario", "value": "alimentario"}], "confirmacion", "interior_seco"))
+    return q
+
+
+def proposal_for(family: str, values: dict[str, Any]) -> dict[str, Any]:
+    """Configuración constructiva preliminar (propuesta IA) para completar lo no indicado."""
+    if family != "mesa_industrial":
+        return {}
+    p: dict[str, Any] = {}
+    for k, v in (("LONGITUD", 1800.0), ("ANCHURA", 800.0), ("ALTURA", 900.0)):
+        if k not in values:
+            p[k] = v
+    p.setdefault("NUMERO_BALDAS", values.get("NUMERO_BALDAS", 1))
+    have_load = values.get("CARGA_TOTAL") is not None
+    for k in ("PERFIL_PATA", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR", "ESPESOR_CHAPA"):
+        if k not in values:
+            p[k] = "auto" if have_load else None
+    if values.get("CARGA_BALDA"):
+        p.setdefault("ESPESOR_BALDA", "auto")
+    return {k: v for k, v in p.items() if v is not None}
+
+
+def describe(it: Interpretation) -> list[str]:
+    v = it.values
+    out = [f"Familia: {LABELS.get(it.family, 'no identificada')}."]
+    lab = {"LONGITUD": "Longitud", "ANCHURA": "Anchura/fondo", "PROFUNDIDAD": "Profundidad", "ALTURA": "Altura"}
+    for k, l in lab.items():
+        if k in v:
+            out.append(f"{l}: {v[k]:,.0f} mm.".replace(",", "."))
+    if "NUMERO_NIVELES" in v:
+        out.append(f"Niveles: {v['NUMERO_NIVELES']}.")
+    if "CARGA_POR_NIVEL" in v:
+        out.append(f"Carga por nivel: {v['CARGA_POR_NIVEL']:g} kg.")
+        if "NUMERO_NIVELES" in v:
+            out.append(f"Carga total nominal solicitada: {v['CARGA_POR_NIVEL'] * v['NUMERO_NIVELES']:g} kg.")
+    if "CARGA_TOTAL" in v:
+        out.append(f"Carga distribuida sobre encimera: {v['CARGA_TOTAL']:g} kg.")
+    if "CARGA_BALDA" in v:
+        out.append(f"Carga sobre balda: {v['CARGA_BALDA']:g} kg.")
+    if "CARGA_PUNTUAL" in v:
+        out.append(f"Carga puntual: {v['CARGA_PUNTUAL']:g} kg.")
+    out.append("Material: " + (v["MATERIAL_ESTRUCTURAL"] if "MATERIAL_ESTRUCTURAL" in v else "pendiente de selección") + ".")
+    if it.family == "mesa_industrial":
+        out.append("Balda inferior: " + ("sí" if v.get("NUMERO_BALDAS", None) == 1 else
+                                         "no" if v.get("NUMERO_BALDAS") == 0 else "no indicada") + ".")
+        out.append("Tipo de estructura: tubular soldada" + (" (indicada)." if "estructura tubular" in it.accessories
+                                                           else " (propuesta)."))
+    return out
+
+
+def to_dict(it: Interpretation) -> dict[str, Any]:
+    return asdict(it)
