@@ -36,6 +36,14 @@ def optimize_bars(pieces: list[dict[str, Any]], bar_length: float = 6000.0, kerf
             bars.append(best)
         best["cuts"].append({"ref": it["ref"], "label": it.get("label", ""), "length": it["length"]})
         best["free"] -= need
+    lb0 = math.ceil(sum(p["length"] + kerf for p in items) / (bar_length - trim)) if items else 0
+    if len(bars) > lb0 and len(items) <= 60:
+        for k in range(lb0, len(bars)):
+            exact = _exact_pack(items, bar_length - trim, kerf, k)
+            if exact is not None:
+                bars = [{"cuts": [{"ref": it["ref"], "label": it.get("label", ""), "length": it["length"]} for it in b],
+                         "free": bar_length - trim - sum(it["length"] + kerf for it in b)} for b in exact]
+                break
     total_pieces = sum(p["length"] for p in items)
     out = []
     for n, b in enumerate(bars, start=1):
@@ -52,6 +60,38 @@ def optimize_bars(pieces: list[dict[str, Any]], bar_length: float = 6000.0, kerf
             "reusable_remnants": [b["remnant"] for b in out if b["remnant_reusable"]],
             "scrap": round(sum(b["remnant"] for b in out if not b["remnant_reusable"]) +
                            sum(b["kerf_loss"] for b in out), 1)}
+
+
+def _exact_pack(items, cap, kerf, k, node_limit=200000):
+    """Búsqueda exacta (ramificación y poda) de un reparto en k barras; None si no existe o se agota el límite."""
+    need = [it["length"] + kerf for it in items]
+    order = sorted(range(len(items)), key=lambda i: -need[i])
+    free = [cap] * k
+    assign: list[list[int]] = [[] for _ in range(k)]
+    nodes = [0]
+
+    def rec(n):
+        if n == len(order):
+            return True
+        nodes[0] += 1
+        if nodes[0] > node_limit:
+            return False
+        i = order[n]
+        tried = set()
+        for b in range(k):
+            if free[b] + 1e-9 >= need[i] and free[b] not in tried:
+                tried.add(free[b])
+                free[b] -= need[i]
+                assign[b].append(i)
+                if rec(n + 1):
+                    return True
+                assign[b].pop()
+                free[b] += need[i]
+        return False
+
+    if rec(0):
+        return [[items[i] for i in b] for b in assign if b]
+    return None
 
 
 # ============================================================================ 2D
