@@ -5,9 +5,9 @@ geométrica, mecánica y constructivamente: modelo B-rep real, cálculo, planos,
 BOM, optimización de corte y expediente de fabricación, todo derivado de una única fuente de
 parámetros.
 
-> **Estado:** núcleo funcional con la familia **mesa industrial** completa y el caso de aceptación
-> §23 superado por pruebas automáticas. Las demás familias y varios accesorios están previstos
-> en la arquitectura pero **no implementados** (detalle más abajo).
+> **Estado:** núcleo funcional con dos familias completas, **mesa industrial** y **estantería
+> industrial**, y el caso de aceptación §23 superado por pruebas automáticas. Puestos de trabajo,
+> armarios y varios accesorios están previstos en la arquitectura pero **no implementados**.
 
 ## Puesta en marcha
 
@@ -46,8 +46,8 @@ python -m pytest -q
 | 4. Documentación | ✔ | 12 hojas de planos (conjunto, estructura, perfiles, chapa, desarrollos, pletinas, soldaduras con detalles, explosionado, montaje, despiece), STEP de conjunto y de cada pieza, STL, BREP, GLB, DXF, Excel con fórmulas, informe PDF |
 | 5. Fabricación | ✔ | Desarrollos con BA = π/2·(Ri+K·t), DFM (láser, plegadora, perfiles, soldadura, montaje), corte de barras hasta la cota inferior, anidado de chapa |
 | 6. Asistente IA | ✔ | Interpretación en español con evidencia, preguntas de datos faltantes, propuesta preliminar diferenciada de lo verificado |
-| 7. Nuevas familias | ✘ pendiente | Puestos de trabajo, estanterías, armarios, carros: sólo se identifican en el asistente |
-| 8. Validación | ✔ | 26 pruebas: unidades frente a soluciones analíticas y tablas, modelo, QA, API y aceptación §23 |
+| 7. Nuevas familias | ◐ parcial | **Estantería industrial** implementada (N niveles, montantes, bastidores y bandejas, anclaje). Puestos de trabajo, armarios y carros: sólo se identifican en el asistente |
+| 8. Validación | ✔ | 33 pruebas: unidades frente a soluciones analíticas y tablas, mesa, estantería, QA, API y aceptación §23 |
 
 ### Verificaciones de la cadena (no simuladas)
 
@@ -77,6 +77,21 @@ Sin datos de carga el resultado es **PENDIENTE**: nunca se asigna una capacidad 
 6. La longitud cambia a 2.400 mm. Se regenera con 7 travesaños (cambio topológico, no escalado), largueros +400 mm y la misma longitud de patas.
 7. Se emite la revisión B con su expediente nuevo. La revisión A se conserva intacta.
 8. El paso a «preparado para fabricación» se bloquea hasta la validación de un técnico competente con nombre.
+
+## Estantería industrial
+
+Montantes de tubo cuadrado en las esquinas y, en cada nivel, un bastidor soldado con bandeja de
+chapa plegada con escotaduras alrededor de los montantes, atornillada con tuercas remachables.
+Con la carga por nivel, el cálculo dimensiona montantes, largueros, travesaños, espesor de chapa y
+número de travesaños. Sin anclaje se comprueba el vuelco. Con anclaje al suelo se calcula la
+tracción por anclaje; la capacidad del taco y del soporte queda **pendiente** de verificar.
+
+Ejemplo de la especificación (1.500 × 600 × 2.000 mm, 5 niveles, 150 kg/nivel):
+
+- **Dimensionado:** SHS 40×40×2 y RHS 40×20×2, con bandejas de 2 mm y 3 travesaños por nivel.
+- **Sin anclaje:** no supera el vuelco con el empuje de 300 N.
+- **Con anclaje:** 486 N de tracción por anclaje.
+- **Expediente:** 31 archivos sin errores bloqueantes.
 
 ## Datos que quedan como hipótesis o pendientes
 
