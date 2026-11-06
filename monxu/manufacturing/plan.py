@@ -169,22 +169,35 @@ def dfm_check(model, plan: dict[str, Any] | None = None) -> list[dict[str, Any]]
             for x, y, d in p.holes:
                 if d < p.t:
                     add("error", "LAS-TALADRO-DIAM", p.ref, f"Taladro Ø{d} menor que el espesor {p.t} mm.")
-    # tornillería
-    rn = catalog.component("TUERCA_REMACHABLE_M6")
-    sc = catalog.component("TORNILLO_ISO7380_M6x12")
-    for p in model.parts.values():
-        if isinstance(p, SheetPart):
-            g = model.ctx.derived.get("HOLGURA_ENC" if p.role == "encimera" else "HOLGURA_BAL")
-            if g:
-                g = g.value
-                if sc["length"] < p.spec.t + g + sc["d"]:
-                    add("error", "MON-TORNILLO-CORTO", p.ref, "Longitud de tornillo insuficiente para roscar 1·d.")
-                if sc["length"] > p.spec.t + g + rn["body_l"]:
-                    add("error", "MON-TORNILLO-LARGO", p.ref, "El tornillo sobresale de la tuerca remachable.")
-    for p in model.parts.values():
-        if isinstance(p, ProfilePart) and p.holes and p.profile.t > rn["grip_max"]:
-            add("error", "MON-REMACHABLE-AGARRE", p.ref, f"Pared de {p.profile.t} mm fuera del rango de agarre de la "
-                "tuerca remachable.")
+    # tornillería (por unión atornillada; datos registrados por la familia)
+    seen = set()
+    for j in model.joints:
+        if j.kind != "atornillada" or not j.data:
+            continue
+        dd = j.data
+        tray = model.instance(j.members[0]).part
+        key = (tray.ref, dd["screw"], dd["rivet"], dd["wall"])
+        if key in seen:
+            continue
+        seen.add(key)
+        sc = catalog.component(dd["screw"])
+        rnd = catalog.component(dd["rivet"])
+        clamp = dd["t_sheet"] + dd["gap"]
+        if not dd.get("rivet_found", True):
+            add("error", "MON-REMACHABLE-AGARRE", tray.ref, f"Ninguna tuerca remachable del catálogo admite pared de "
+                f"{dd['wall']:g} mm.", "Usar un perfil de pared ≤ 5,5 mm o fijación con tornillo pasante.")
+        if not dd.get("screw_found", True):
+            add("error", "MON-TORNILLO", tray.ref, f"Ningún tornillo ISO 7380 M6 del catálogo da 1·d de rosca útil con "
+                f"{clamp:g} mm de chapa + holgura sin sobrepasar la tuerca remachable.",
+                "Reducir holgura o espesor, o añadir longitudes de tornillo al catálogo.")
+        hole = max((h[2] for f in tray.spec.flanges for h in f.holes), default=sc["clearance_hole"])
+        if hole > sc["head_d"] - 2.0:
+            add("error", "MON-APOYO-CABEZA", tray.ref, f"Taladro Ø{hole:g} demasiado grande para la cabeza Ø{sc['head_d']:g} "
+                "del tornillo.", "Usar arandela ancha ISO 7093 o tornillo de cabeza mayor.")
+        if rnd["head_h"] > dd["gap"] + 1e-9:
+            add("error", "DFM-HOLGURA-REMACHABLE", tray.ref, "La cabeza de la tuerca remachable no cabe en la holgura.")
+        add("ok", "MON-TORNILLERIA", tray.ref, f"{sc['name']} con {rnd['name'].split(',')[0]} (pared {dd['wall']:g} mm, "
+            f"paquete {clamp:g} mm, rosca útil {sc['length'] - clamp:g} mm).")
     # soldadura
     leg_ids = model.structure.get("leg_ids", [])
     if leg_ids:
@@ -209,4 +222,14 @@ def dfm_check(model, plan: dict[str, Any] | None = None) -> list[dict[str, Any]]
             if not n.get("feasible", False):
                 add("error", "LAS-FORMATO", f"Chapa {n['material']} {n['thickness']} mm", n.get("reason", ""),
                     "Dividir la pieza en dos o seleccionar un formato mayor.")
-    return out
+    grouped: dict[tuple, dict[str, Any]] = {}
+    for f in out:                       # un hallazgo por pieza y código, con número de casos
+        k = (f["level"], f["code"], f["element"])
+        if k in grouped:
+            grouped[k]["count"] += 1
+        else:
+            grouped[k] = {**f, "count": 1}
+    for g in grouped.values():
+        if g["count"] > 1:
+            g["message"] = f"{g['message']} ({g['count']} casos)"
+    return list(grouped.values())

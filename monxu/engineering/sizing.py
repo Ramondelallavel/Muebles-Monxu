@@ -28,7 +28,8 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
     load = ps.values[tgt["load_param"]]
     t_min = crit["min_sheet_thickness_by_use_mm"].get(ps.values.get("USO", "montaje"), 1.5) \
         if tgt.get("min_t_by_use") else 1.0
-    t_opts = [t for t in catalog.sheet_thicknesses(mat.code) if t_min <= t <= 4.0] if auto_t else [ps.values[t_param]]
+    t_max = 6.0                     # chapa de encimera/bandeja razonable para plegar y manipular
+    t_opts = [t for t in catalog.sheet_thicknesses(mat.code) if t_min <= t <= t_max] if auto_t else [ps.values[t_param]]
     min_bay = crit["min_support_spacing_mm"]
     code = f"DIM-{surface.upper()}"
     notes[:] = [n for n in notes if n.get("code") != code]
@@ -38,6 +39,8 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
         trial.values[t_param] = t
         trial.values[n_param] = 0 if auto_n else ps.values[n_param]
         m = family.construct(trial)
+        if any(n["code"].startswith("DFM-FIJ") and n["level"] == "error" for n in m.design_notes):
+            continue          # con este espesor no hay zona válida para las fijaciones: no es fabricable
         surf = next(s for s in m.structure["surfaces"] if s["id"] == surface)
         lvl = m.structure["levels"][surf["level"]]
         gx, (yf, yb) = lvl["grid_x"], lvl["grid_y"]
@@ -59,11 +62,17 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
                 alternatives.append({"t": t, "n": n, "vano": round(a, 1), "masa_kg": round(sheet + cross, 2),
                                      "sigma": round(ru["sigma"], 1), "w": round(rs["w"], 2)})
                 break
-    label = surf["label"].lower() if alternatives or t_opts else surface
+    label = {"encimera": "encimera", "balda": "balda inferior"}.get(surface, f"bandeja ({surface})")
     if not alternatives:
+        fixed = [p for p, a in ((t_param, auto_t), (n_param, auto_n)) if not a]
         notes.append({"level": "error", "code": code,
                       "message": f"No se encuentra combinación de espesor y travesaños que verifique la {label} con "
-                                 f"{load:g} kg. Se requiere refuerzo específico o reducir la carga."})
+                                 f"{load:g} kg" + (f" manteniendo fijo {', '.join(fixed)}" if fixed else "") +
+                                 f" (espesores disponibles en {mat.code}: {', '.join(f'{t:g}' for t in t_opts) or '—'} mm; "
+                                 f"separación mínima de apoyos {min_bay} mm). Ponga esos parámetros en 'auto', reduzca la "
+                                 "carga" + ("" if mat.fy_guaranteed and max(t_opts or [0]) >= t_max else
+                                           ", use un material de chapa con más espesores o límite elástico garantizado "
+                                           "(p. ej. S235JR)") + " o prevea refuerzos específicos."})
         if auto_t:
             ps.values[t_param] = max(t_opts)
             ps.sources[t_param] = "calculo"
@@ -102,8 +111,13 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
             ps.sources[k] = "regla_diseno"
     if not have_load and (prof_autos or any(k in autos for k in defaults)):
         notes.append({"level": "propuesta", "code": "DIM-SIN-CARGA",
-                      "message": "Sin carga de trabajo definida: perfiles, espesores y separación de apoyos según "
-                                 "reglas constructivas por defecto. La resistencia queda PENDIENTE de verificación."})
+                      "message": "Sin carga vertical de trabajo definida: espesores y separación de apoyos según "
+                                 "reglas constructivas; los perfiles sólo se comprueban frente al empuje horizontal. "
+                                 "La resistencia a cargas verticales queda PENDIENTE de verificación."})
+    foot_auto = v.get("PIE_NIVELADOR") == AUTO
+    if foot_auto:
+        v["PIE_NIVELADOR"] = defaults.get("PIE_NIVELADOR", "PIE_NIV_M12_D60")
+        ps.sources["PIE_NIVELADOR"] = "regla_diseno"
     targets = family.plate_targets(v)
     sized = {t["t_param"] for t in targets}
     for k in list(v):     # espesores 'auto' que no se dimensionan por placa: valor constructivo
@@ -121,7 +135,7 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
                 _plate_sizing(family, ps, tgt, notes, at, an)
 
     plates()
-    if prof_autos and have_load:
+    def size_profiles():
         idx = {k: cands[k].index(v[k]) if v[k] in cands[k] else 0 for k in prof_autos}
         for k in prof_autos:
             ps.values[k] = cands[k][idx[k]]
@@ -132,6 +146,10 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
             failing: set[str] = set()
             for c in rep["checks"]:
                 if c["status"] != "NO_CUMPLE":
+                    continue
+                if c["id"].startswith("S."):          # desplome del conjunto: rigidez lateral de patas/montantes
+                    if family.leg_param in prof_autos:
+                        failing.add(family.leg_param)
                     continue
                 role = m.structure["member_roles"].get(c["element"])
                 if role is None and c["category"] == "soldadura":
@@ -167,7 +185,46 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
                                  "verifica resistencia, pandeo, flechas y soldaduras): " +
                                  ", ".join(f"{k} = {ps.values[k]}" for k in prof_autos), "iterations": iterations})
         plates()      # re-verifica el reparto de travesaños con los perfiles finales
+
+    run_profiles = bool(prof_autos and (have_load or v.get("CARGA_HORIZONTAL")))   # el empuje también dimensiona patas
+    if run_profiles:
+        size_profiles()
     for k in list(ps.values):
         if ps.values[k] == AUTO and k in defaults:
             ps.values[k] = defaults[k]
+    if foot_auto and have_load:
+        for _ in range(3):                   # el pie cambia la longitud de pata: iterar hasta converger
+            before = ps.values["PIE_NIVELADOR"]
+            _select_feet(family, ps, notes)
+            if ps.values["PIE_NIVELADOR"] == before or not run_profiles:
+                break
+            notes[:] = [n for n in notes if n.get("code") not in ("DIM-PERFILES", "DIM-PIES")]
+            size_profiles()
     return ps, notes
+
+
+def _select_feet(family, ps: ParameterSet, notes: list) -> None:
+    """Pie nivelador de menor capacidad nominal que soporta la reacción vertical de servicio (ELS-1)."""
+    m = family.construct(ps)
+    rep = analyze(m, include_stability=False, include_welds=False)
+    rz = [r["Rz_N"] for r in rep["reactions"] if r["combination"] == "ELS-1"]
+    if not rz:
+        return
+    need = max(rz) / G_ACC
+    feet = sorted((c for c in catalog.components().items() if c[1]["category"] == "patas"),
+                  key=lambda kv: kv[1]["rated_load_kg"])
+    leg = catalog.profile(ps.values[family.leg_param])
+    for code, c in feet:
+        nut = catalog.component(f"TUERCA_SOLDAR_{c['thread']}")
+        fits = nut["s"] / 0.8660254 <= leg.B - 2 * leg.t - 1
+        if c["rated_load_kg"] >= need and fits:
+            ps.values["PIE_NIVELADOR"] = code
+            ps.sources["PIE_NIVELADOR"] = "calculo"
+            notes.append({"level": "propuesta", "code": "DIM-PIES",
+                          "message": f"Pie nivelador seleccionado por cálculo: {c['name']} (capacidad nominal de catálogo "
+                                     f"{c['rated_load_kg']} kg ≥ reacción de servicio {need:.0f} kg por apoyo). Capacidad "
+                                     "a confirmar con la ficha del proveedor."})
+            return
+    notes.append({"level": "advertencia", "code": "DIM-PIES",
+                  "message": f"Ningún pie nivelador del catálogo admite {need:.0f} kg por apoyo con la pata/montante "
+                             f"{leg.code}: se mantiene {ps.values['PIE_NIVELADOR']} y la comprobación no se cumplirá."})

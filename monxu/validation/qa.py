@@ -117,7 +117,7 @@ def model_checks(model, interf: dict, eng: dict, dfm: list, bom: dict) -> QA:
           f"Todas las barras estructurales ({len(members)}) están unidas; {len(model.joints)} uniones definidas.")
     # peso
     inst_mass = sum(i.part.mass for i in model.instances)
-    q.add(OK if abs(inst_mass - bom["totals"]["total_mass"]) < 0.01 else BLOCK, "BOM-PESO",
+    q.add(OK if abs(inst_mass - bom["totals"]["total_mass"]) <= 0.0005 + 1e-6 * inst_mass else BLOCK, "BOM-PESO",
           f"Masa del BOM {bom['totals']['total_mass']:.3f} kg = suma de instancias {inst_mass:.3f} kg.")
     devs = []
     for r_ in bom["rows"]:
@@ -140,7 +140,9 @@ def model_checks(model, interf: dict, eng: dict, dfm: list, bom: dict) -> QA:
         if isinstance(p, SheetPart):
             exp, dev = volume_consistency(p.spec, p.volume)
             q.add(OK if dev < 1e-6 else BLOCK, "CHAPA-DESARROLLO",
-                  f"{p.ref}: desarrollo coherente con el sólido 3D (desviación de volumen {dev:.1e}).")
+                  f"{p.ref}: desarrollo coherente con el sólido 3D (desviación de volumen {dev:.1e})." if dev < 1e-6
+                  else f"{p.ref}: el desarrollo NO coincide con el sólido 3D (desviación de volumen {dev:.1e}); "
+                       "suele deberse a taladros dentro de la zona de pliegue.")
     # verificación estructural
     st = eng["status"]
     if st == "NO_CUMPLE":

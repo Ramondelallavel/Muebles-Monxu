@@ -234,6 +234,7 @@ class Joint:
     description: str = ""
     weld: dict[str, Any] | None = None
     fasteners: tuple[str, ...] = ()
+    data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

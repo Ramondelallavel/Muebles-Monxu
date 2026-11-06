@@ -1,7 +1,7 @@
 {
   "_meta": {
     "version": "2026.11-1",
-    "note": "Componentes normalizados y comerciales. Las capacidades de carga de componentes comerciales (pies, ruedas) son datos de catálogo de referencia genéricos y DEBEN confirmarse con la ficha técnica del proveedor seleccionado; el informe de cálculo las marca como tales."
+    "note": "Componentes normalizados y comerciales. Las capacidades de carga de componentes comerciales (pies, ruedas) son datos de catálogo de referencia genéricos y DEBEN confirmarse con la ficha técnica del proveedor seleccionado; el informe de cálculo las marca como tales. Masas de tornillería: valores típicos de catálogo (orientativos)."
   },
   "components": {
     "PIE_NIV_M10_D50": {
@@ -76,6 +76,107 @@
       "rated_load_source": "catalogo_generico",
       "mass_kg": 1.6
     },
+    "TAPON_SHS40": {
+      "category": "accesorios",
+      "name": "Tapón de cierre PE para tubo 40x40x1,5-3",
+      "standard": "Comercial",
+      "fits": "SHS 40x40",
+      "mass_kg": 0.004
+    },
+    "TORNILLO_ISO7380_M6x10": {
+      "category": "tornilleria",
+      "name": "Tornillo cabeza abombada hexágono interior M6x10 8.8 zincado",
+      "standard": "ISO 7380-1",
+      "thread": "M6",
+      "d": 6,
+      "length": 10,
+      "head_d": 10.5,
+      "head_h": 3.3,
+      "clearance_hole": 6.6,
+      "mass_kg": 0.0038,
+      "series": "ISO7380_M6"
+    },
+    "TORNILLO_ISO7380_M6x12": {
+      "category": "tornilleria",
+      "name": "Tornillo cabeza abombada hexágono interior M6x12 8.8 zincado",
+      "standard": "ISO 7380-1",
+      "thread": "M6",
+      "d": 6,
+      "length": 12,
+      "head_d": 10.5,
+      "head_h": 3.3,
+      "clearance_hole": 6.6,
+      "mass_kg": 0.0043,
+      "series": "ISO7380_M6"
+    },
+    "TORNILLO_ISO7380_M6x16": {
+      "category": "tornilleria",
+      "name": "Tornillo cabeza abombada hexágono interior M6x16 8.8 zincado",
+      "standard": "ISO 7380-1",
+      "thread": "M6",
+      "d": 6,
+      "length": 16,
+      "head_d": 10.5,
+      "head_h": 3.3,
+      "clearance_hole": 6.6,
+      "mass_kg": 0.0051,
+      "series": "ISO7380_M6"
+    },
+    "TORNILLO_ISO7380_M6x20": {
+      "category": "tornilleria",
+      "name": "Tornillo cabeza abombada hexágono interior M6x20 8.8 zincado",
+      "standard": "ISO 7380-1",
+      "thread": "M6",
+      "d": 6,
+      "length": 20,
+      "head_d": 10.5,
+      "head_h": 3.3,
+      "clearance_hole": 6.6,
+      "mass_kg": 0.006,
+      "series": "ISO7380_M6"
+    },
+    "TORNILLO_ISO7380_M8x16": {
+      "category": "tornilleria",
+      "name": "Tornillo cabeza abombada hexágono interior M8x16 8.8 zincado",
+      "standard": "ISO 7380-1",
+      "thread": "M8",
+      "d": 8,
+      "length": 16,
+      "head_d": 14.0,
+      "head_h": 4.4,
+      "clearance_hole": 9.0,
+      "mass_kg": 0.009
+    },
+    "TUERCA_REMACHABLE_M6": {
+      "category": "tornilleria",
+      "name": "Tuerca remachable M6 cabeza plana, cuerpo Ø9",
+      "standard": "Comercial (tipo DIN 7340)",
+      "thread": "M6",
+      "body_d": 9,
+      "body_l": 12,
+      "head_d": 13,
+      "head_h": 1.5,
+      "hole_d": 9.1,
+      "grip_max": 3.0,
+      "mass_kg": 0.003,
+      "grip_min": 0.5,
+      "series": "REMACHABLE_M6"
+    },
+    "TUERCA_REMACHABLE_M6_G55": {
+      "category": "tornilleria",
+      "name": "Tuerca remachable M6 cabeza plana, cuerpo Ø9, agarre 3–5,5 mm",
+      "standard": "Comercial (tipo DIN 7340)",
+      "thread": "M6",
+      "body_d": 9,
+      "body_l": 15,
+      "head_d": 13,
+      "head_h": 1.5,
+      "hole_d": 9.1,
+      "grip_min": 3.0,
+      "grip_max": 5.5,
+      "series": "REMACHABLE_M6",
+      "mass_kg": 0.004
+    },
     "TUERCA_SOLDAR_M10": {
       "category": "tornilleria",
       "name": "Tuerca hexagonal para soldar M10",
@@ -102,50 +203,6 @@
       "s": 24,
       "m": 13,
       "mass_kg": 0.034
-    },
-    "TUERCA_REMACHABLE_M6": {
-      "category": "tornilleria",
-      "name": "Tuerca remachable M6 cabeza plana, cuerpo Ø9",
-      "standard": "Comercial (tipo DIN 7340)",
-      "thread": "M6",
-      "body_d": 9,
-      "body_l": 12,
-      "head_d": 13,
-      "head_h": 1.5,
-      "hole_d": 9.1,
-      "grip_max": 3.0,
-      "mass_kg": 0.003
-    },
-    "TORNILLO_ISO7380_M6x12": {
-      "category": "tornilleria",
-      "name": "Tornillo cabeza abombada hexágono interior M6x12 8.8 zincado",
-      "standard": "ISO 7380-1",
-      "thread": "M6",
-      "d": 6,
-      "length": 12,
-      "head_d": 10.5,
-      "head_h": 3.3,
-      "clearance_hole": 6.6,
-      "mass_kg": 0.004
-    },
-    "TORNILLO_ISO7380_M8x16": {
-      "category": "tornilleria",
-      "name": "Tornillo cabeza abombada hexágono interior M8x16 8.8 zincado",
-      "standard": "ISO 7380-1",
-      "thread": "M8",
-      "d": 8,
-      "length": 16,
-      "head_d": 14.0,
-      "head_h": 4.4,
-      "clearance_hole": 9.0,
-      "mass_kg": 0.009
-    },
-    "TAPON_SHS40": {
-      "category": "accesorios",
-      "name": "Tapón de cierre PE para tubo 40x40x1,5-3",
-      "standard": "Comercial",
-      "fits": "SHS 40x40",
-      "mass_kg": 0.004
     }
   },
   "consumables": {

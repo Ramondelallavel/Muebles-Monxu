@@ -24,9 +24,9 @@ from .. import catalog
 from ..cad import geometry as G
 from ..cad.sheetmetal import EDGES, FlangeSpec, SheetMetalSpec, bend_deduction
 from ..core.model import Joint, PlatePart, ProductModel, ProfilePart, SheetPart, StandardPart
-from ..core.params import AUTO, ParamContext, ParameterSet, ParamSpec
+from ..core.params import AUTO, ParamContext, ParameterSet, ParamError, ParamSpec
 from .base import register
-from .mesa_industrial import ALLP, FEET, SHEET_MATERIALS, SHS, STRUCT_MATERIALS, MesaIndustrial
+from .mesa_industrial import ALLP, FEET, SHEET_MATERIALS, SHS, STRUCT_MATERIALS, MesaIndustrial, flange_hole_d
 
 CANDIDATES = {
     "PERFIL_MONTANTE": ["SHS 40x40x2", "SHS 40x40x3", "SHS 50x50x2", "SHS 50x50x3", "SHS 60x60x3", "SHS 70x70x3",
@@ -36,7 +36,7 @@ CANDIDATES = {
     "PERFIL_TRAVESANO": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2"],
 }
 CONSTRUCTIVE_DEFAULTS = {"PERFIL_MONTANTE": "SHS 40x40x2", "PERFIL_LARGUERO": "RHS 40x20x2",
-                         "PERFIL_TRAVESANO": "RHS 40x20x2", "ESPESOR_BALDA": 1.5}
+                         "PERFIL_TRAVESANO": "RHS 40x20x2", "ESPESOR_BALDA": 1.5, "PIE_NIVELADOR": "PIE_NIV_M12_D60"}
 
 
 @register
@@ -119,7 +119,8 @@ class Estanteria(MesaIndustrial):
             P("CLASE_EJECUCION", "Clase de ejecución (EN 1090-2)", "choice", "EXC1", None, "construccion",
               choices=["EXC1", "EXC2"], advanced=True),
             P("TIPO_APOYO", "Tipo de apoyo", "choice", "pie_nivelador", None, "accesorios", choices=["pie_nivelador"]),
-            P("PIE_NIVELADOR", "Pie nivelador", "choice", "PIE_NIV_M12_D60", None, "accesorios", choices=FEET),
+            P("PIE_NIVELADOR", "Pie nivelador", "choice", AUTO, None, "accesorios", choices=FEET, allow_auto=True,
+              help="'auto': el de menor capacidad nominal que soporta la reacción de servicio calculada."),
             P("CARGA_POR_NIVEL", "Carga distribuida por nivel", "float", None, "kg", "cargas", 0, 2000, nullable=True),
             P("CARGA_HORIZONTAL", "Empuje horizontal en la parte superior", "float", 300.0, "N", "cargas", 0, 5000),
             P("ANCLAJE", "Anclaje", "choice", "ninguno", None, "cargas", choices=["ninguno", "al_suelo"]),
@@ -285,7 +286,8 @@ class Estanteria(MesaIndustrial):
                 zs.append(ctx.derive(f"COTA_NIVEL_{i + 1}", lambda p, i=i: p["ALTURA_PRIMER_NIVEL"] +
                                      i * p["DISTANCIA_NIVELES"], "mm", f"Cota cara superior del nivel {i + 1}"))
             if zs[-1] > H + 1e-6 * H:
-                raise ValueError(f"Los {n} niveles a {dist:g} mm superan la altura total de {H:g} mm")
+                raise ParamError(f"Los {n} niveles a {dist:g} mm superan la altura total de {H:g} mm: reduzca "
+                                 f"DISTANCIA_BALDAS a {(H - z1) / max(n - 1, 1):.0f} mm o menos, o use 'auto'.")
             if z1 - ts - rail.H < z_leg0 + 20:
                 model.note("error", "GEO-NIVEL-BAJO", "El primer nivel está demasiado bajo para su bastidor.")
             libre = dist - ts - max(rail.H, trv.H)
@@ -310,13 +312,15 @@ class Estanteria(MesaIndustrial):
             fix = {}
             for lid, z in zip(level_ids, zs):
                 f = self._fix_layout(model, ctx, A, Pf, 0.0, a, ts, rs + ts, ala, rail, trv, z_ref=z, inset=e,
-                                     hole_d=sc["clearance_hole"], rn=rn, pitch=ctx["PASO_FIJACIONES"], short_min=1,
+                                     hole_d=flange_hole_d(v["MATERIAL_CHAPA"], ts, sc), rn=rn,
+                                     pitch=ctx["PASO_FIJACIONES"], short_min=1,
                                      tag=f"bandeja {lid}", notch=notch, offset=0.0)
                 f["gap"] = g
                 fix[lid] = f
             d["fix"] = fix
             f0 = fix[level_ids[0]]
-            flanges = tuple(FlangeSpec(ed, ala, "down", tuple((s, f0["h"][ed], sc["clearance_hole"]) for s in f0["s"][ed]))
+            hd = flange_hole_d(v["MATERIAL_CHAPA"], ts, sc)
+            flanges = tuple(FlangeSpec(ed, ala, "down", tuple((s, f0["h"][ed], hd) for s in f0["s"][ed]))
                             for ed in EDGES)
             d["spec"] = SheetMetalSpec(A, Pf, ts, rs, Ks, flanges, notch=(notch, notch))
         return d

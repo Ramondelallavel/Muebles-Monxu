@@ -45,7 +45,7 @@ CANDIDATES = {
 }
 CONSTRUCTIVE_DEFAULTS = {"PERFIL_PATA": "SHS 40x40x2", "PERFIL_LARGUERO": "RHS 60x40x2",
                          "PERFIL_TRAVESANO": "RHS 40x20x2", "PERFIL_BASTIDOR": "RHS 40x20x2",
-                         "ESPESOR_CHAPA": 2.0, "ESPESOR_BALDA": 1.5}
+                         "ESPESOR_CHAPA": 2.0, "ESPESOR_BALDA": 1.5, "PIE_NIVELADOR": "PIE_NIV_M12_D60"}
 
 
 def frame_z(origin, zdir) -> np.ndarray:
@@ -55,6 +55,13 @@ def frame_z(origin, zdir) -> np.ndarray:
     x = x - z * np.dot(x, z)
     x /= np.linalg.norm(x)
     return G.frame(origin, x, np.cross(z, x))
+
+
+def flange_hole_d(mat_code: str, t: float, screw: dict) -> float:
+    """Diámetro de taladro de pestaña: holgura del tornillo, pero nunca menor que el mínimo del láser."""
+    fam = catalog.material(mat_code).family
+    dmin = catalog.sheet_data()["laser"]["min_hole_diameter_factor"].get(fam, 1.0) * t
+    return round(max(screw["clearance_hole"], math.ceil(dmin * 10) / 10), 1)
 
 
 def rounded_perimeter(B: float, H: float, r: float) -> float:
@@ -160,7 +167,8 @@ class MesaIndustrial(ProductFamily):
               choices=["atornillada"]),
             P("TIPO_APOYO", "Tipo de apoyo", "choice", "pie_nivelador", None, "accesorios",
               choices=["pie_nivelador"]),
-            P("PIE_NIVELADOR", "Pie nivelador", "choice", "PIE_NIV_M12_D60", None, "accesorios", choices=FEET),
+            P("PIE_NIVELADOR", "Pie nivelador", "choice", AUTO, None, "accesorios", choices=FEET, allow_auto=True,
+              help="'auto': el de menor capacidad nominal que soporta la reacción de servicio calculada."),
             P("NUMERO_BALDAS", "Balda inferior", "int", 1, "ud", "accesorios", 0, 1),
             P("ALTURA_BALDA", "Altura de la balda (cara superior)", "float", 200.0, "mm", "accesorios", 100, 600),
             P("TOLERANCIAS", "Tolerancias generales", "choice", "ISO 2768-mK", None, "construccion",
@@ -413,11 +421,12 @@ class MesaIndustrial(ProductFamily):
             ala = ctx["ALA_ENCIMERA"]
             pitch = ctx["PASO_FIJACIONES"]
             fix_top = self._fix_layout(model, ctx, L, W, c, a, t, r + t, ala, rail, trv, z_ref=H, inset=0.0,
-                                       hole_d=sc["clearance_hole"], rn=rn, pitch=pitch, short_min=2, tag="encimera")
+                                       hole_d=flange_hole_d(v["MATERIAL_CHAPA"], t, sc), rn=rn, pitch=pitch,
+                                       short_min=2, tag="encimera")
             fix_top["gap"] = g
             flanges = []
             for e in EDGES:
-                holes = tuple((s, fix_top["h"][e], sc["clearance_hole"]) for s in fix_top["s"][e])
+                holes = tuple((s, fix_top["h"][e], flange_hole_d(v["MATERIAL_CHAPA"], t, sc)) for s in fix_top["s"][e])
                 flanges.append(FlangeSpec(e, ala, "down", holes))
             d["top_spec"] = SheetMetalSpec(L, W, t, r, K, tuple(flanges))
             d["fix_top"] = fix_top
@@ -447,12 +456,12 @@ class MesaIndustrial(ProductFamily):
                     model.note("error", "GEO-BALDA-BAJA", "La balda está demasiado baja para el bastidor inferior.")
                 ala_b = ctx["ALA_BALDA"]
                 fix_sh = self._fix_layout(model, ctx, L - 2 * c, W - 2 * c, 0.0, a, ts, rs + ts, ala_b, bas, bas,
-                                          z_ref=z_s, inset=e_sh, hole_d=sc["clearance_hole"], rn=rn, pitch=pitch * 1.5,
+                                          z_ref=z_s, inset=e_sh, hole_d=flange_hole_d(v["MATERIAL_CHAPA"], ts, sc), rn=rn, pitch=pitch * 1.5,
                                           short_min=1, tag="balda", notch=notch, offset=c)
                 fix_sh["gap"] = g_s
                 flanges = []
                 for e in EDGES:
-                    holes = tuple((s, fix_sh["h"][e], sc["clearance_hole"]) for s in fix_sh["s"][e])
+                    holes = tuple((s, fix_sh["h"][e], flange_hole_d(v["MATERIAL_CHAPA"], ts, sc)) for s in fix_sh["s"][e])
                     flanges.append(FlangeSpec(e, ala_b, "down", holes))
                 d["shelf_spec"] = SheetMetalSpec(L - 2 * c, W - 2 * c, ts, rs, Ks, tuple(flanges), notch=(notch, notch))
                 d.update(z_shelf=z_s, z_lf=z_lf, e_shelf=e_sh, n_shelf=n_sh, xb=(xb0, xb1), fix_shelf=fix_sh)
@@ -488,13 +497,20 @@ class MesaIndustrial(ProductFamily):
             rail_hi = depth0 + prof.H - prof.r_out - rn["hole_d"] / 2
             lo, hi = max(fl_lo, rail_lo), min(fl_hi, rail_hi)
             if lo > hi:
-                model.note("error", f"DFM-FIJ-{tag.upper()}-{e}", f"No hay zona válida para el taladro de fijación "
-                           f"de {tag} en el borde {e}: pestaña de {ala} mm y perfil {prof.code}.")
+                ala_min = max(fl_lo, rail_lo) + max(t, 3.0) + hole_d / 2
+                fix = (f"Aumentar la pestaña a {ala_min:.0f} mm como mínimo" if rail_hi >= fl_lo else
+                       f"El perfil {prof.code} es demasiado bajo para el taladro: usar un perfil de mayor canto")
+                code = f"DFM-FIJ-{tag.split()[0].upper()}"
+                if not any(n["code"] == code for n in model.design_notes):
+                    model.note("error", code, f"No hay zona válida para el taladro de fijación de {tag.split()[0]}: "
+                               f"pestaña de {ala:g} mm, chapa de {t:g} mm (Ri+t = {R:g} mm) y perfil {prof.code}. "
+                               f"{fix}.", min_flange=round(ala_min, 1))
                 h[e] = round((rail_lo + rail_hi) / 2, 1)
             else:
                 h[e] = round((lo + hi) / 2, 1)
+        wall = {e: (prof_long if e in ("y0", "y1") else prof_end).t for e in EDGES}
         return {"s": s, "h": h, "z_ref": z_ref, "t": t, "inset": inset, "offset": offset, "Lx": Lx, "Ly": Ly,
-                "c": c}
+                "c": c, "wall": wall}
 
     # ------------------------------------------------------------------ bastidores
     def _frame_level(self, model, d, ctx, level, z_top, prof_long, prof_end, inset, n_int, legs, fixings, weld,
@@ -564,12 +580,24 @@ class MesaIndustrial(ProductFamily):
             "z": z_top}
 
     def _fasteners(self, model, fix, group, rn, sc, ctx, prefix=None, tray_id=None):
-        """Tuercas remachables en el bastidor y tornillos a través de las pestañas."""
-        rn_part = StandardPart("tuerca_remachable", "TUERCA_REMACHABLE_M6")
-        sc_part = StandardPart("tornillo", "TORNILLO_ISO7380_M6x12")
+        """Tuercas remachables en el bastidor y tornillos a través de las pestañas.
+
+        La tuerca se elige por el espesor de pared del perfil (rango de agarre) y el tornillo por el paquete
+        apretado (pestaña + holgura) con al menos 1·d de rosca útil sin sobrepasar la tuerca."""
         t, off, Lx, Ly = fix["t"], fix["offset"], fix["Lx"], fix["Ly"]
+        gap = fix["gap"]
         n = 0
         for e in EDGES:
+            wall = fix.get("wall", {}).get(e, 2.0)
+            sel_rn = catalog.select_rivet_nut(wall)
+            if sel_rn is None:
+                code_rn, rnd = "TUERCA_REMACHABLE_M6", catalog.component("TUERCA_REMACHABLE_M6")
+            else:
+                code_rn, rnd = sel_rn
+            sel_sc = catalog.select_screw(t + gap, t + gap + rnd["body_l"])
+            code_sc = sel_sc[0] if sel_sc else "TORNILLO_ISO7380_M6x12"
+            rn_part = StandardPart("tuerca_remachable", code_rn)
+            sc_part = StandardPart("tornillo", code_sc)
             for s in fix["s"][e]:
                 n += 1
                 z = fix["z_ref"] - fix["h"][e]
@@ -577,9 +605,7 @@ class MesaIndustrial(ProductFamily):
                                  "x0": ((off, off + s, z), (-1, 0, 0)), "x1": ((off + Lx, off + s, z), (1, 0, 0))}[e]
                 nrm = np.array(nrm, float)
                 pf = np.array(p_flange, float)
-                # cara exterior del perfil = cara interior de la pestaña + holgura
-                gap = fix["gap"]
-                pr = pf - nrm * (t + gap)
+                pr = pf - nrm * (t + gap)       # cara exterior del perfil = cara interior de la pestaña + holgura
                 pre = prefix or group
                 sid = f"{pre}.TORN.{n:02d}"
                 rid = f"{pre}.TREM.{n:02d}"
@@ -588,7 +614,10 @@ class MesaIndustrial(ProductFamily):
                 model.add(sid, f"Tornillo {n}", sc_part, frame_z(pf, nrm), group,
                           tags={"explode_extra": tuple(nrm * 80)})
                 model.add_joint(Joint(f"J.{sid}", "atornillada", (tray_id or f"{group}.BANDEJA", rid), tuple(pf),
-                                      f"Tornillo {sc['thread']} en tuerca remachable", fasteners=(sid, rid)))
+                                      f"Tornillo {sc_part.data['thread']} en tuerca remachable", fasteners=(sid, rid),
+                                      data={"t_sheet": t, "gap": gap, "wall": wall, "screw": code_sc,
+                                            "rivet": code_rn, "rivet_found": sel_rn is not None,
+                                            "screw_found": sel_sc is not None}))
 
     # ------------------------------------------------------------------ modelo estructural
     def _structure(self, model, d, legs):

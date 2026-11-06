@@ -284,6 +284,28 @@ def register_component(code: str, data: dict[str, Any]) -> None:
     _USER_COMPONENTS[code] = dict(data)
 
 
+def series(name: str) -> list[tuple[str, dict[str, Any]]]:
+    return sorted(((k, v) for k, v in components().items() if v.get("series") == name),
+                  key=lambda kv: (kv[1].get("length", 0), kv[1].get("grip_max", 0)))
+
+
+def select_rivet_nut(wall_t: float, series_name: str = "REMACHABLE_M6") -> tuple[str, dict[str, Any]] | None:
+    """Tuerca remachable cuyo rango de agarre cubre el espesor de pared del perfil."""
+    for code, c in series(series_name):
+        if c.get("grip_min", 0) - 1e-9 <= wall_t <= c["grip_max"] + 1e-9:
+            return code, c
+    return None
+
+
+def select_screw(clamp: float, max_reach: float, series_name: str = "ISO7380_M6") -> tuple[str, dict[str, Any]] | None:
+    """Tornillo más corto con al menos 1·d de rosca útil tras el paquete apretado (``clamp``) y que no
+    sobrepasa ``max_reach`` (fondo de la tuerca remachable)."""
+    for code, c in series(series_name):
+        if c["length"] >= clamp + c["d"] - 1e-9 and c["length"] <= max_reach + 1e-9:
+            return code, c
+    return None
+
+
 def consumables() -> dict[str, dict[str, Any]]:
     return _load("components")["consumables"]
 

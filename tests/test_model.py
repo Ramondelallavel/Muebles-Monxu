@@ -66,7 +66,8 @@ def test_sizing_without_loads_is_pending():
                                        "CARGA_HORIZONTAL": 100})
     assert d.eng["status"] == "PENDIENTE"
     assert any("CARGA_TOTAL" in p or "encimera" in p for p in d.eng["pending"])
-    assert d.model.params.sources["PERFIL_PATA"] == "regla_diseno"
+    assert d.model.params.sources["PERFIL_PATA"] == "calculo"      # dimensionada frente al empuje horizontal
+    assert any(n["code"] == "DIM-SIN-CARGA" for n in d.model.design_notes)
 
 
 def test_sizing_with_heavy_load_increases_sections():

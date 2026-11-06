@@ -245,7 +245,7 @@ async def post_design(code: str, viewer: bool = True):
     p = store().get(code)
     try:
         d, v = await in_cad(design_for, p.family, p.working_params, p.working_sources, viewer)
-    except ParamError as e:
+    except ValueError as e:          # incluye ParamError: datos incompatibles con las reglas constructivas
         raise HTTPException(422, str(e))
     except Exception as e:
         traceback.print_exc()

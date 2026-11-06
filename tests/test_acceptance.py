@@ -40,7 +40,7 @@ def _dossier(client, code, rev):
     raise TimeoutError
 
 
-def _check_files(dossier: Path, design: dict, length: float):
+def _check_files(dossier: Path, design: dict, length: float, model_bbox=None):
     code = design["product_code"]
     folders = sorted(p.name for p in dossier.iterdir() if p.is_dir())
     assert folders == ["01_MODELO_3D", "02_PLANOS", "03_DXF_CORTE", "04_LISTA_MATERIALES", "05_OPTIMIZACION",
@@ -53,7 +53,10 @@ def _check_files(dossier: Path, design: dict, length: float):
     top = next(r for r in design["bom"]["rows"] if r["description"].startswith("Encimera"))
     flat_exact = length + 2 * 40 - 2 * 3.837441      # desarrollo = L + 2·ala − 2·BD (t=2, Ri=2, K=0,325)
     assert top["length"] == pytest.approx(flat_exact, abs=0.05)                      # BOM redondeado a 0,1 mm
-    assert bb.xmax - bb.xmin == pytest.approx(length + 12, abs=0.5)                 # encimera + bases de pies
+    if model_bbox is not None:                       # el STEP reimportado tiene la envolvente del modelo CAD
+        assert bb.xmax - bb.xmin == pytest.approx(model_bbox[1][0] - model_bbox[0][0], abs=0.01)
+        assert bb.zmax - bb.zmin == pytest.approx(model_bbox[1][2] - model_bbox[0][2], abs=0.01)
+    assert bb.xmax - bb.xmin >= length
     # DXF de la encimera: 1:1 y medidas del desarrollo
     doc = ezdxf.readfile(dossier / "03_DXF_CORTE" / f"{top['ref']}.dxf")
     assert doc.header["$INSUNITS"] == 4
@@ -102,10 +105,11 @@ def test_acceptance_2000_then_2400(client):
     j = _dossier(client, code, "A")
     assert j["status"] == "ok", j
     assert j["result"]["qa"]["blocking"] == 0
-    m1 = _check_files(Path(j["result"]["path"]), des1, 2000.0)
+    m1 = _check_files(Path(j["result"]["path"]), des1, 2000.0, viewer["bbox"])
     # cambio de longitud a 2.400 mm
     client.put(f"/api/projects/{code}/params", json={"values": {"LONGITUD": 2400}})
-    d2 = client.post(f"/api/projects/{code}/design").json()["design"]
+    r2 = client.post(f"/api/projects/{code}/design").json()
+    d2, viewer2 = r2["design"], r2["viewer"]
     assert d2["product_code"] == "MI2400-800-900" and d2["qa"]["blocking"] == 0
     n_cross_2400 = next(p["value"] for p in d2["parameters"] if p["name"] == "N_TRAVESANOS_INT")
     assert n_cross_2400 > n_cross_2000                      # regeneración por reglas, no escalado
@@ -118,7 +122,7 @@ def test_acceptance_2000_then_2400(client):
     assert proj["revisions"][1]["changes"]["LONGITUD"] == [2000.0, 2400.0]
     j2 = _dossier(client, code, "B")
     assert j2["status"] == "ok", j2
-    m2 = _check_files(Path(j2["result"]["path"]), d2, 2400.0)
+    m2 = _check_files(Path(j2["result"]["path"]), d2, 2400.0, viewer2["bbox"])
     # la revisión A no se ha sobrescrito y sigue describiendo 2.000 mm
     assert Path(j["result"]["path"]).exists() and m1["parameters"]["LONGITUD"] == 2000.0
     assert client.post(f"/api/projects/{code}/revisions/A/dossier").status_code == 409

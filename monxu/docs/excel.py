@@ -65,7 +65,7 @@ def export_excel(path: Path, info: dict[str, Any], bom: dict[str, Any], plan: di
         rows.append([r["pos"], r["ref"], r["description"], r["material"], r["thickness"], r["length"], r["width"],
                      r["qty"], r["unit_mass"], f"=H{k}*I{k}", r["kind_label"], r["process"], r["finish"]])
     _, last = _table(ws, r0, headers, rows, "BOM", [9, 22, 52, 22, 11, 11, 11, 10, 15, 15, 20, 48, 40],
-                     {9: "0.000", 10: "0.000", 5: "0.0", 6: "0.0", 7: "0.0"})
+                     {9: "0.0000", 10: "0.0000", 5: "0.0", 6: "0.0", 7: "0.0"})
     tr = last + 2
     ws.cell(tr, 7, "TOTALES").font = Font(bold=True)
     ws.cell(tr, 8, f"=SUBTOTAL(109,H{r0 + 1}:H{last})").font = Font(bold=True)
@@ -171,6 +171,8 @@ def verify_excel(path: Path, bom: dict[str, Any]) -> dict[str, Any]:
         qty += q
         total_mass += q * um
         r += 1
-    return {"rows": r - hdr_row - 1, "qty": qty, "total_mass": round(total_mass, 3), "formulas": formulas_ok,
-            "sheets": wb.sheetnames, "matches_bom": abs(total_mass - bom["totals"]["total_mass"]) < 0.01 and
-            qty == bom["totals"]["components"]}
+    expected = sum(rw["unit_mass"] * rw["qty"] for rw in bom["rows"])      # lo que calcula Excel con sus fórmulas
+    tol_round = 0.00005 * bom["totals"]["components"] + 0.0005             # redondeo de masas unitarias a 0,1 g
+    return {"rows": r - hdr_row - 1, "qty": qty, "total_mass": round(total_mass, 4), "formulas": formulas_ok,
+            "sheets": wb.sheetnames, "matches_bom": abs(total_mass - expected) < 1e-6 and
+            abs(total_mass - bom["totals"]["total_mass"]) <= tol_round and qty == bom["totals"]["components"]}

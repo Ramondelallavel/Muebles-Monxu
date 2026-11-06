@@ -16,13 +16,13 @@ def build_bom(model, plan: dict[str, Any]) -> dict[str, Any]:
     for p in sorted(model.parts.values(), key=lambda p: p.pos):
         dims = p.bom_dims()
         qty = counts[p.key]
-        um = round(p.mass, 3)
+        um = round(p.mass, 4)
         rows.append({
             "pos": p.pos, "ref": p.ref, "description": p.name, "kind": p.kind, "kind_label": KIND_LABEL[p.kind],
             "material": p.material or (p.data.get("standard") if isinstance(p, StandardPart) else ""),
             "finish": catalog.finish(p.finish)["name"] if p.finish else "",
             "thickness": dims.get("espesor"), "length": dims.get("largo"), "width": dims.get("ancho"),
-            "section": dims.get("seccion"), "qty": qty, "unit_mass": um, "total_mass": round(um * qty, 3),
+            "section": dims.get("seccion"), "qty": qty, "unit_mass": um, "total_mass": round(um * qty, 4), "mass_exact": p.mass * qty,
             "process": " + ".join(plan["routing"].get(p.ref, [])),
             "nominal_mass": round(p.nominal_mass, 3) if isinstance(p, ProfilePart) else (
                 round(p.flat.net_area() * p.spec.t * 1e-9 * p.density, 3) if isinstance(p, SheetPart) else None),
@@ -50,7 +50,7 @@ def build_bom(model, plan: dict[str, Any]) -> dict[str, Any]:
         "distinct_parts": len(rows),
         "manufactured_parts": sum(r["qty"] for r in rows if r["kind"] != "normalizado"),
         "standard_parts": sum(r["qty"] for r in rows if r["kind"] == "normalizado"),
-        "total_mass": round(sum(r["total_mass"] for r in rows), 3),
+        "total_mass": round(sum(r["mass_exact"] for r in rows), 3),
         "profile_meters": {k: round(v, 3) for k, v in sorted(prof_m.items())},
         "sheet_area_m2": {k: round(v, 4) for k, v in sorted(sheet_m2.items())},
         "standard_units": dict(sorted(std_units.items())),
