@@ -73,10 +73,18 @@ export function makeSpec({ Lx, Ly, t, r, K, flanges = [], notch = [0, 0], holes 
   const baseRects = () => {
     const [bx0, bx1, by0, by1] = base;
     if (!(nx > 0 && ny > 0) || !notchCorners.length) return [[bx0, by0, bx1, by1]];
-    const out = [[notched("x0y0") ? Math.max(bx0, nx) : bx0, by0, notched("x1y0") ? Math.min(bx1, Lx - nx) : bx1, Math.min(by1, ny)],
-      [bx0, Math.max(by0, ny), bx1, Math.min(by1, Ly - ny)],
-      [notched("x0y1") ? Math.max(bx0, nx) : bx0, Math.max(by0, Ly - ny), notched("x1y1") ? Math.min(bx1, Lx - nx) : bx1, by1]];
-    return out.filter((q) => q[2] > q[0] + 1e-9 && q[3] > q[1] + 1e-9);
+    // franjas entre los cortes en Y (válido también si las escotaduras superan la mitad del fondo)
+    const ys = [...new Set([by0, by1, ny, Ly - ny].filter((v) => v >= by0 && v <= by1))].sort((a, b) => a - b);
+    const out = [];
+    for (let i = 0; i < ys.length - 1; i++) {
+      const y0 = ys[i], y1 = ys[i + 1], ym = (y0 + y1) / 2;
+      if (y1 - y0 < 1e-9) continue;
+      const bot = ym < ny, top = ym > Ly - ny;
+      const xl = (bot && notched("x0y0")) || (top && notched("x0y1")) ? Math.max(bx0, nx) : bx0;
+      const xr = (bot && notched("x1y0")) || (top && notched("x1y1")) ? Math.min(bx1, Lx - nx) : bx1;
+      if (xr > xl + 1e-9) out.push([xl, y0, xr, y1]);
+    }
+    return out;
   };
   const spec = {
     Lx, Ly, t, r, K, flanges, notch, notchCorners, notched, holes, R, BA, BD, flatBoundsBase: base, flangeExtent: extent, baseRects,

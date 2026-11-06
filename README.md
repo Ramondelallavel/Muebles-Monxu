@@ -5,9 +5,10 @@ geométrica, mecánica y constructivamente: modelo B-rep real, cálculo, planos,
 BOM, optimización de corte y expediente de fabricación, todo derivado de una única fuente de
 parámetros.
 
-> **Estado:** núcleo funcional con dos familias completas, **mesa industrial** y **estantería
-> industrial**, y el caso de aceptación §23 superado por pruebas automáticas. Puestos de trabajo,
-> armarios y varios accesorios están previstos en la arquitectura pero **no implementados**.
+> **Estado:** núcleo funcional con cuatro familias completas (**mesa industrial**, **estantería
+> industrial**, **puesto de trabajo** y **carro de taller**) y el caso de aceptación §23 superado por
+> pruebas automáticas. Los armarios (puertas, cajones) están previstos en la arquitectura pero
+> **no implementados**.
 
 ## Puesta en marcha
 
@@ -46,8 +47,8 @@ python -m pytest -q
 | 4. Documentación | ✔ | 12 hojas de planos (conjunto, estructura, perfiles, chapa, desarrollos, pletinas, soldaduras con detalles, explosionado, montaje, despiece), STEP de conjunto y de cada pieza, STL, BREP, GLB, DXF, Excel con fórmulas, informe PDF |
 | 5. Fabricación | ✔ | Desarrollos con BA = π/2·(Ri+K·t), DFM (láser, plegadora, perfiles, soldadura, montaje), corte de barras hasta la cota inferior, anidado de chapa |
 | 6. Asistente IA | ✔ | Interpretación en español con evidencia, preguntas de datos faltantes, propuesta preliminar diferenciada de lo verificado |
-| 7. Nuevas familias | ◐ parcial | **Estantería industrial** implementada (N niveles, montantes, bastidores y bandejas, anclaje). Puestos de trabajo, armarios y carros: sólo se identifican en el asistente |
-| 8. Validación | ✔ | 33 pruebas: unidades frente a soluciones analíticas y tablas, mesa, estantería, QA, API y aceptación §23 |
+| 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) y **carro de taller** (ruedas de espiga con freno, asa). Armarios: sólo se identifican en el asistente |
+| 8. Validación | ✔ | 64 pruebas: unidades frente a soluciones analíticas y tablas, las cuatro familias, QA, API, aceptación §23, validación cruzada navegador ↔ servidor, expediente del navegador y legibilidad de planos |
 
 ### Verificaciones de la cadena (no simuladas)
 
@@ -93,10 +94,59 @@ Ejemplo de la especificación (1.500 × 600 × 2.000 mm, 5 niveles, 150 kg/nivel
 - **Con anclaje:** 486 N de tracción por anclaje.
 - **Expediente:** 31 archivos sin errores bloqueantes.
 
+## Puesto de trabajo y carro de taller
+
+Ambas familias derivan de la mesa (encimera y balda de chapa plegada sobre bastidores soldados) y
+comparten su cálculo, dimensionado, DFM y documentación.
+
+- **Puesto de trabajo** (`PT`): las patas traseras se prolongan como montantes hasta la altura de la
+  superestructura y se unen arriba con un travesaño soldado. La encimera lleva escotaduras sólo en
+  las esquinas traseras. Opcionalmente:
+  - un estante superior en voladizo (bandeja plegada sobre larguero trasero, brazos y larguero
+    delantero soldados a los montantes), dimensionado con su carga como placa;
+  - un panel perforado portaherramientas (agujero 10×10 a paso 38) atornillado a los montantes. Su
+    peso entra en el cálculo como masa colgada de los montantes.
+- **Carro de taller** (`CT`): ruedas giratorias de espiga roscada en las tuercas soldadas de las
+  placas base, con freno en el lado del asa. La rueda se elige por cálculo (la de menor capacidad
+  que soporta la reacción de servicio). Las dos patas del lado del asa se prolongan y se unen con el
+  asa soldada. El empuje horizontal es la **fuerza de maniobra** con las ruedas frenadas (100 N por
+  defecto): un carro no se ancla y se comprueba siempre frente al vuelco.
+
+Plantillas: 4 de puesto de trabajo (montaje, inspección, embalaje, taller pesado) y 3 de carro
+(dos niveles, transporte, inoxidable alimentario).
+
+## Planos sin solapes
+
+Cada hoja registra todo lo que se dibuja: textos con su caja real en Helvetica, líneas de las
+vistas (vistas y ocultas), cotas, globos, símbolos de soldadura, tablas y cajetín. La colocación
+usa ese registro:
+
+- **Cotas:** el texto se prueba centrado, desplazado, fuera de las líneas de referencia y en filas
+  escalonadas. Las líneas de cota apiladas se separan solas. Los tramos iguales demasiado cortos se
+  acotan como «n×paso».
+- **Globos:** se colocan en el hueco libre más cercano a la pieza, sin pisar textos, cotas ni otros
+  globos. Después se intercambian los pares cuyas líneas de referencia se cruzan.
+- **Símbolos de soldadura:** misma búsqueda, con flechas a puntos distintos de la unión.
+- **Rótulos y notas:** los rótulos de vista van bajo la vista y sus cotas; las notas, en el primer
+  hueco libre.
+- **Desarrollos perforados:** se acotan como patrón, sin una tabla de cientos de agujeros.
+
+La auditoría (`frontend/src/engine/layout.ts`) busca textos que se pisan, líneas que atraviesan un
+texto, globos que pisan algo, líneas de referencia cruzadas y textos fuera del marco o dentro del
+cajetín. Su resultado entra en el control de calidad del expediente como `PLANO-LEGIBILIDAD`.
+
+- **Plantillas:** las 19 plantillas (las 4 familias) salen con 0 conflictos en planos y montaje,
+  salvo un cruce de líneas de referencia en el explosionado de PT-2000-TALLER.
+- **Configuraciones aleatorias:** en 60 configuraciones (1.032 hojas) quedan 6 conflictos: 5 cruces
+  de referencias y 1 línea que toca un texto. Antes de estos cambios, 40 configuraciones (626 hojas)
+  daban 117 conflictos, entre ellos textos superpuestos.
+- **Servidor:** las mejoras de colocación están en los planos del navegador. Los planos PDF del
+  servidor (`monxu/docs/plans.py`) mantienen su maquetación anterior.
+
 ## Versión artefacto (motor en el navegador)
 
 La misma interfaz funciona sin servidor: el motor completo está portado a TypeScript en
-`frontend/src/engine/` (parámetros y dependencias, familias mesa y estantería, chapa plegada y
+`frontend/src/engine/` (parámetros y dependencias, las cuatro familias, chapa plegada y
 desarrollos, FEM 3D de barras con solver skyline LDLᵀ y renumeración Cuthill-McKee, placas de
 Navier, comprobaciones EN 1993, dimensionado automático, plan de corte, anidado, DFM, BOM, control
 de calidad e intérprete del asistente). `frontend/src/local/` contiene la API local (misma interfaz
@@ -139,23 +189,28 @@ cd frontend && npx esbuild ../tools/webcheck/run.ts --bundle --platform=node --f
 cd .. && python tools/webcheck/compare.py /tmp/webrun.mjs 60 11
 ```
 
-Con las 12 plantillas, la aceptación 2000→2400, los dos diseños por defecto y 60 casos aleatorios
-(76 casos) no hay ninguna diferencia. El aprovechamiento coincide exactamente en todas las
-comprobaciones salvo el vuelco, donde el error relativo es ≤ 1,6·10⁻⁴ por el centro de gravedad
-calculado sobre los sólidos facetados.
+Con las 19 plantillas de las cuatro familias, la aceptación 2000→2400, los dos diseños por defecto y
+14 casos aleatorios de todas las familias (37 casos) no hay ninguna diferencia. El aprovechamiento
+coincide exactamente en todas las comprobaciones salvo el vuelco, donde el error relativo es
+≤ 2,4·10⁻⁴ por el centro de gravedad calculado sobre los sólidos facetados.
 
 `tools/webcheck/verify_dossier.py` relee el ZIP generado por el navegador con las herramientas del servidor:
 
 - **STEP:** reimportación con OpenCascade. Mesa de 2000 mm: 99/99 sólidos válidos y volumen a −0,07 % del B-rep;
-  estantería de 2888 mm: 311/311.
+  estantería de 2888 mm: 311/311. Puesto de trabajo de 1500 mm: 137 ocurrencias, 139/139 sólidos válidos
+  (−0,08 %). Carro de 1200 mm: 81 ocurrencias, 95/95 sólidos válidos (−0,22 %). Cada rueda se compone de varios
+  cuerpos: horquilla, espiga, cabezal, rueda y pedal.
 - **PDF:** pdfplumber (hojas A3 con cajetín).
 - **Excel:** openpyxl (fórmulas, unidades y masa frente al BOM del servidor).
 - **DXF:** ezdxf (0 errores, contornos cerrados y medidas iguales a los desarrollos del servidor).
 - **Manifiesto:** comprobación de las sumas SHA-256.
 
 `tools/webcheck/fuzz.ts` recorre parámetros aleatorios, incluidos los avanzados. En 800 casos (20 expedientes
-completos): 0 excepciones, 0 valores no finitos y 0 sólidos abiertos. Todas las interferencias detectadas acompañan a
-un error de diseño ya señalado por las reglas (por ejemplo, tuerca soldada mayor que el interior de la pata).
+completos): 0 excepciones, 0 valores no finitos y 0 sólidos abiertos. Otros 400 casos de las cuatro familias dieron
+0 excepciones. Los 2 sólidos abiertos que aparecieron (escotadura de bandeja mayor que la mitad de su fondo) ya están
+corregidos. Las 168 configuraciones con interferencias acompañan, todas, a un error de diseño ya señalado por las
+reglas (por ejemplo, tuerca soldada mayor que el interior de la pata). `tools/webcheck/layout_fuzz.ts` hace lo
+mismo con la auditoría de legibilidad de los planos.
 
 La comparación destapó dos fallos del motor de referencia, ya corregidos en ambos motores:
 
@@ -164,11 +219,17 @@ La comparación destapó dos fallos del motor de referencia, ya corregidos en am
   Ahora las cotas se redondean a 0,001 mm en la clave de pieza.
 - **Interacción de pandeo activada por ruido numérico:** en barras con axil nulo, un residuo de
   −10⁻¹¹ N activaba la interacción de pandeo. Ahora se aplica un umbral de 1 mN.
+- **Extremo de barra perdido en el modelo FEM:** los puntos de cada barra se redondean a 0,001 mm
+  y, si el redondeo de la longitud la superaba, se descartaba el extremo final y la barra quedaba
+  suelta (matriz singular). Aparecía con los brazos del estante del puesto de trabajo; ahora la
+  tolerancia es coherente con el redondeo.
 
 ## Datos que quedan como hipótesis o pendientes
 
 - **Empuje horizontal:** 300 N por defecto en el canto de la encimera. Con ese valor, una mesa vacía y ligera no supera el vuelco EQU, y el sistema lo informa así; el asistente pide el dato real.
-- **Capacidad de los pies niveladores:** catálogo genérico, a confirmar con el proveedor.
+- **Capacidad de los pies niveladores y de las ruedas:** catálogo genérico, a confirmar con el proveedor. Las ruedas
+  se modelan con su envolvente simplificada (sin descentrado de giro).
+- **Fuerza de maniobra del carro:** 100 N por defecto, aplicada en el plano de la encimera con las ruedas frenadas.
 - **DC01:** la norma no garantiza fy mínimo, así que se marca como hipótesis.
 - **Gargantas a < 3 mm:** quedan fuera de EN 1993-1-8 §4.5.2 y requieren una WPS cualificada.
 

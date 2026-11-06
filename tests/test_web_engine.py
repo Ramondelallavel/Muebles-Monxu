@@ -36,3 +36,18 @@ def test_expediente_del_navegador_verificado_con_herramientas_del_servidor(tmp_p
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-4000:] + r.stderr[-2000:]
     assert "ERRORES 0" in r.stdout
+
+
+@pytest.mark.skipif(not shutil.which("node") or not ESBUILD.exists(), reason="requiere node y las dependencias del frontend")
+def test_planos_sin_solapes_en_una_plantilla_por_familia(tmp_path):
+    """Auditoría de legibilidad: ningún texto pisa otro texto, una línea, una cota, un globo ni el cajetín."""
+    from monxu.families import REGISTRY
+    bundle = tmp_path / "layout.mjs"
+    subprocess.run([str(ESBUILD), str(ROOT / "tools/webcheck/layout.ts"), "--bundle", "--platform=node", "--format=esm",
+                    f"--outfile={bundle}", "--log-level=warning"], cwd=ROOT / "frontend", check=True)
+    cases = [{"id": f.templates()[0]["id"], "family": fid, "values": f.templates()[0]["values"]} for fid, f in REGISTRY.items()]
+    out = subprocess.run(["node", str(bundle), "-"], input=json.dumps(cases), capture_output=True, text=True, check=True)
+    res = json.loads(out.stdout)
+    assert len(res) == len(cases)
+    for r in res:
+        assert r["planos"]["total"] == 0 and r["montaje"]["total"] == 0, (r["id"], r["planos"]["sheets"], r["montaje"]["sheets"])

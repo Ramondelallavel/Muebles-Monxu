@@ -50,11 +50,11 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
       }
     }
   }
-  const label = { encimera: "encimera", balda: "balda inferior", estante: "estante superior" }[surface] ?? `bandeja (${surface})`;
+  const label = { encimera: "la encimera", balda: "la balda inferior", estante: "el estante superior" }[surface] ?? `la bandeja (${surface})`;
   if (!alternatives.length) {
     const fixed = [[t_param, autoT], [n_param, autoN]].filter(([, a]) => !a).map(([p]) => p);
     const maxT = tOpts.length ? Math.max(...tOpts) : 0;
-    notes.push({ level: "error", code, message: `No se encuentra combinación de espesor y travesaños que verifique la ${label} con ${g(load)} kg`
+    notes.push({ level: "error", code, message: `No se encuentra combinación de espesor y travesaños que verifique ${label} con ${g(load)} kg`
       + (fixed.length ? ` manteniendo fijo ${fixed.join(", ")}` : "")
       + ` (espesores disponibles en ${mat.code}: ${tOpts.map(g).join(", ") || "—"} mm; separación mínima de apoyos ${minBay} mm). Ponga esos parámetros en 'auto', `
       + "reduzca la carga" + (mat.fy_guaranteed && maxT >= tMax ? "" : ", use un material de chapa con más espesores o límite elástico garantizado (p. ej. S235JR)")
@@ -67,7 +67,7 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
   if (autoT) { ps.values[t_param] = best.t; ps.sources[t_param] = "calculo"; }
   if (autoN) { ps.values[n_param] = best.n; ps.sources[n_param] = "calculo"; }
   const altTxt = sorted.slice(0, 4).map((a) => `t=${g(a.t)} mm con ${a.n} travesaños (vano ${pyRound(a.vano, 0).toFixed(0)} mm, ${a.masa_kg} kg)`).join("; ");
-  notes.push({ level: "propuesta", code, message: `Propuesta para la ${label}: chapa de ${g(best.t)} mm y ${best.n} travesaños intermedios `
+  notes.push({ level: "propuesta", code, message: `Propuesta para ${label}: chapa de ${g(best.t)} mm y ${best.n} travesaños intermedios `
     + `(vano ${pyRound(best.vano, 0).toFixed(0)} mm), mínima masa entre las alternativas que verifican (espesor mínimo ${g(tMin)} mm, separación mínima de apoyos `
     + `${minBay} mm): ${altTxt}.`, alternatives });
 }

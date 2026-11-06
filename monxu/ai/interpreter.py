@@ -17,11 +17,15 @@ NUM = r"(\d{1,3}(?:[.\s]\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)"
 UNIT = r"(?:(mm|milimetros?|cm|centimetros?|m|metros?)\b)"
 
 FAMILY_KEYWORDS = [
-    ("mesa_industrial", r"\bmesas?\b|banco de (trabajo|montaje)|\bbancos?\b"),
+    ("puesto_trabajo", r"puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion|embalaje)"),
+    ("carro_taller", r"\bcarros?\b|\bcarritos?\b|carro de (taller|transporte)"),
     ("estanteria", r"estanteri"),
-    ("puesto_trabajo", r"puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion)"),
-    ("armario", r"\barmario|\bcarro\b|carros industriales"),
+    ("mesa_industrial", r"\bmesas?\b|banco de (trabajo|montaje)|\bbancos?\b"),
+    ("armario", r"\barmario"),
 ]
+#: accesorios que sí implementa una familia (no se marcan como no soportados) y parámetro que activan
+SUPPORTED_BY = {("puesto_trabajo", "panel_trasero"): ("PANEL_HERRAMIENTAS", 1), ("carro_taller", "ruedas"): None}
+MESA_LIKE = ("mesa_industrial", "puesto_trabajo", "carro_taller")
 
 UNSUPPORTED_ACCESSORIES = [
     ("cajones", r"cajon|cajonera", "Cajones / cajonera"),
@@ -233,7 +237,19 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
     if re.search(r"pies? nivelador", t):
         it.set("TIPO_APOYO", "pie_nivelador", "pies niveladores")
     # ------------------------------------------------------------- accesorios no implementados
+    if it.family == "puesto_trabajo":
+        if re.search(r"sin (estante|altillo)", t):
+            it.set("ESTANTE_SUPERIOR", 0, "sin estante superior")
+        elif re.search(r"estante superior|altillo|balda superior", t):
+            it.set("ESTANTE_SUPERIOR", 1, "estante superior")
+        if re.search(r"sin panel", t):
+            it.set("PANEL_HERRAMIENTAS", 0, "sin panel")
     for key, rx, label in UNSUPPORTED_ACCESSORIES:
+        if (it.family, key) in SUPPORTED_BY:
+            sup = SUPPORTED_BY[(it.family, key)]
+            if sup and re.search(rx, t) and not re.search(rf"sin ({rx})", t):
+                it.set(sup[0], sup[1], label.lower())
+            continue
         if re.search(rx, t) and not re.search(rf"sin ({rx})", t):
             mm = re.search(rf"(\d+)\s+(?:{rx})", t)
             it.unsupported.append(label + (f" ({mm.group(1)} uds)" if mm else ""))
@@ -254,7 +270,10 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
 
 
 LABELS = {"mesa_industrial": "Mesa industrial", "estanteria": "Estantería industrial",
-          "puesto_trabajo": "Puesto de trabajo industrial", "armario": "Armario / mobiliario auxiliar"}
+          "puesto_trabajo": "Puesto de trabajo industrial", "carro_taller": "Carro de taller",
+          "armario": "Armario / mobiliario auxiliar"}
+DIM_PROPOSAL = {"mesa_industrial": (1800.0, 800.0, 900.0), "puesto_trabajo": (1500.0, 750.0, 900.0),
+                "carro_taller": (1000.0, 600.0, 900.0)}
 
 
 def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = None) -> list[Question]:
@@ -263,10 +282,11 @@ def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = N
     q: list[Question] = []
     if family == "estanteria":
         return _missing_shelf(values, asked)
-    if family != "mesa_industrial":
+    if family not in MESA_LIKE:
         return q
-    for p, lbl, prop in (("LONGITUD", "longitud", 1800.0), ("ANCHURA", "anchura (fondo)", 800.0),
-                         ("ALTURA", "altura de trabajo", 900.0)):
+    dL, dW, dH = DIM_PROPOSAL[family]
+    for p, lbl, prop in (("LONGITUD", "longitud", dL), ("ANCHURA", "anchura (fondo)", dW),
+                         ("ALTURA", "altura de trabajo", dH)):
         if p not in values:
             q.append(Question(p, f"¿Qué {lbl} necesita (mm)?", "Dimensión principal necesaria para generar la geometría.",
                               blocking="generacion", proposal=prop))
@@ -292,13 +312,26 @@ def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = N
                           "Fija el espesor mínimo de encimera y la clase de ejecución.",
                           [{"label": "Montaje", "value": "montaje"}, {"label": "Trabajo pesado", "value": "trabajo_pesado"},
                            {"label": "Inspección / ligero", "value": "inspeccion"}], "confirmacion", "montaje"))
+    if family == "puesto_trabajo" and values.get("ESTANTE_SUPERIOR", 1) and values.get("CARGA_ESTANTE") is None \
+            and "CARGA_ESTANTE" not in asked:
+        q.append(Question("CARGA_ESTANTE", "¿Qué carga llevará el estante superior (kg)?",
+                          "El estante en voladizo se dimensiona y verifica con su propia carga.",
+                          [{"label": "Sin estante", "value": 0}, {"label": "30 kg", "value": 30},
+                           {"label": "60 kg", "value": 60}], "verificacion"))
     if "CARGA_HORIZONTAL" not in values and "CARGA_HORIZONTAL" not in asked:
-        q.append(Question("CARGA_HORIZONTAL", "¿Habrá esfuerzos horizontales relevantes (empujes, tornillo de banco, "
-                                              "golpes)? ¿Se anclará al suelo?",
-                          "Condiciona la verificación de vuelco y del desplome.",
-                          [{"label": "Empuje ligero (100 N)", "value": 100},
-                           {"label": "Uso general (300 N)", "value": 300},
-                           {"label": "Tornillo de banco (600 N)", "value": 600}], "verificacion", 300.0))
+        if family == "carro_taller":
+            q.append(Question("CARGA_HORIZONTAL", "¿Qué fuerza de maniobra tendrá el carro (empuje con las ruedas frenadas "
+                                                  "o contra un obstáculo)?",
+                              "Es la acción que puede volcar el carro; un carro no se ancla.",
+                              [{"label": "Ligera (50 N)", "value": 50}, {"label": "Normal (100 N)", "value": 100},
+                               {"label": "Alta (150 N)", "value": 150}], "verificacion", 100.0))
+        else:
+            q.append(Question("CARGA_HORIZONTAL", "¿Habrá esfuerzos horizontales relevantes (empujes, tornillo de banco, "
+                                                  "golpes)? ¿Se anclará al suelo?",
+                              "Condiciona la verificación de vuelco y del desplome.",
+                              [{"label": "Empuje ligero (100 N)", "value": 100},
+                               {"label": "Uso general (300 N)", "value": 300},
+                               {"label": "Tornillo de banco (600 N)", "value": 600}], "verificacion", 300.0))
     if "ENTORNO" not in values and "ENTORNO" not in asked:
         q.append(Question("ENTORNO", "¿Entorno de uso (interior seco, húmedo, exterior, alimentario)?",
                           "Afecta al material y al acabado (corrosión).",
@@ -351,10 +384,10 @@ def proposal_for(family: str, values: dict[str, Any]) -> dict[str, Any]:
             if k not in values:
                 p[k] = "auto"
         return p
-    if family != "mesa_industrial":
+    if family not in MESA_LIKE:
         return {}
     p: dict[str, Any] = {}
-    for k, v in (("LONGITUD", 1800.0), ("ANCHURA", 800.0), ("ALTURA", 900.0)):
+    for k, v in zip(("LONGITUD", "ANCHURA", "ALTURA"), DIM_PROPOSAL[family]):
         if k not in values:
             p[k] = v
     p.setdefault("NUMERO_BALDAS", values.get("NUMERO_BALDAS", 1))
@@ -364,6 +397,15 @@ def proposal_for(family: str, values: dict[str, Any]) -> dict[str, Any]:
             p[k] = "auto" if have_load else None
     if values.get("CARGA_BALDA"):
         p.setdefault("ESPESOR_BALDA", "auto")
+    if family == "puesto_trabajo":
+        if "PERFIL_ALTILLO" not in values:
+            p["PERFIL_ALTILLO"] = "auto" if have_load else None
+        if values.get("CARGA_ESTANTE"):
+            p.setdefault("ESPESOR_ESTANTE", "auto")
+    if family == "carro_taller":
+        for k in ("PERFIL_ASA", "RUEDA"):
+            if k not in values:
+                p[k] = "auto"
     return {k: v for k, v in p.items() if v is not None}
 
 
@@ -390,11 +432,16 @@ def describe(it: Interpretation) -> list[str]:
     out.append("Material: " + (v["MATERIAL_ESTRUCTURAL"] if "MATERIAL_ESTRUCTURAL" in v else "pendiente de selección") + ".")
     if it.family == "estanteria":
         out.append("Anclaje: " + {"al_suelo": "al suelo", "ninguno": "sin anclaje"}.get(v.get("ANCLAJE"), "pendiente") + ".")
-    if it.family == "mesa_industrial":
+    if it.family in MESA_LIKE:
         out.append("Balda inferior: " + ("sí" if v.get("NUMERO_BALDAS", None) == 1 else
                                          "no" if v.get("NUMERO_BALDAS") == 0 else "no indicada") + ".")
         out.append("Tipo de estructura: tubular soldada" + (" (indicada)." if "estructura tubular" in it.accessories
                                                            else " (propuesta)."))
+    if it.family == "puesto_trabajo":
+        out.append("Estante superior: " + ("no" if v.get("ESTANTE_SUPERIOR") == 0 else "sí") + " · panel portaherramientas: "
+                   + ("no" if v.get("PANEL_HERRAMIENTAS") == 0 else "sí") + ".")
+    if it.family == "carro_taller":
+        out.append("Apoyos: ruedas giratorias de espiga roscada, con freno en el lado del asa.")
     return out
 
 

@@ -62,11 +62,12 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
                 alternatives.append({"t": t, "n": n, "vano": round(a, 1), "masa_kg": round(sheet + cross, 2),
                                      "sigma": round(ru["sigma"], 1), "w": round(rs["w"], 2)})
                 break
-    label = {"encimera": "encimera", "balda": "balda inferior", "estante": "estante superior"}.get(surface, f"bandeja ({surface})")
+    label = {"encimera": "la encimera", "balda": "la balda inferior", "estante": "el estante superior"}.get(
+        surface, f"la bandeja ({surface})")
     if not alternatives:
         fixed = [p for p, a in ((t_param, auto_t), (n_param, auto_n)) if not a]
         notes.append({"level": "error", "code": code,
-                      "message": f"No se encuentra combinación de espesor y travesaños que verifique la {label} con "
+                      "message": f"No se encuentra combinación de espesor y travesaños que verifique {label} con "
                                  f"{load:g} kg" + (f" manteniendo fijo {', '.join(fixed)}" if fixed else "") +
                                  f" (espesores disponibles en {mat.code}: {', '.join(f'{t:g}' for t in t_opts) or '—'} mm; "
                                  f"separación mínima de apoyos {min_bay} mm). Ponga esos parámetros en 'auto', reduzca la "
@@ -87,7 +88,7 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
     alt_txt = "; ".join(f"t={a['t']:g} mm con {a['n']} travesaños (vano {a['vano']:.0f} mm, {a['masa_kg']} kg)"
                         for a in sorted(alternatives, key=lambda a: a["masa_kg"])[:4])
     notes.append({"level": "propuesta", "code": code,
-                  "message": f"Propuesta para la {label}: chapa de {best['t']:g} mm y {best['n']} travesaños "
+                  "message": f"Propuesta para {label}: chapa de {best['t']:g} mm y {best['n']} travesaños "
                              f"intermedios (vano {best['vano']:.0f} mm), mínima masa entre las alternativas que "
                              f"verifican (espesor mínimo {t_min:g} mm, separación mínima de apoyos {min_bay} mm): "
                              f"{alt_txt}.", "alternatives": alternatives})

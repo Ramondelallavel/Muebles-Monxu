@@ -10,11 +10,15 @@ const NUM_WORDS = { un: 1, una: 1, uno: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5,
 const NUM = String.raw`(\d{1,3}(?:[.\s]\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)`;
 const UNIT = String.raw`(?:(mm|milimetros?|cm|centimetros?|m|metros?)\b)`;
 const FAMILY_KEYWORDS = [
-  ["mesa_industrial", /\bmesas?\b|banco de (trabajo|montaje)|\bbancos?\b/],
+  ["puesto_trabajo", /puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion|embalaje)/],
+  ["carro_taller", /\bcarros?\b|\bcarritos?\b|carro de (taller|transporte)/],
   ["estanteria", /estanteri/],
-  ["puesto_trabajo", /puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion)/],
-  ["armario", /\barmario|\bcarro\b|carros industriales/],
+  ["mesa_industrial", /\bmesas?\b|banco de (trabajo|montaje)|\bbancos?\b/],
+  ["armario", /\barmario/],
 ];
+/** Accesorios que sí implementa una familia (no se marcan como no soportados) y parámetro que activan. */
+const SUPPORTED_BY = { "puesto_trabajo|panel_trasero": ["PANEL_HERRAMIENTAS", 1], "carro_taller|ruedas": null };
+export const MESA_LIKE = ["mesa_industrial", "puesto_trabajo", "carro_taller"];
 const UNSUPPORTED = [
   ["cajones", "cajon|cajonera", "Cajones / cajonera"],
   ["panel_trasero", "panel (trasero|perforado)|panel de herramientas|panel posterior", "Panel trasero perforado"],
@@ -26,7 +30,8 @@ const UNSUPPORTED = [
   ["regulable", "regulable en altura|altura regulable", "Regulación de altura"],
 ];
 export const LABELS = { mesa_industrial: "Mesa industrial", estanteria: "Estantería industrial", puesto_trabajo: "Puesto de trabajo industrial",
-  armario: "Armario / mobiliario auxiliar" };
+  carro_taller: "Carro de taller", armario: "Armario / mobiliario auxiliar" };
+const DIM_PROPOSAL = { mesa_industrial: [1800.0, 800.0, 900.0], puesto_trabajo: [1500.0, 750.0, 900.0], carro_taller: [1000.0, 600.0, 900.0] };
 export const STRUCTURAL_KEYS = ["PROFUNDIDAD", "NUMERO_NIVELES", "CARGA_POR_NIVEL", "ALTURA_PRIMER_NIVEL", "DISTANCIA_BALDAS", "PERFIL_MONTANTE",
   "LONGITUD", "ANCHURA", "ALTURA", "CARGA_TOTAL", "CARGA_BALDA", "CARGA_PUNTUAL", "CARGA_HORIZONTAL", "MATERIAL_ESTRUCTURAL", "MATERIAL_CHAPA",
   "ACABADO", "ESPESOR_CHAPA", "NUMERO_BALDAS", "ALTURA_BALDA", "USO", "FRECUENCIA", "ENTORNO", "ANCLAJE", "TIPO_SUELO", "TIPO_APOYO", "PERFIL_PATA"];
@@ -150,7 +155,17 @@ export function parse(text, pending = null) {
   if (/suelo irregular|desnivel/.test(t)) it.set("TIPO_SUELO", "irregular", "suelo irregular");
   else if (/suelo (nivelado|plano|liso)/.test(t)) it.set("TIPO_SUELO", "nivelado", "suelo nivelado");
   if (/pies? nivelador/.test(t)) it.set("TIPO_APOYO", "pie_nivelador", "pies niveladores");
+  if (it.family === "puesto_trabajo") {
+    if (/sin (estante|altillo)/.test(t)) it.set("ESTANTE_SUPERIOR", 0, "sin estante superior");
+    else if (/estante superior|altillo|balda superior/.test(t)) it.set("ESTANTE_SUPERIOR", 1, "estante superior");
+    if (/sin panel/.test(t)) it.set("PANEL_HERRAMIENTAS", 0, "sin panel");
+  }
   for (const [key, rx, label] of UNSUPPORTED) {
+    if (`${it.family}|${key}` in SUPPORTED_BY) {
+      const sup = SUPPORTED_BY[`${it.family}|${key}`];
+      if (sup && R(rx).test(t) && !R(`sin (${rx})`).test(t)) it.set(sup[0], sup[1], label.toLowerCase());
+      continue;
+    }
     if (R(rx).test(t) && !R(`sin (${rx})`).test(t)) {
       const mm = t.match(R(String.raw`(\d+)\s+(?:${rx})`));
       it.unsupported.push(label + (mm ? ` (${mm[1]} uds)` : ""));
@@ -178,8 +193,9 @@ const Q = (param, question, why, options = [], blocking = "verificacion", propos
 export function missingData(family, values, asked = new Set()) {
   const q = [];
   if (family === "estanteria") return missingShelf(values, asked);
-  if (family !== "mesa_industrial") return q;
-  for (const [p, lbl, prop] of [["LONGITUD", "longitud", 1800.0], ["ANCHURA", "anchura (fondo)", 800.0], ["ALTURA", "altura de trabajo", 900.0]])
+  if (!MESA_LIKE.includes(family)) return q;
+  const [dL, dW, dH] = DIM_PROPOSAL[family];
+  for (const [p, lbl, prop] of [["LONGITUD", "longitud", dL], ["ANCHURA", "anchura (fondo)", dW], ["ALTURA", "altura de trabajo", dH]])
     if (!(p in values)) q.push(Q(p, `¿Qué ${lbl} necesita (mm)?`, "Dimensión principal necesaria para generar la geometría.", [], "generacion", prop));
   if (values.CARGA_TOTAL == null) q.push(Q("CARGA_TOTAL", "¿Qué carga debe soportar la encimera (kg) y está distribuida o concentrada?",
     "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.", [{ label: "150 kg", value: 150 }, { label: "300 kg", value: 300 }, { label: "500 kg", value: 500 }]));
@@ -191,9 +207,17 @@ export function missingData(family, values, asked = new Set()) {
       { label: "Aluminio", value: "EN AW-6082 T6" }], "confirmacion", "S235JRH"));
   if (!("USO" in values) && !asked.has("USO")) q.push(Q("USO", "¿Qué uso tendrá (montaje, trabajo pesado, inspección, embalaje...)?", "Fija el espesor mínimo de encimera y la clase de ejecución.",
     [{ label: "Montaje", value: "montaje" }, { label: "Trabajo pesado", value: "trabajo_pesado" }, { label: "Inspección / ligero", value: "inspeccion" }], "confirmacion", "montaje"));
-  if (!("CARGA_HORIZONTAL" in values) && !asked.has("CARGA_HORIZONTAL")) q.push(Q("CARGA_HORIZONTAL", "¿Habrá esfuerzos horizontales relevantes (empujes, tornillo de banco, golpes)? "
+  if (family === "puesto_trabajo" && (values.ESTANTE_SUPERIOR ?? 1) && values.CARGA_ESTANTE == null && !asked.has("CARGA_ESTANTE")) q.push(Q("CARGA_ESTANTE",
+    "¿Qué carga llevará el estante superior (kg)?", "El estante en voladizo se dimensiona y verifica con su propia carga.",
+    [{ label: "Sin estante", value: 0 }, { label: "30 kg", value: 30 }, { label: "60 kg", value: 60 }]));
+  if (!("CARGA_HORIZONTAL" in values) && !asked.has("CARGA_HORIZONTAL")) {
+    if (family === "carro_taller") q.push(Q("CARGA_HORIZONTAL", "¿Qué fuerza de maniobra tendrá el carro (empuje con las ruedas frenadas o contra un obstáculo)?",
+      "Es la acción que puede volcar el carro; un carro no se ancla.", [{ label: "Ligera (50 N)", value: 50 }, { label: "Normal (100 N)", value: 100 },
+        { label: "Alta (150 N)", value: 150 }], "verificacion", 100.0));
+    else q.push(Q("CARGA_HORIZONTAL", "¿Habrá esfuerzos horizontales relevantes (empujes, tornillo de banco, golpes)? "
     + "¿Se anclará al suelo?", "Condiciona la verificación de vuelco y del desplome.", [{ label: "Empuje ligero (100 N)", value: 100 }, { label: "Uso general (300 N)", value: 300 },
       { label: "Tornillo de banco (600 N)", value: 600 }], "verificacion", 300.0));
+  }
   if (!("ENTORNO" in values) && !asked.has("ENTORNO")) q.push(Q("ENTORNO", "¿Entorno de uso (interior seco, húmedo, exterior, alimentario)?", "Afecta al material y al acabado (corrosión).",
     [{ label: "Interior seco", value: "interior_seco" }, { label: "Interior húmedo", value: "interior_humedo" }, { label: "Alimentario", value: "alimentario" }], "confirmacion", "interior_seco"));
   return q;
@@ -224,13 +248,18 @@ export function proposalFor(family, values) {
     for (const k of ["PERFIL_MONTANTE", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ESPESOR_BALDA"]) if (!(k in values)) p[k] = "auto";
     return p;
   }
-  if (family !== "mesa_industrial") return {};
+  if (!MESA_LIKE.includes(family)) return {};
   const p = {};
-  for (const [k, v] of [["LONGITUD", 1800.0], ["ANCHURA", 800.0], ["ALTURA", 900.0]]) if (!(k in values)) p[k] = v;
+  ["LONGITUD", "ANCHURA", "ALTURA"].forEach((k, i) => { if (!(k in values)) p[k] = DIM_PROPOSAL[family][i]; });
   if (!("NUMERO_BALDAS" in p)) p.NUMERO_BALDAS = values.NUMERO_BALDAS ?? 1;
   const haveLoad = values.CARGA_TOTAL != null;
   for (const k of ["PERFIL_PATA", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR", "ESPESOR_CHAPA"]) if (!(k in values)) p[k] = haveLoad ? "auto" : null;
   if (values.CARGA_BALDA && !("ESPESOR_BALDA" in p)) p.ESPESOR_BALDA = "auto";
+  if (family === "puesto_trabajo") {
+    if (!("PERFIL_ALTILLO" in values)) p.PERFIL_ALTILLO = haveLoad ? "auto" : null;
+    if (values.CARGA_ESTANTE && !("ESPESOR_ESTANTE" in p)) p.ESPESOR_ESTANTE = "auto";
+  }
+  if (family === "carro_taller") for (const k of ["PERFIL_ASA", "RUEDA"]) if (!(k in values)) p[k] = "auto";
   return Object.fromEntries(Object.entries(p).filter(([, v]) => v !== null));
 }
 
@@ -250,10 +279,13 @@ export function describe(it) {
   if ("CARGA_PUNTUAL" in v && v.CARGA_PUNTUAL != null) out.push(`Carga puntual: ${g(v.CARGA_PUNTUAL)} kg.`);
   out.push("Material: " + ("MATERIAL_ESTRUCTURAL" in v ? v.MATERIAL_ESTRUCTURAL : "pendiente de selección") + ".");
   if (it.family === "estanteria") out.push("Anclaje: " + ({ al_suelo: "al suelo", ninguno: "sin anclaje" }[v.ANCLAJE] ?? "pendiente") + ".");
-  if (it.family === "mesa_industrial") {
+  if (MESA_LIKE.includes(it.family)) {
     out.push("Balda inferior: " + (v.NUMERO_BALDAS === 1 ? "sí" : v.NUMERO_BALDAS === 0 ? "no" : "no indicada") + ".");
     out.push("Tipo de estructura: tubular soldada" + (it.accessories.includes("estructura tubular") ? " (indicada)." : " (propuesta)."));
   }
+  if (it.family === "puesto_trabajo") out.push("Estante superior: " + (v.ESTANTE_SUPERIOR === 0 ? "no" : "sí") + " · panel portaherramientas: "
+    + (v.PANEL_HERRAMIENTAS === 0 ? "no" : "sí") + ".");
+  if (it.family === "carro_taller") out.push("Apoyos: ruedas giratorias de espiga roscada, con freno en el lado del asa.");
   return out;
 }
 

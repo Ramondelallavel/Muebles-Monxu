@@ -758,9 +758,9 @@ function planFlat(d, X, part, number) {
   d.dimH(P(0, 0)[0], P(w, 0)[0], oy, oy, oy - 14, w, `${part.ref}_DESARROLLO_X`, "desarrollo");
   d.dimV(P(0, 0)[1], P(0, h)[1], ox, ox, ox - 14, h, `${part.ref}_DESARROLLO_Y`, "desarrollo");
   let chain = [0, ...xs.sort((a, b) => a - b), w];
-  d.dimChain(true, chain.map((c) => P(c, 0)[0]), chain.slice(1).map((c, i) => c - chain[i]), oy, oy - 7);
+  if (chain.length > 2) d.dimChain(true, chain.map((c) => P(c, 0)[0]), chain.slice(1).map((c, i) => c - chain[i]), oy, oy - 7);
   chain = [0, ...ys.sort((a, b) => a - b), h];
-  d.dimChain(false, chain.map((c) => P(0, c)[1]), chain.slice(1).map((c, i) => c - chain[i]), ox, ox - 7);
+  if (chain.length > 2) d.dimChain(false, chain.map((c) => P(0, c)[1]), chain.slice(1).map((c, i) => c - chain[i]), ox, ox - 7);
   const spec = part.spec;
   // perforaciones regulares (paneles): se acotan como patrón; en la tabla sólo los taladros sueltos
   const rects = fp.holes.filter((h) => h.kind === "rect");
@@ -769,10 +769,10 @@ function planFlat(d, X, part, number) {
     listed = fp.holes.filter((h) => h.kind !== "rect");
     const xs = [...new Set(rects.map((h) => Math.round(h.x * 1000) / 1000))].sort((a, b) => a - b);
     const ys = [...new Set(rects.map((h) => Math.round(h.y * 1000) / 1000))].sort((a, b) => a - b);
-    grid = `Perforación □${fmt(rects[0].w)}x${fmt(rects[0].h)}: ${xs.length} × ${ys.length} = ${rects.length} agujeros a paso ${fmt(xs[1] - xs[0], 1)} × ${fmt(ys[1] - ys[0], 1)} mm; `
+    grid = `Perforación cuadrada ${fmt(rects[0].w)}x${fmt(rects[0].h)}: ${xs.length} × ${ys.length} = ${rects.length} agujeros a paso ${fmt(xs[1] - xs[0], 1)} × ${fmt(ys[1] - ys[0], 1)} mm; `
       + `primer agujero (centro) en X ${fmt(xs[0], 2)} · Y ${fmt(ys[0], 2)} desde el origen del desarrollo.`;
   }
-  const rows = listed.slice(0, 24).map((ho, n) => [n + 1, Math.round(ho.x * 100) / 100, Math.round(ho.y * 100) / 100, ho.kind === "round" ? `Ø${fmt(ho.d)}` : `□${fmt(ho.w)}x${fmt(ho.h)}`]);
+  const rows = listed.slice(0, 24).map((ho, n) => [n + 1, Math.round(ho.x * 100) / 100, Math.round(ho.y * 100) / 100, ho.kind === "round" ? `Ø${fmt(ho.d)}` : `cuad. ${fmt(ho.w)}x${fmt(ho.h)}`]);
   const cols = [["Nº", 10, "c"], ["X", 22, "r"], ["Y", 22, "r"], ["Forma", 22, "c"]];
   for (let c = 0; c < 2 && rows.length > c * 12; c++) d.table(40 + c * 82, 86, cols, rows.slice(c * 12, c * 12 + 12), 4.4, 6, 2.2);
   const more = listed.length > 24 ? [`Taladros 25 a ${listed.length}: posiciones en el fichero DXF de corte.`] : [];
