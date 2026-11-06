@@ -156,7 +156,7 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
                 role = m.structure["member_roles"].get(c["element"])
                 if role is None and c["category"] == "soldadura":
                     j = next((j for j in m.joints if j.id == c["element"]), None)
-                    role = m.instance(j.weld["fem"]["member"]).part.role if j else None
+                    role = m.instance(j.weld["fem"]["member"]).role if j else None
                 prm = family.param_for_role(role) if role else None
                 if prm in prof_autos:
                     failing.add(prm)

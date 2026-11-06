@@ -74,7 +74,7 @@ export class StructuralModel {
       const elems = [];
       for (let k = 0; k < dedup.length - 1; k++)
         elems.push(this.frame.element(dedup[k][1], dedup[k + 1][1], mat.E, mat.G, sp.A, sp.Iy, sp.Iz, sp.It, i.up, i.id));
-      this.members[i.id] = { instance: i, profile: prof, props: sp, material: mat, length: Lm, p0, p1, x, elements: elems, role: i.part.role };
+      this.members[i.id] = { instance: i, profile: prof, props: sp, material: mat, length: Lm, p0, p1, x, elements: elems, role: i.role };
     }
     const sups = m.structure.supports ?? [];
     if (sups.length) {

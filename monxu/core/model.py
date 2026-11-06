@@ -215,6 +215,12 @@ class Instance:
     up: np.ndarray | None = None
     structural: bool = False
     tags: dict[str, Any] = field(default_factory=dict)
+    # función de la instancia: la de la pieza pedida, aunque se reutilice otra pieza geométricamente idéntica
+    # (p. ej. un asa igual que un travesaño); el dimensionado elige el parámetro de perfil por esta función
+    role: str = ""
+
+    def __post_init__(self):
+        self.role = self.role or self.part.role
 
     @cached_property
     def shape(self) -> cq.Shape:
@@ -272,9 +278,10 @@ class ProductModel:
     def add(self, iid: str, name: str, part: PartDef, T: np.ndarray, group: str, **kw) -> Instance:
         if any(i.id == iid for i in self.instances):
             raise ValueError(f"Identificador de instancia duplicado: {iid}")
+        role = kw.pop("role", None) or part.role
         part = self.part(part)
         feat = self.ctx.current_feature
-        inst = Instance(iid, name, part, T, group, feature=feat.id if feat else "", **kw)
+        inst = Instance(iid, name, part, T, group, feature=feat.id if feat else "", role=role, **kw)
         if feat:
             feat.produces.append(iid)
         self.instances.append(inst)

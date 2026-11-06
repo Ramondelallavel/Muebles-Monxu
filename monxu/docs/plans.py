@@ -132,6 +132,20 @@ def _support_line(m) -> str:
     return f"Altura con pies niveladores en posición nominal (regulación ±{c['adjust'] / 2:g} mm)."
 
 
+EDGE_NAMES = {"y0": "delantero", "y1": "trasero", "x0": "izquierdo", "x1": "derecho"}
+
+
+def bend_direction_text(spec) -> str:
+    """Sentido de los pliegues de una chapa: único o, si se mezclan, los bordes plegados hacia arriba."""
+    ups = [f.edge for f in spec.flanges if f.direction == "up"]
+    if not ups:
+        return "Pliegues a 90° hacia abajo"
+    if len(ups) == len(spec.flanges):
+        return "Pliegues a 90° hacia arriba"
+    names = [EDGE_NAMES[e] for e in ("y0", "y1", "x0", "x1") if e in ups]
+    return f"Pliegues a 90° hacia abajo; borde{'s' if len(names) > 1 else ''} {', '.join(names)} hacia arriba"
+
+
 def plan_general(d: Drawing, X: _Ctx):
     m = X.m
     insts = m.instances
@@ -153,7 +167,8 @@ def plan_general(d: Drawing, X: _Ctx):
     d.dim_h(x0, x1, ztop, ztop, ztop + 9, hi[0] - lo[0], nx)
     _, yfloor = _P(a, "alzado", (0, 0, 0))
     xl = a.ox
-    levels = [(name, X.inst(iid).bbox[1][2]) for name, iid in m.dims.get("levels", [])]
+    # niveles: (nombre, instancia[, cota explícita]); sin cota, la cara superior de la instancia
+    levels = [(lv[0], lv[2] if len(lv) > 2 else X.inst(lv[1]).bbox[1][2]) for lv in m.dims.get("levels", [])]
     if len(levels) <= 1:
         d.dim_v(yfloor, ztop, xl, xl, xl - 9, hi[2], "ALTURA")
         for name, z in levels:
@@ -344,7 +359,12 @@ def plan_sheet_part(d: Drawing, X: _Ctx, part: SheetPart, number: str):
     d.dim_v(ya, yb, pl.ox, pl.ox, pl.ox - 9, hi[1] - lo[1], f"{part.ref}_LY")
     _, z0 = _P(a, "alzado", (0, 0, lo[2]))
     _, z1 = _P(a, "alzado", (0, 0, hi[2]))
-    d.dim_v(z0, z1, a.ox + a.w, a.ox + a.w, a.ox + a.w + 9, hi[2] - lo[2], f"{part.ref}_ALA")
+    if lo[2] < -1e-6 and hi[2] > 1e-6:     # pestañas hacia abajo (derecha) y peto hacia arriba (izquierda)
+        _, zm = _P(a, "alzado", (0, 0, 0))
+        d.dim_v(z0, zm, a.ox + a.w, a.ox + a.w, a.ox + a.w + 9, -lo[2], f"{part.ref}_ALA")
+        d.dim_v(zm, z1, a.ox, a.ox, a.ox - 9, hi[2], f"{part.ref}_PETO")
+    else:
+        d.dim_v(z0, z1, a.ox + a.w, a.ox + a.w, a.ox + a.w + 9, hi[2] - lo[2], f"{part.ref}_ALA")
     if spec.notch[0]:
         nx = spec.notch[0]
         x1, _ = _P(pl, "planta", (nx, lo[1], 0))
@@ -376,7 +396,7 @@ def plan_sheet_part(d: Drawing, X: _Ctx, part: SheetPart, number: str):
         d.text(Q(-spec.R, -spec.R)[0] - 2, Q(-spec.R, -spec.R)[1] - 4, f"Ri {fmt(spec.r)}", 2.6, "r")
         d.text((rect[0] + rect[2]) / 2, rect[1] - 6, f"SECCIÓN A-A (E {scale_label(sc)})", 3.0, "c", bold=True)
         d.notes(rect[0], rect[1] - 12, [f"Espesor t = {fmt(spec.t)} mm · Ri = {fmt(spec.r)} mm · K = {spec.K:.3f}",
-                                        f"Pliegues a 90° hacia abajo · BD = {fmt(spec.BD, 3)} mm"], width=105)
+                                        f"{bend_direction_text(spec)} · BD = {fmt(spec.BD, 3)} mm"], width=105)
     holes = sum(len(f.holes) for f in spec.flanges) + len(spec.holes)
     d.notes(296, 150, [f"Referencia: {part.ref}", f"Material: {catalog.material(part.material).name}",
                        f"Masa (desde sólido): {part.mass:.2f} kg", f"Taladros: {holes} uds — posiciones en "

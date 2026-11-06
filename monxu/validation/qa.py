@@ -193,7 +193,8 @@ def drawing_consistency(model, drawings: dict) -> dict:
     names = env.get("names", ("LONGITUD", "ANCHURA"))
     expected = {names[0]: env.get("dx"), names[1]: env.get("dy"), "ALTURA": env.get("zmax")}
     expected = {k: v for k, v in expected.items() if v is not None}
-    for name, _iid in model.dims.get("levels", []):
+    for lv in model.dims.get("levels", []):
+        name = lv[0]
         if model.dims.get(name) is not None:
             expected[name] = model.dims[name]
     expected.update(model.dims.get("drawing_expected", {}))

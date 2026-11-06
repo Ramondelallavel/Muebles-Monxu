@@ -465,9 +465,7 @@ function balloons(d, v, targets, opts = {}) {
   pts.sort((a, b) => ang(a[1]) - ang(b[1]));
   const ring0 = opts.ring0 ?? 10, step = 2 * r + 1.6;
   const leadOf = (c, t) => { const dx = t[0] - c[0], dy = t[1] - c[1], L = Math.hypot(dx, dy) || 1; return [c[0] + (dx / L) * r, c[1] + (dy / L) * r, t[0], t[1]]; };
-  const placed = [];
-  for (const [l, t] of pts) {
-    let best = null;
+  const candsOf = (t) => {
     const cands = [];
     sides.forEach((side, si) => {
       for (let o = 0; o < 6; o++) {
@@ -487,27 +485,30 @@ function balloons(d, v, targets, opts = {}) {
       const a = (q * Math.PI) / 8 + 0.2;
       cands.push([[t[0] + dist * Math.cos(a), t[1] + dist * Math.sin(a)], 0.3]);
     }
-    {
-      for (const [c, pref] of cands) {
-        {
-          const lead = leadOf(c, t), dist = Math.hypot(t[0] - c[0], t[1] - c[1]);
-          let cost = d.occ.circleCost(c, r, { region }) * 10 + d.occ.leaderCost(lead) * 6;
-          const bb = [c[0] - r, c[1] - r, c[0] + r, c[1] + r];
-          for (const f of d.page.forbid) if (boxesOverlap(bb, f, -1)) cost += 500;
-          for (const [, t2] of pts) if (t2 !== t && Math.hypot(t2[0] - c[0], t2[1] - c[1]) < r + 1.5) cost += 300;   // no tapar puntos señalados
-          for (const q of placed) {
-            if (Math.hypot(q.pos[0] - c[0], q.pos[1] - c[1]) < 2 * r + 1.4) cost += 1000;
-            const ql = leadOf(q.pos, q.t);
-            if (segsCross(lead, ql)) cost += 30;
-            if (segCircleHit(lead, q.pos, r + 0.5) || segCircleHit(ql, c, r + 0.5)) cost += 300;
-          }
-          cost += dist * 0.05 + pref;
-          if (!best || cost < best.cost) best = { cost, c };
-        }
+    return cands;
+  };
+  /** Mejor posición del globo de 't' frente a los globos ya colocados ('others'); crossCost penaliza cruces. */
+  const bestFor = (t, others, crossCost) => {
+    let best = null;
+    for (const [c, pref] of candsOf(t)) {
+      const lead = leadOf(c, t), dist = Math.hypot(t[0] - c[0], t[1] - c[1]);
+      let cost = d.occ.circleCost(c, r, { region }) * 10 + d.occ.leaderCost(lead) * 6;
+      const bb = [c[0] - r, c[1] - r, c[0] + r, c[1] + r];
+      for (const f of d.page.forbid) if (boxesOverlap(bb, f, -1)) cost += 500;
+      for (const [, t2] of pts) if (t2 !== t && Math.hypot(t2[0] - c[0], t2[1] - c[1]) < r + 1.5) cost += 300;   // no tapar puntos señalados
+      for (const q of others) {
+        if (Math.hypot(q.pos[0] - c[0], q.pos[1] - c[1]) < 2 * r + 1.4) cost += 1000;
+        const ql = leadOf(q.pos, q.t);
+        if (segsCross(lead, ql)) cost += crossCost;
+        if (segCircleHit(lead, q.pos, r + 0.5) || segCircleHit(ql, c, r + 0.5)) cost += 300;
       }
+      cost += dist * 0.05 + pref;
+      if (!best || cost < best.cost) best = { cost, c };
     }
-    placed.push({ l, t, pos: best.c });
-  }
+    return best.c;
+  };
+  const placed = [];
+  for (const [l, t] of pts) placed.push({ l, t, pos: bestFor(t, placed, 30) });
   untangle(placed, (q) => leadOf(q.pos, q.t), (a, b) => {
     // el intercambio no debe hacer que una referencia atraviese textos o globos
     const la = leadOf(b.pos, a.t), lb = leadOf(a.pos, b.t);
@@ -515,6 +516,30 @@ function balloons(d, v, targets, opts = {}) {
       && !segCircleHit(la, a.pos, r + 0.5) && !segCircleHit(lb, b.pos, r + 0.5)
       && !placed.some((q) => q !== a && q !== b && (segCircleHit(la, q.pos, r + 0.5) || segCircleHit(lb, q.pos, r + 0.5)));
   });
+  // reparación final: si dos referencias aún se cruzan, se recoloca uno de los dos globos con el cruce prohibido,
+  // sólo si la nueva posición no cruza, no pisa otra referencia ni otro globo
+  const crossesAny = (q, pos, others) => { const lq = leadOf(pos, q.t); return others.some((o) => segsCross(lq, leadOf(o.pos, o.t))); };
+  const clean = (q, pos, others) => {
+    const lq = leadOf(pos, q.t);
+    return others.every((o) => { const lo = leadOf(o.pos, o.t);
+      return !segsCross(lq, lo) && !segCircleHit(lq, o.pos, r + 0.5) && !segCircleHit(lo, pos, r + 0.5)
+        && Math.hypot(o.pos[0] - pos[0], o.pos[1] - pos[1]) >= 2 * r + 1.4; });
+  };
+  for (let it = 0; it < 3; it++) {
+    let changed = false;
+    for (const q of placed) {
+      const others = placed.filter((o) => o !== q);
+      if (!crossesAny(q, q.pos, others)) continue;
+      const lq = leadOf(q.pos, q.t);
+      const partners = others.filter((o) => segsCross(lq, leadOf(o.pos, o.t)));
+      for (const w of [q, ...partners]) {
+        const rest = placed.filter((o) => o !== w);
+        const c = bestFor(w.t, rest, 2000);
+        if (clean(w, c, rest)) { w.pos = c; changed = true; break; }
+      }
+    }
+    if (!changed) break;
+  }
   for (const q of placed) d.balloon(q.pos, q.t, q.l, r);
 }
 // ============================================================================ contexto
@@ -545,6 +570,16 @@ function supportLine(m) {
   return `Altura con pies niveladores en posición nominal (regulación ±${fmt(c.adjust / 2)} mm).`;
 }
 
+const EDGE_NAMES = { y0: "delantero", y1: "trasero", x0: "izquierdo", x1: "derecho" };
+/** Sentido de los pliegues de una chapa: único o, si se mezclan, los bordes plegados hacia arriba. */
+export function bendDirectionText(spec) {
+  const ups = spec.flanges.filter((f) => f.direction === "up").map((f) => f.edge);
+  if (!ups.length) return "Pliegues a 90° hacia abajo";
+  if (ups.length === spec.flanges.length) return "Pliegues a 90° hacia arriba";
+  const names = ["y0", "y1", "x0", "x1"].filter((e) => ups.includes(e)).map((e) => EDGE_NAMES[e]);
+  return `Pliegues a 90° hacia abajo; borde${names.length > 1 ? "s" : ""} ${names.join(", ")} hacia arriba`;
+}
+
 function planGeneral(d, X) {
   const m = X.m, insts = m.instances;
   const projs = Object.fromEntries(["alzado", "perfil", "planta"].map((v) => [v, X.proj("all", insts, v, false)]));
@@ -560,7 +595,8 @@ function planGeneral(d, X) {
   d.dimH(x0, x1, ztop, ztop, ztop + 9, hi[0] - lo[0], nx);
   const [, yfloor] = a.at([0, 0, 0]);
   const xl = a.ox;
-  const levels = (m.dims.levels ?? []).map(([name, iid]) => [name, instanceBBox(X.inst(iid))[1][2]]);
+  // niveles: [nombre, instancia, cota explícita?]; sin cota, la cara superior de la instancia
+  const levels = (m.dims.levels ?? []).map(([name, iid, z]) => [name, z ?? instanceBBox(X.inst(iid))[1][2]]);
   if (levels.length <= 1) {
     d.dimV(yfloor, ztop, xl, xl, xl - 9, hi[2], "ALTURA");
     for (const [name, z] of levels) { const [, ys] = a.at([0, 0, z]); d.dimV(yfloor, ys, xl, xl, xl - 17, z, name); }
@@ -692,7 +728,11 @@ function planSheetPart(d, X, part, number) {
   d.dimH(xa, xb, ya, ya, pl.oy - 9, hi[0] - lo[0], `${part.ref}_LX`);
   d.dimV(ya, yb, pl.ox, pl.ox, pl.ox - 9, hi[1] - lo[1], `${part.ref}_LY`);
   const [, z0] = a.at([0, 0, lo[2]]), [, z1] = a.at([0, 0, hi[2]]);
-  d.dimV(z0, z1, a.ox + a.w, a.ox + a.w, a.ox + a.w + 9, hi[2] - lo[2], `${part.ref}_ALA`);
+  if (lo[2] < -1e-6 && hi[2] > 1e-6) {     // pestañas hacia abajo (derecha) y peto hacia arriba (izquierda), desde la cara superior
+    const [, zm] = a.at([0, 0, 0]);
+    d.dimV(z0, zm, a.ox + a.w, a.ox + a.w, a.ox + a.w + 9, -lo[2], `${part.ref}_ALA`);
+    d.dimV(zm, z1, a.ox, a.ox, a.ox - 9, hi[2], `${part.ref}_PETO`);
+  } else d.dimV(z0, z1, a.ox + a.w, a.ox + a.w, a.ox + a.w + 9, hi[2] - lo[2], `${part.ref}_ALA`);
   if (spec.notch[0]) { const [x1] = pl.at([spec.notch[0], lo[1], 0]); d.dimH(xa, x1, yb, yb, pl.oy + pl.h + 7, spec.notch[0], `${part.ref}_ESCOTADURA`); }
   // sección A-A del ala (geometría exacta del pliegue)
   const f0 = spec.flanges.find((f) => f.edge === "y0") ?? spec.flanges[0];
@@ -717,7 +757,7 @@ function planSheetPart(d, X, part, number) {
     for (let k = 0; k < 10; k++) tc.push([(rect[0] + rect[2]) / 2, rect[1] - 6 - k * 2, "c"]);
     const tb = d.group("label", () => d.placeText(`SECCIÓN A-A (E ${scaleLabel(sc)})`, 3.0, tc, { bold: true }));
     const y0n = (tb ? tb.box[1] : rect[1] - 8) - 5;
-    const sl = [`Espesor t = ${fmt(t)} mm · Ri = ${fmt(r)} mm · K = ${spec.K.toFixed(3)}`, `Pliegues a 90° hacia ${f0.direction === "up" ? "arriba" : "abajo"} · BD = ${fmt(spec.BD, 3)} mm`];
+    const sl = [`Espesor t = ${fmt(t)} mm · Ri = ${fmt(r)} mm · K = ${spec.K.toFixed(3)}`, `${bendDirectionText(spec)} · BD = ${fmt(spec.BD, 3)} mm`];
     d.placeNotes(sl, Array.from({ length: 8 }, (_, k) => [rect[0], y0n - k * 2, 105]), 2.6, 105);
   }
   const holes = spec.flanges.reduce((s2, f) => s2 + f.holes.length, 0) + (spec.holes?.length ?? 0);

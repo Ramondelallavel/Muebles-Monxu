@@ -117,7 +117,7 @@ export function resolveAuto(family, params, autos, onProgress = null) {
         let role = m.structure.member_roles[c.element] ?? null;
         if (role === null && c.category === "soldadura") {
           const j = m.joints.find((x) => x.id === c.element);
-          role = j ? m.instance(j.weld.fem.member).part.role : null;
+          role = j ? m.instance(j.weld.fem.member).role : null;
         }
         const prm = role ? family.paramForRole(role) : null;
         if (profAutos.includes(prm)) failing.add(prm);

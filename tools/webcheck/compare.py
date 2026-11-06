@@ -33,7 +33,8 @@ for k in range(n_rand):
         v = {"LONGITUD": rng.choice(range(700, 1601, 100)), "ANCHURA": rng.choice(range(450, 801, 50)), "ALTURA": H,
              "ALTURA_ASA": H + rng.choice([100, 150, 200]), "CARGA_TOTAL": rng.choice([None, 50, 100, 200]),
              "NUMERO_BALDAS": rng.choice([0, 1]), "CARGA_BALDA": rng.choice([None, 50, 100]),
-             "CARGA_HORIZONTAL": rng.choice([50, 100, 150])}
+             "CARGA_HORIZONTAL": rng.choice([50, 100, 150]),
+             "ASA_EMPUJE": rng.choice(["un_extremo", "dos_extremos", "ninguna"]), "PETO_TRASERO": rng.choice([0, 0, 50, 100])}
     elif u >= 0.7:
         fid = "puesto_trabajo"
         H = rng.choice(range(800, 1001, 50))
@@ -43,7 +44,8 @@ for k in range(n_rand):
              "PROFUNDIDAD_ESTANTE": rng.choice(range(200, 401, 50)), "PANEL_HERRAMIENTAS": rng.choice([0, 1]),
              "CARGA_TOTAL": rng.choice([None, 100, 200, 400]), "CARGA_ESTANTE": rng.choice([None, 20, 50, 80]),
              "NUMERO_BALDAS": rng.choice([0, 1]), "CARGA_BALDA": rng.choice([None, 50, 100]),
-             "CARGA_HORIZONTAL": rng.choice([100, 200, 300]), "ANCLAJE": rng.choice(["ninguno", "al_suelo"])}
+             "CARGA_HORIZONTAL": rng.choice([100, 200, 300]), "ANCLAJE": rng.choice(["ninguno", "al_suelo"]),
+             "PETO_TRASERO": rng.choice([0, 0, 60])}
     elif u < 0.4:
         fid = "mesa_industrial"
         v = {"LONGITUD": rng.choice(range(800, 3001, 100)), "ANCHURA": rng.choice(range(500, 1201, 50)),
@@ -51,7 +53,7 @@ for k in range(n_rand):
              "NUMERO_BALDAS": rng.choice([0, 1]), "CARGA_BALDA": rng.choice([None, 0, 50, 100, 200]),
              "CARGA_PUNTUAL": rng.choice([None, None, 50, 100]),
              "USO": rng.choice(["montaje", "trabajo_pesado", "inspeccion"]), "CARGA_HORIZONTAL": rng.choice([100, 200, 300]),
-             "ANCLAJE": rng.choice(["ninguno", "al_suelo"])}
+             "ANCLAJE": rng.choice(["ninguno", "al_suelo"]), "PETO_TRASERO": rng.choice([0, 0, 0, 40, 100])}
     else:
         fid = "estanteria"
         v = {"ANCHURA": rng.choice(range(800, 3001, 100)), "PROFUNDIDAD": rng.choice(range(300, 1001, 50)),

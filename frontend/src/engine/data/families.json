@@ -756,6 +756,21 @@
      "advanced": false
     },
     {
+     "name": "PETO_TRASERO",
+     "label": "Peto trasero (altura sobre la encimera)",
+     "type": "float",
+     "default": 0.0,
+     "unit": "mm",
+     "group": "accesorios",
+     "min": 0,
+     "max": 200,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": false,
+     "help": "Borde trasero de la encimera plegado hacia arriba como tope de piezas y herramientas. 0 = sin peto. Ese borde queda sin fijaciones: la encimera se atornilla por delante y por los extremos.",
+     "advanced": false
+    },
+    {
      "name": "NUMERO_BALDAS",
      "label": "Balda inferior",
      "type": "int",
@@ -1038,6 +1053,27 @@
       "USO": "inspeccion",
       "ENTORNO": "alimentario",
       "CARGA_HORIZONTAL": 100.0
+     }
+    },
+    {
+     "id": "MI-1500-LAB",
+     "name": "Mesa de laboratorio inoxidable 1.500 mm con peto trasero",
+     "family": "mesa_industrial",
+     "values": {
+      "LONGITUD": 1500.0,
+      "ANCHURA": 750.0,
+      "ALTURA": 900.0,
+      "CARGA_TOTAL": 150.0,
+      "NUMERO_BALDAS": 1,
+      "CARGA_BALDA": 60.0,
+      "MATERIAL_ESTRUCTURAL": "1.4301",
+      "MATERIAL_CHAPA": "1.4301",
+      "ACABADO": "INOX_SATINADO",
+      "USO": "laboratorio",
+      "ENTORNO": "interior_humedo",
+      "PETO_TRASERO": 100.0,
+      "CARGA_HORIZONTAL": 100.0,
+      "ANCLAJE": "ninguno"
      }
     },
     {
@@ -2738,6 +2774,21 @@
      "advanced": false
     },
     {
+     "name": "PETO_TRASERO",
+     "label": "Peto trasero (altura sobre la encimera)",
+     "type": "float",
+     "default": 0.0,
+     "unit": "mm",
+     "group": "accesorios",
+     "min": 0,
+     "max": 200,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": false,
+     "help": "Borde trasero de la encimera plegado hacia arriba como tope de piezas y herramientas. 0 = sin peto. Ese borde queda sin fijaciones: la encimera se atornilla por delante y por los extremos.",
+     "advanced": false
+    },
+    {
      "name": "NUMERO_BALDAS",
      "label": "Balda inferior",
      "type": "int",
@@ -3184,7 +3235,7 @@
     },
     {
      "id": "PT-1800-EMBALAJE",
-     "name": "Puesto de embalaje 1.800 mm con estante superior",
+     "name": "Puesto de embalaje 1.800 mm con estante superior y peto trasero",
      "family": "puesto_trabajo",
      "values": {
       "LONGITUD": 1800.0,
@@ -3195,6 +3246,7 @@
       "NUMERO_BALDAS": 1,
       "CARGA_BALDA": 120.0,
       "PANEL_HERRAMIENTAS": 0,
+      "PETO_TRASERO": 50.0,
       "PROFUNDIDAD_ESTANTE": 350.0,
       "ALTURA_ESTANTE": 1500.0,
       "CARGA_ESTANTE": 60.0,
@@ -3390,7 +3442,7 @@
      "choices": null,
      "allow_auto": false,
      "nullable": false,
-     "help": "Cota superior del asa desde el suelo.",
+     "help": "Cota superior del asa desde el suelo (sin efecto si el carro no lleva asa).",
      "advanced": false
     },
     {
@@ -4067,7 +4119,41 @@
      ],
      "allow_auto": true,
      "nullable": false,
-     "help": "'auto': la de menor capacidad nominal que soporta la reacción de servicio por rueda. Las del lado del asa se montan con freno.",
+     "help": "'auto': la de menor capacidad nominal que soporta la reacción de servicio por rueda. Las del extremo izquierdo (lado del asa) se montan con freno.",
+     "advanced": false
+    },
+    {
+     "name": "ASA_EMPUJE",
+     "label": "Asa de empuje",
+     "type": "choice",
+     "default": "un_extremo",
+     "unit": null,
+     "group": "accesorios",
+     "min": null,
+     "max": null,
+     "choices": [
+      "un_extremo",
+      "dos_extremos",
+      "ninguna"
+     ],
+     "allow_auto": false,
+     "nullable": false,
+     "help": "un_extremo: asa en el extremo izquierdo. dos_extremos: asa en ambos extremos (se maniobra desde cualquier lado). ninguna: mesa móvil sin asa.",
+     "advanced": false
+    },
+    {
+     "name": "PETO_TRASERO",
+     "label": "Peto trasero (altura sobre la encimera)",
+     "type": "float",
+     "default": 0.0,
+     "unit": "mm",
+     "group": "accesorios",
+     "min": 0,
+     "max": 200,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": false,
+     "help": "Borde trasero de la encimera plegado hacia arriba como tope de piezas y herramientas. 0 = sin peto. Ese borde queda sin fijaciones: la encimera se atornilla por delante y por los extremos.",
      "advanced": false
     },
     {
@@ -4329,6 +4415,40 @@
       "USO": "trabajo_pesado",
       "CARGA_HORIZONTAL": 120.0,
       "ACABADO": "RAL7016_POLVO"
+     }
+    },
+    {
+     "id": "CT-1200-2ASAS",
+     "name": "Carro de pasillo con asa en los dos extremos 1.200 mm",
+     "family": "carro_taller",
+     "values": {
+      "LONGITUD": 1200.0,
+      "ANCHURA": 700.0,
+      "ALTURA": 900.0,
+      "ALTURA_ASA": 1000.0,
+      "CARGA_TOTAL": 150.0,
+      "NUMERO_BALDAS": 1,
+      "CARGA_BALDA": 100.0,
+      "ASA_EMPUJE": "dos_extremos",
+      "CARGA_HORIZONTAL": 100.0,
+      "ACABADO": "RAL7016_POLVO"
+     }
+    },
+    {
+     "id": "MM-1200-RUEDAS",
+     "name": "Mesa móvil de trabajo 1.200 mm (sin asa, con peto trasero)",
+     "family": "carro_taller",
+     "values": {
+      "LONGITUD": 1200.0,
+      "ANCHURA": 700.0,
+      "ALTURA": 900.0,
+      "CARGA_TOTAL": 120.0,
+      "NUMERO_BALDAS": 1,
+      "CARGA_BALDA": 60.0,
+      "ASA_EMPUJE": "ninguna",
+      "PETO_TRASERO": 50.0,
+      "CARGA_HORIZONTAL": 80.0,
+      "ACABADO": "RAL5010_POLVO"
      }
     },
     {

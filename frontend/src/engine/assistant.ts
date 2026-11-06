@@ -65,6 +65,12 @@ export function parse(text, pending = null) {
   let t = norm(text);
   const it = new Interp();
   for (const [fid, rx] of FAMILY_KEYWORDS) if (rx.test(t)) { it.family = fid; break; }
+  // mesa o banco sobre ruedas: carro de taller sin asa de empuje (mesa móvil)
+  const mobileTable = it.family === "mesa_industrial" && /\bruedas?\b|\bmovil\b|rodante/.test(t) && !/sin ruedas/.test(t);
+  if (mobileTable) {
+    it.family = "carro_taller";
+    it.notes.push("Mesa sobre ruedas: se genera como carro de taller sin asa de empuje (mesa móvil).");
+  }
   for (const [w, n] of Object.entries(NUM_WORDS)) t = t.replace(R(String.raw`\b${w}\b(?=\s+(niveles|baldas|estantes|cajones|travesanos))`, "g"), String(n));
   let m = t.match(R(String.raw`${NUM}\s*${UNIT}?\s*x\s*${NUM}\s*${UNIT}?\s*x\s*${NUM}\s*${UNIT}?`));
   if (m) {
@@ -159,6 +165,23 @@ export function parse(text, pending = null) {
     if (/sin (estante|altillo)/.test(t)) it.set("ESTANTE_SUPERIOR", 0, "sin estante superior");
     else if (/estante superior|altillo|balda superior/.test(t)) it.set("ESTANTE_SUPERIOR", 1, "estante superior");
     if (/sin panel/.test(t)) it.set("PANEL_HERRAMIENTAS", 0, "sin panel");
+  }
+  if (it.family === "carro_taller") {
+    if (/sin asas?\b/.test(t) || (mobileTable && !/\basas?\b/.test(t))) it.set("ASA_EMPUJE", "ninguna", t.includes("sin asa") ? "sin asa" : "mesa sobre ruedas");
+    else if (/dos asas|doble asa|asas? en (ambos|los dos) (extremos|lados)|asa en cada (extremo|lado)/.test(t)) it.set("ASA_EMPUJE", "dos_extremos", "asa en los dos extremos");
+    else if (/\basa\b/.test(t)) it.set("ASA_EMPUJE", "un_extremo", "asa de empuje");
+  }
+  if (MESA_LIKE.includes(it.family)) {
+    const PETO = "peto|tope trasero|reborde trasero";
+    if (R(`sin (${PETO})`).test(t)) it.set("PETO_TRASERO", 0.0, "sin peto");
+    else {
+      const mm = t.match(R(String.raw`(?:${PETO})(?: trasero)?\s*(?:de|:|=)?\s*${NUM}\s*${UNIT}?`)) ?? t.match(R(String.raw`${NUM}\s*${UNIT}?\s*de (?:${PETO})`));
+      if (mm) it.set("PETO_TRASERO", toMm(toNumber(mm[1]), mm[2]), mm[0]);
+      else if (R(PETO).test(t)) {
+        it.set("PETO_TRASERO", 50.0, "peto trasero");
+        it.notes.push("Peto trasero sin altura indicada: se adoptan 50 mm sobre la encimera.");
+      }
+    }
   }
   for (const [key, rx, label] of UNSUPPORTED) {
     if (`${it.family}|${key}` in SUPPORTED_BY) {
@@ -285,7 +308,12 @@ export function describe(it) {
   }
   if (it.family === "puesto_trabajo") out.push("Estante superior: " + (v.ESTANTE_SUPERIOR === 0 ? "no" : "sí") + " · panel portaherramientas: "
     + (v.PANEL_HERRAMIENTAS === 0 ? "no" : "sí") + ".");
-  if (it.family === "carro_taller") out.push("Apoyos: ruedas giratorias de espiga roscada, con freno en el lado del asa.");
+  if (MESA_LIKE.includes(it.family) && v.PETO_TRASERO) out.push(`Peto trasero: ${g(v.PETO_TRASERO)} mm sobre la encimera.`);
+  if (it.family === "carro_taller") {
+    const asa = v.ASA_EMPUJE ?? "un_extremo";
+    out.push("Asa de empuje: " + { un_extremo: "en un extremo", dos_extremos: "en los dos extremos", ninguna: "sin asa (mesa móvil)" }[asa] + ".");
+    out.push("Apoyos: ruedas giratorias de espiga roscada, con freno en " + (asa === "un_extremo" ? "el lado del asa." : "un extremo."));
+  }
   return out;
 }
 

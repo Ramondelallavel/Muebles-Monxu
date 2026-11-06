@@ -98,6 +98,12 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
         if re.search(rx, t):
             it.family = fid
             break
+    # mesa o banco sobre ruedas: carro de taller sin asa de empuje (mesa móvil)
+    mobile_table = (it.family == "mesa_industrial" and bool(re.search(r"\bruedas?\b|\bmovil\b|rodante", t))
+                    and not re.search(r"sin ruedas", t))
+    if mobile_table:
+        it.family = "carro_taller"
+        it.notes.append("Mesa sobre ruedas: se genera como carro de taller sin asa de empuje (mesa móvil).")
     for word, n in NUM_WORDS.items():
         t = re.sub(rf"\b{word}\b(?=\s+(niveles|baldas|estantes|cajones|travesanos))", str(n), t)
     # ------------------------------------------------------------- dimensiones
@@ -244,6 +250,25 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
             it.set("ESTANTE_SUPERIOR", 1, "estante superior")
         if re.search(r"sin panel", t):
             it.set("PANEL_HERRAMIENTAS", 0, "sin panel")
+    if it.family == "carro_taller":
+        if re.search(r"sin asas?\b", t) or (mobile_table and not re.search(r"\basas?\b", t)):
+            it.set("ASA_EMPUJE", "ninguna", "sin asa" if "sin asa" in t else "mesa sobre ruedas")
+        elif re.search(r"dos asas|doble asa|asas? en (ambos|los dos) (extremos|lados)|asa en cada (extremo|lado)", t):
+            it.set("ASA_EMPUJE", "dos_extremos", "asa en los dos extremos")
+        elif re.search(r"\basa\b", t):
+            it.set("ASA_EMPUJE", "un_extremo", "asa de empuje")
+    if it.family in MESA_LIKE:
+        PETO = r"peto|tope trasero|reborde trasero"
+        if re.search(rf"sin ({PETO})", t):
+            it.set("PETO_TRASERO", 0.0, "sin peto")
+        else:
+            mm = (re.search(rf"(?:{PETO})(?: trasero)?\s*(?:de|:|=)?\s*{NUM}\s*{UNIT}?", t)
+                  or re.search(rf"{NUM}\s*{UNIT}?\s*de (?:{PETO})", t))
+            if mm:
+                it.set("PETO_TRASERO", to_mm(to_number(mm.group(1)), mm.group(2)), mm.group(0))
+            elif re.search(PETO, t):
+                it.set("PETO_TRASERO", 50.0, "peto trasero")
+                it.notes.append("Peto trasero sin altura indicada: se adoptan 50 mm sobre la encimera.")
     for key, rx, label in UNSUPPORTED_ACCESSORIES:
         if (it.family, key) in SUPPORTED_BY:
             sup = SUPPORTED_BY[(it.family, key)]
@@ -440,8 +465,14 @@ def describe(it: Interpretation) -> list[str]:
     if it.family == "puesto_trabajo":
         out.append("Estante superior: " + ("no" if v.get("ESTANTE_SUPERIOR") == 0 else "sí") + " · panel portaherramientas: "
                    + ("no" if v.get("PANEL_HERRAMIENTAS") == 0 else "sí") + ".")
+    if it.family in MESA_LIKE and v.get("PETO_TRASERO"):
+        out.append(f"Peto trasero: {v['PETO_TRASERO']:g} mm sobre la encimera.")
     if it.family == "carro_taller":
-        out.append("Apoyos: ruedas giratorias de espiga roscada, con freno en el lado del asa.")
+        asa = v.get("ASA_EMPUJE", "un_extremo")
+        out.append("Asa de empuje: " + {"un_extremo": "en un extremo", "dos_extremos": "en los dos extremos",
+                                         "ninguna": "sin asa (mesa móvil)"}[asa] + ".")
+        out.append("Apoyos: ruedas giratorias de espiga roscada, con freno en "
+                   + ("el lado del asa." if asa == "un_extremo" else "un extremo."))
     return out
 
 

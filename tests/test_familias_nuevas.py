@@ -77,3 +77,55 @@ def test_cart_dossier(tmp_path):
     res = generate_dossier(r, {"code": "P-CT", "revision": "A"}, tmp_path / "exp")
     assert res["qa"]["blocking"] == 0
     assert any(i["code"] == "EXP-STEP" and i["level"] == "ok" for i in res["qa"]["items"])
+
+
+def test_rear_upstand_table():
+    v = {"LONGITUD": 1500, "ANCHURA": 750, "ALTURA": 900, "CARGA_TOTAL": 150, "NUMERO_BALDAS": 1, "CARGA_BALDA": 50,
+         "PETO_TRASERO": 100, "ANCLAJE": "al_suelo"}
+    r = regenerate("mesa_industrial", v)
+    m = r.model
+    top = m.instance("ENC.BANDEJA")
+    fl = {f.edge: f for f in top.part.spec.flanges}
+    assert fl["y1"].direction == "up" and fl["y1"].height == pytest.approx(100 + top.part.spec.t) and not fl["y1"].holes
+    assert all(fl[e].direction == "down" and fl[e].holes for e in ("y0", "x0", "x1"))
+    assert top.bbox[1][2] == pytest.approx(1000, abs=1e-3)                 # el peto sube 100 mm sobre la encimera
+    assert m.dims["envelope"]["zmax"] == pytest.approx(1000) and ("ALTURA_ENCIMERA", "ENC.BANDEJA", 900) in m.dims["levels"]
+    # sin fijaciones en el borde del peto: el larguero trasero es una pieza sin taladros
+    front, rear = m.instance("EST.LAR_SUP.D").part, m.instance("EST.LAR_SUP.T").part
+    assert front.holes and not rear.holes and front.ref != rear.ref
+    screws = [i for i in m.instances if i.group == "ENC" and i.part.role == "tornillo"]
+    assert all(i.T[1, 3] < 750 - 1 for i in screws)
+    assert r.interferences["interferences"] == [] and r.qa.result()["blocking"] == 0
+    # sin peto todo sigue como antes: largueros iguales y la encimera plegada hacia abajo
+    r0 = regenerate("mesa_industrial", {**v, "PETO_TRASERO": 0})
+    assert r0.model.instance("EST.LAR_SUP.D").part is r0.model.instance("EST.LAR_SUP.T").part
+    assert all(f.direction == "down" for f in r0.model.instance("ENC.BANDEJA").part.spec.flanges)
+
+
+@pytest.mark.parametrize("mode,n_mont,handles,notches", [
+    ("un_extremo", 2, ["EST.ASA"], ("x0y0", "x0y1")),
+    ("dos_extremos", 4, ["EST.ASA", "EST.ASA_D"], ("x0y0", "x0y1", "x1y0", "x1y1")),
+    ("ninguna", 0, [], ()),
+])
+def test_cart_handle_modes(mode, n_mont, handles, notches):
+    r = regenerate("carro_taller", {**CT, "ASA_EMPUJE": mode})
+    m = r.model
+    assert sum(i.role == "montante" for i in m.instances) == n_mont
+    assert sorted(i.id for i in m.instances if i.role == "asa") == handles
+    assert tuple(m.instance("ENC.BANDEJA").part.spec.notch_corners) == notches if notches else not \
+        m.instance("ENC.BANDEJA").part.spec.notch[0]
+    wheels = {i.id: i.part.code for i in m.instances if i.part.role == "rueda"}
+    assert sum(c.endswith("_FRENO") for c in wheels.values()) == 2
+    zmax = m.dims["envelope"]["zmax"]
+    assert zmax == pytest.approx(1000 if handles else 900)
+    assert m.structure["product_word"] == ("mesa" if mode == "ninguna" else "carro")
+    assert r.interferences["interferences"] == [] and r.qa.result()["blocking"] == 0
+
+
+def test_assistant_mobile_table_and_upstand():
+    r = assistant.handle(assistant.new_state(), "Mesa con ruedas de 1200x700x900, 120 kg, con peto trasero de 60 mm")
+    st = r["state"]
+    assert st["family"] == "carro_taller" and st["values"]["ASA_EMPUJE"] == "ninguna"
+    assert st["values"]["PETO_TRASERO"] == 60 and not st["unsupported"]
+    r2 = assistant.handle(assistant.new_state(), "Carro de taller 1200x700x900 con dos asas, 150 kg")
+    assert r2["state"]["values"]["ASA_EMPUJE"] == "dos_extremos"

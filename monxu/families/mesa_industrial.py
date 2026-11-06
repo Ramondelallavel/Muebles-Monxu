@@ -173,6 +173,10 @@ class MesaIndustrial(ProductFamily):
               choices=["pie_nivelador"]),
             P("PIE_NIVELADOR", "Pie nivelador", "choice", AUTO, None, "accesorios", choices=FEET, allow_auto=True,
               help="'auto': el de menor capacidad nominal que soporta la reacción de servicio calculada."),
+            P("PETO_TRASERO", "Peto trasero (altura sobre la encimera)", "float", 0.0, "mm", "accesorios", 0, 200,
+              help="Borde trasero de la encimera plegado hacia arriba como tope de piezas y herramientas. "
+                   "0 = sin peto. Ese borde queda sin fijaciones: la encimera se atornilla por delante y por los "
+                   "extremos."),
             P("NUMERO_BALDAS", "Balda inferior", "int", 1, "ud", "accesorios", 0, 1),
             P("ALTURA_BALDA", "Altura de la balda (cara superior)", "float", 200.0, "mm", "accesorios", 100, 600),
             P("TOLERANCIAS", "Tolerancias generales", "choice", "ISO 2768-mK", None, "construccion",
@@ -209,6 +213,11 @@ class MesaIndustrial(ProductFamily):
                         "CARGA_BALDA": 50.0, "MATERIAL_ESTRUCTURAL": "1.4301", "MATERIAL_CHAPA": "1.4301",
                         "ACABADO": "INOX_SATINADO", "USO": "inspeccion", "ENTORNO": "alimentario",
                         "CARGA_HORIZONTAL": 100.0}},
+            {"id": "MI-1500-LAB", "name": "Mesa de laboratorio inoxidable 1.500 mm con peto trasero", "family": self.id,
+             "values": {"LONGITUD": 1500.0, "ANCHURA": 750.0, "ALTURA": 900.0, "CARGA_TOTAL": 150.0, "NUMERO_BALDAS": 1,
+                        "CARGA_BALDA": 60.0, "MATERIAL_ESTRUCTURAL": "1.4301", "MATERIAL_CHAPA": "1.4301",
+                        "ACABADO": "INOX_SATINADO", "USO": "laboratorio", "ENTORNO": "interior_humedo",
+                        "PETO_TRASERO": 100.0, "CARGA_HORIZONTAL": 100.0, "ANCLAJE": "ninguno"}},
             {"id": "MI-2400-PESADA", "name": "Mesa de trabajo pesado 2.400 mm", "family": self.id,
              "values": {"LONGITUD": 2400.0, "ANCHURA": 900.0, "ALTURA": 900.0, "CARGA_TOTAL": 800.0,
                         "CARGA_PUNTUAL": 150.0, "NUMERO_BALDAS": 1, "CARGA_BALDA": 200.0, "USO": "trabajo_pesado",
@@ -322,7 +331,7 @@ class MesaIndustrial(ProductFamily):
         # ---------------------------------------------------------------- chapas
         with ctx.feature("F20", "Encimera de chapa plegada"):
             ctx.uses("LONGITUD", "ANCHURA", "ALTURA", "ESP_ENC", "RADIO_ENC", "K_ENC", "ALA_ENCIMERA", "MATERIAL_CHAPA",
-                     "PASO_FIJACIONES", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ACABADO")
+                     "PASO_FIJACIONES", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ACABADO", "PETO_TRASERO")
             spec = d["top_spec"]
             tray = SheetPart("encimera", f"Encimera chapa {spec.t:g} mm", spec, mat_c, fin)
             model.add("ENC.BANDEJA", "Encimera", tray, G.translation(0, 0, H), "ENC")
@@ -340,12 +349,20 @@ class MesaIndustrial(ProductFamily):
 
         # ---------------------------------------------------------------- datos estructurales
         model.structure = self._structure(model, d, legs)
+        peto = d["peto"]
+        levels = [("ALTURA_BALDA", "BAL.BANDEJA")] if d["shelf"] else []
+        if peto > 0:      # el peto sobresale: la altura de trabajo y el peto se acotan en la cadena de niveles
+            levels += [("ALTURA_ENCIMERA", "ENC.BANDEJA", H)] + self._peto_level(d, H)
         model.dims = {"LONGITUD": L, "ANCHURA": W, "ALTURA": H, "ALTURA_BALDA": d["z_shelf"] if d["shelf"] else None,
                       "LONGITUD_PATA": d["leg_len"],
-                      "envelope": {"ids": ["ENC.BANDEJA"], "dx": L, "dy": W, "zmax": H, "names": ("LONGITUD", "ANCHURA")},
-                      "levels": [("ALTURA_BALDA", "BAL.BANDEJA")] if d["shelf"] else [],
+                      "envelope": {"ids": ["ENC.BANDEJA"], "dx": L, "dy": W, "zmax": H + peto, "names": ("LONGITUD", "ANCHURA")},
+                      "levels": levels,
                       "load_text": f"Carga distribuida de proyecto sobre encimera: "
                                    f"{(str(ps.values['CARGA_TOTAL']) + ' kg') if ps.values.get('CARGA_TOTAL') else 'NO DEFINIDA'}"}
+        if peto > 0:
+            zs = [0.0] + ([d["z_shelf"]] if d["shelf"] else []) + [H, H + peto]
+            model.dims["ALTURA_ENCIMERA"] = H
+            model.dims["drawing_expected"] = {f"DIST_NIVEL_{k + 1}": zs[k + 1] - zs[k] for k in range(len(levels))}
         self._extra_dims(model, d)
         model.number_parts()
         return model
@@ -370,6 +387,11 @@ class MesaIndustrial(ProductFamily):
 
     def _extra_dims(self, model, d) -> None:
         pass
+
+    @staticmethod
+    def _peto_level(d, H) -> list:
+        """Nivel de cota de la cara superior del peto trasero (vacío si no hay peto)."""
+        return [("COTA_PETO", "ENC.BANDEJA", H + d["peto"])] if d["peto"] > 0 else []
 
     # ------------------------------------------------------------------ utilidades comunes
     @staticmethod
@@ -474,8 +496,16 @@ class MesaIndustrial(ProductFamily):
                                        hole_d=flange_hole_d(v["MATERIAL_CHAPA"], t, sc), rn=rn, pitch=pitch,
                                        short_min=2, tag="encimera")
             fix_top["gap"] = g
+            peto = v.get("PETO_TRASERO") or 0.0
+            if peto > 0:      # peto trasero: pestaña hacia arriba, sin fijaciones en ese borde
+                fix_top["s"]["y1"] = []
+                ctx.derive("COTA_PETO", lambda p: p["ALTURA"] + p["PETO_TRASERO"], "mm", "Cota superior del peto trasero")
+            d["peto"] = peto
             flanges = []
             for e in EDGES:
+                if e == "y1" and peto > 0:
+                    flanges.append(FlangeSpec(e, peto + t, "up", ()))
+                    continue
                 holes = tuple((s, fix_top["h"][e], flange_hole_d(v["MATERIAL_CHAPA"], t, sc)) for s in fix_top["s"][e])
                 flanges.append(FlangeSpec(e, ala, "down", holes))
             tn = self._top_notch(ctx, d)
@@ -584,13 +614,21 @@ class MesaIndustrial(ProductFamily):
                            for s in fixings["s"]["y0"])
         lp = ProfilePart(f"larguero_{level.lower()}", f"Larguero {lab} {prof_long.code}", prof_long.code, x1 - x0,
                          mat, fin, holes=holes_long)
-        specs = [("D", "delantero", (x0, y_f, zl), (x1, y_f, zl), "DI", "DD"),
-                 ("T", "trasero", (x1, y_b, zl), (x0, y_b, zl), "TD", "TI")]
+        lp_rear = lp
+        if fixings["s"]["y1"] != fixings["s"]["y0"] or fixings["h"]["y1"] != fixings["h"]["y0"]:
+            # fijaciones traseras distintas de las delanteras (p. ej. peto trasero sin fijaciones): pieza propia
+            hz_b = fixings["z_ref"] - fixings["h"]["y1"]
+            holes_rear = tuple(("-x", x1 - (s + offs), hz_b - zl, catalog.component("TUERCA_REMACHABLE_M6")["hole_d"])
+                               for s in reversed(fixings["s"]["y1"]))
+            lp_rear = ProfilePart(f"larguero_{level.lower()}", f"Larguero {lab} trasero {prof_long.code}", prof_long.code,
+                                  x1 - x0, mat, fin, holes=holes_rear)
+        specs = [("D", "delantero", (x0, y_f, zl), (x1, y_f, zl), "DI", "DD", lp),
+                 ("T", "trasero", (x1, y_b, zl), (x0, y_b, zl), "TD", "TI", lp_rear)]
         long_ids = []
-        for k, nm, p0, p1, l0, l1 in specs:
+        for k, nm, p0, p1, l0, l1, part in specs:
             iid = f"EST.LAR_{level}.{k}"
             p0, p1 = np.array(p0, float), np.array(p1, float)
-            model.add(iid, f"Larguero {lab} {nm}", lp, G.axis_frame(p0, p1, (0, 0, 1)), "EST", axis=(p0, p1),
+            model.add(iid, f"Larguero {lab} {nm}", part, G.axis_frame(p0, p1, (0, 0, 1)), "EST", axis=(p0, p1),
                       up=np.array([0, 0, 1.0]), structural=True)
             weld(f"J.{iid}.0", iid, 0, legs[l0], prof_long, f"Larguero {lab} {nm} a pata")
             weld(f"J.{iid}.1", iid, 1, legs[l1], prof_long, f"Larguero {lab} {nm} a pata")
@@ -692,4 +730,4 @@ class MesaIndustrial(ProductFamily):
         return {"levels": lv, "surfaces": surfaces, "supports": feet,
                 "horizontal_points": [legs["DI"], legs["DD"]], "worktop_height": ps["ALTURA"],
                 "leg_ids": list(legs.values()), "member_roles": {
-                    i.id: i.part.role for i in model.instances if i.structural}}
+                    i.id: i.role for i in model.instances if i.structural}}

@@ -47,7 +47,7 @@ python -m pytest -q
 | 4. Documentación | ✔ | 12 hojas de planos (conjunto, estructura, perfiles, chapa, desarrollos, pletinas, soldaduras con detalles, explosionado, montaje, despiece), STEP de conjunto y de cada pieza, STL, BREP, GLB, DXF, Excel con fórmulas, informe PDF |
 | 5. Fabricación | ✔ | Desarrollos con BA = π/2·(Ri+K·t), DFM (láser, plegadora, perfiles, soldadura, montaje), corte de barras hasta la cota inferior, anidado de chapa |
 | 6. Asistente IA | ✔ | Interpretación en español con evidencia, preguntas de datos faltantes, propuesta preliminar diferenciada de lo verificado |
-| 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) y **carro de taller** (ruedas de espiga con freno, asa). Armarios: sólo se identifican en el asistente |
+| 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) y **carro de taller** (ruedas de espiga con freno; asa en uno, dos o ningún extremo). Peto trasero opcional en mesa, puesto y carro. Armarios: sólo se identifican en el asistente |
 | 8. Validación | ✔ | 64 pruebas: unidades frente a soluciones analíticas y tablas, las cuatro familias, QA, API, aceptación §23, validación cruzada navegador ↔ servidor, expediente del navegador y legibilidad de planos |
 
 ### Verificaciones de la cadena (no simuladas)
@@ -107,13 +107,55 @@ comparten su cálculo, dimensionado, DFM y documentación.
   - un panel perforado portaherramientas (agujero 10×10 a paso 38) atornillado a los montantes. Su
     peso entra en el cálculo como masa colgada de los montantes.
 - **Carro de taller** (`CT`): ruedas giratorias de espiga roscada en las tuercas soldadas de las
-  placas base, con freno en el lado del asa. La rueda se elige por cálculo (la de menor capacidad
-  que soporta la reacción de servicio). Las dos patas del lado del asa se prolongan y se unen con el
-  asa soldada. El empuje horizontal es la **fuerza de maniobra** con las ruedas frenadas (100 N por
-  defecto): un carro no se ancla y se comprueba siempre frente al vuelco.
+  placas base, con freno en el extremo izquierdo. La rueda se elige por cálculo (la de menor capacidad
+  que soporta la reacción de servicio). `ASA_EMPUJE` elige el asa:
+  - `un_extremo` (por defecto): las dos patas del extremo izquierdo se prolongan y se unen con el asa soldada;
+  - `dos_extremos`: asa en ambos extremos (carro de pasillo), con escotaduras en las cuatro esquinas;
+  - `ninguna`: **mesa móvil**, con todas las patas a la altura de la encimera y sin escotaduras.
 
-Plantillas: 4 de puesto de trabajo (montaje, inspección, embalaje, taller pesado) y 3 de carro
-(dos niveles, transporte, inoxidable alimentario).
+  El empuje horizontal es la **fuerza de maniobra** con las ruedas frenadas (100 N por defecto):
+  un carro no se ancla y se comprueba siempre frente al vuelco.
+
+### Peto trasero (mesa, puesto y carro)
+
+`PETO_TRASERO` (mm sobre la encimera, 0 = sin peto) pliega hacia arriba el borde trasero de la
+encimera como tope de piezas y herramientas. Ese borde queda sin fijaciones, así que el larguero
+trasero del bastidor superior pasa a ser una pieza propia sin taladros. La pestaña del peto se
+comprueba como cualquier otra en el DFM de plegado (ala mínima según la matriz). Los planos acotan
+la altura de trabajo y la del peto por separado. El plano de la chapa también separa la pestaña y
+el peto, e indica qué bordes se pliegan hacia arriba.
+
+El asistente reconoce «con peto (de N mm)», «sin peto», «tope trasero», «dos asas», «sin asa», y
+convierte «mesa con ruedas» o «mesa móvil» en un carro sin asa.
+
+Plantillas: 4 de puesto de trabajo (montaje, inspección, embalaje con peto, taller pesado), 5 de
+carro (dos niveles, transporte, dos asas, mesa móvil con peto, inoxidable alimentario) y la mesa de
+laboratorio inoxidable con peto de 100 mm.
+
+## Presupuesto estimado
+
+Cada diseño lleva un presupuesto unitario calculado desde el modelo y el plan de fabricación con
+las tarifas orientativas de `monxu/catalog/data/costs.json`, editables:
+
+- material (con merma de perfil y aprovechamiento de chapa, o barras y chapas completas por lote);
+- normalizados;
+- consumibles de soldadura;
+- operaciones:
+  - corte y taladrado de perfiles;
+  - láser por metro y por perforación, según espesor y material;
+  - plegado por pliegue;
+  - soldadura por horas de arco y factor de marcha;
+- acabado por m² o por kg;
+- montaje por elemento;
+- preparación de máquinas y útil repartida entre las unidades del lote;
+- gastos generales y margen.
+
+Se incluye una tabla de coste unitario para lotes de 1, 5, 10, 25 y 50 unidades.
+
+Aparece en la pestaña «Presupuesto», en la hoja «Presupuesto» del Excel (con fórmulas) y en
+`04_LISTA_MATERIALES/presupuesto_estimado.csv/.json` del expediente. Los dos motores dan el mismo
+importe (validación cruzada). Son tarifas de referencia: no incluyen transporte, embalaje especial,
+diseño ni impuestos.
 
 ## Planos sin solapes
 

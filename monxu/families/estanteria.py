@@ -156,18 +156,18 @@ class Estanteria(MesaIndustrial):
                 raise ValueError(f"Parámetro sin resolver: {k}")
         ctx = ParamContext(ps)
         A, Pf, H = ps.values["ANCHURA"], ps.values["PROFUNDIDAD"], ps.values["ALTURA"]
-        model = ProductModel(self.id, self.name, f"ES{A:.0f}-{Pf:.0f}-{H:.0f}", ps, ctx)
+        model = ProductModel(self.id, self.name, f"{self.prefix}{A:.0f}-{Pf:.0f}-{H:.0f}", ps, ctx)
         model.requested = ps
         d = self._derive_shelf(ctx, model)
         mat_s, mat_c, fin = ps.values["MATERIAL_ESTRUCTURAL"], ps.values["MATERIAL_CHAPA"], ps.values["ACABADO"]
         model.add_subassembly("EST", "Estructura soldada", welded=True, step=1)
-        model.add_subassembly("APO", "Apoyos niveladores", explode=(0, 0, -160), step=2)
+        model.add_subassembly(self.support_group[0], self.support_group[1], explode=(0, 0, -160), step=2)
         model.add_subassembly("BAL", "Bandejas", explode=(0, -0.9 * Pf, 0), step=3)
         leg, rail, trv, a = d["leg"], d["rail"], d["trv"], d["a"]
         corners = {"DI": (a / 2, a / 2), "DD": (A - a / 2, a / 2), "TI": (a / 2, Pf - a / 2), "TD": (A - a / 2, Pf - a / 2)}
         cname = {"DI": "delantero izquierdo", "DD": "delantero derecho", "TI": "trasero izquierdo",
                  "TD": "trasero derecho"}
-        foot = catalog.component(ps.values["PIE_NIVELADOR"])
+        foot = catalog.component(ps.values[self.support_param])
         thread = float(foot["thread"][1:])
         nut_code = f"TUERCA_SOLDAR_M{thread:.0f}"
         rn = catalog.component("TUERCA_REMACHABLE_M6")
@@ -177,7 +177,7 @@ class Estanteria(MesaIndustrial):
         with ctx.feature("F10", "Estructura soldada"):
             with ctx.feature("F11", "Montantes, placas base y tuercas"):
                 ctx.uses("LONGITUD_MONTANTE", "PERFIL_MONTANTE", "ANCHURA", "PROFUNDIDAD", "ESPESOR_PLACA_BASE",
-                         "PIE_NIVELADOR", "MATERIAL_ESTRUCTURAL", "ACABADO")
+                         self.support_param, "MATERIAL_ESTRUCTURAL", "ACABADO")
                 leg_part = ProfilePart("montante", f"Montante {leg.code}", leg.code, d["leg_len"], mat_s, fin)
                 plate_mat = "S235JR" if catalog.material(mat_s).family == "acero_carbono" else mat_s
                 plate = PlatePart("placa_base", f"Placa base {a:.0f}x{a:.0f}x{d['tp']:.0f}", a, a, d["tp"], plate_mat,
@@ -215,13 +215,15 @@ class Estanteria(MesaIndustrial):
                                       mat=mat_s, fin=fin, label="de nivel")
                     for inst in model.instances[before:]:
                         inst.name += f" (nivel {i})"
-        with ctx.feature("F40", "Apoyos niveladores"):
-            ctx.uses("PIE_NIVELADOR", "ANCHURA", "PROFUNDIDAD", "PERFIL_MONTANTE")
-            fpart = StandardPart("pie_nivelador", ps.values["PIE_NIVELADOR"])
+        with ctx.feature("F40", self.support_group[1]):
+            ctx.uses(self.support_param, "ANCHURA", "PROFUNDIDAD", "PERFIL_MONTANTE")
+            g = self.support_group[0]
             for k, (x, y) in corners.items():
-                model.add(f"APO.PIE.{k}", f"Pie nivelador {cname[k]}", fpart, G.translation(x, y, 0.0), "APO")
-                model.add_joint(Joint(f"J.PIE.{k}", "roscada", (f"APO.PIE.{k}", f"EST.TUERCA.{k}"), (x, y, d["hn"]),
-                                      f"Pie roscado {foot['thread']} en tuerca soldada"))
+                fpart, fname = self._support_part(k, ps)
+                model.add(f"{g}.PIE.{k}", f"{fname} {cname[k]}", fpart, G.translation(x, y, 0.0), g)
+                desc = (f"Pie roscado {foot['thread']} en tuerca soldada" if fpart.role == "pie_nivelador" else
+                        f"{fname} roscada {foot['thread']} en tuerca soldada")
+                model.add_joint(Joint(f"J.PIE.{k}", "roscada", (f"{g}.PIE.{k}", f"EST.TUERCA.{k}"), (x, y, d["hn"]), desc))
         tray = SheetPart("balda", f"Bandeja chapa {d['spec'].t:g} mm", d["spec"], mat_c, fin)
         for i, (lid, z) in enumerate(zip(d["level_ids"], d["z_levels"]), start=1):
             with ctx.feature(f"F3{i}", f"Bandeja del nivel {i}"):
@@ -231,6 +233,7 @@ class Estanteria(MesaIndustrial):
                 model.add(tid, f"Bandeja nivel {i}", tray, G.translation(0, 0, z), "BAL",
                           tags={"explode_extra": (0, 0, 0)})
                 self._fasteners(model, d["fix"][lid], "BAL", rn, sc, ctx, prefix=f"BAL.N{i}", tray_id=tid)
+        self._extras(model, ctx, d, legs, corners)
         model.structure = self._shelf_structure(model, d, legs)
         n = len(d["z_levels"])
         q = ps.values.get("CARGA_POR_NIVEL")
@@ -244,6 +247,7 @@ class Estanteria(MesaIndustrial):
             "load_text": (f"Carga distribuida por nivel de proyecto: {q:g} kg ({n} niveles, total {n * q:g} kg)" if q
                           else "Carga por nivel: NO DEFINIDA"),
         }
+        self._extra_dims(model, d)
         model.number_parts()
         return model
 
@@ -267,10 +271,11 @@ class Estanteria(MesaIndustrial):
             if leg.B != leg.H:
                 raise ValueError("Los montantes deben ser de tubo cuadrado")
             a = leg.B
-            foot = catalog.component(ctx["PIE_NIVELADOR"])
+            sp = self.support_param
+            foot = catalog.component(ctx[sp])
             hn, tp = float(foot["nominal_height"]), ctx["ESPESOR_PLACA_BASE"]
             A, Pf, H = ctx["ANCHURA"], ctx["PROFUNDIDAD"], ctx["ALTURA"]
-            z_leg0 = ctx.derive("COTA_INICIO_MONTANTE", lambda p: float(catalog.component(p["PIE_NIVELADOR"])
+            z_leg0 = ctx.derive("COTA_INICIO_MONTANTE", lambda p: float(catalog.component(p[sp])
                                                                          ["nominal_height"]) + p["ESPESOR_PLACA_BASE"],
                                 "mm", "Cota inicio de montante")
             leg_len = ctx.derive("LONGITUD_MONTANTE", lambda p: p["ALTURA"] - p["COTA_INICIO_MONTANTE"], "mm",
@@ -342,12 +347,13 @@ class Estanteria(MesaIndustrial):
         surfaces = [{"id": lid, "label": f"Bandeja del nivel {i}", "level": lid, "load_param": "CARGA_POR_NIVEL",
                      "sheet_instance": f"BAL.BANDEJA.{i}", "area_mm2": area}
                     for i, lid in enumerate(d["level_ids"], start=1)]
-        feet = [{"instance": f"APO.PIE.{k}", "leg": legs[k], "point": tuple(model.instance(legs[k]).axis[0]),
-                 "component": model.params.values["PIE_NIVELADOR"]} for k in ("DI", "DD", "TI", "TD")]
+        g = self.support_group[0]
+        feet = [{"instance": f"{g}.PIE.{k}", "leg": legs[k], "point": tuple(model.instance(legs[k]).axis[0]),
+                 "component": model.instance(f"{g}.PIE.{k}").part.code} for k in ("DI", "DD", "TI", "TD")]
         return {"levels": model.structure.get("levels", {}), "surfaces": surfaces, "supports": feet,
                 "horizontal_points": [legs["DI"], legs["DD"]], "worktop_height": model.params.values["ALTURA"],
                 "leg_ids": list(legs.values()), "product_word": "estantería",
-                "member_roles": {i.id: i.part.role for i in model.instances if i.structural},
+                "member_roles": {i.id: i.role for i in model.instances if i.structural},
                 "assembly_texts": {
                     "EST": "Recepción de la estructura soldada y pintada. Insertar las tuercas remachables M6 en los "
                            "taladros Ø9,1 de largueros y travesaños de todos los niveles.",

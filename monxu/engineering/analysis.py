@@ -122,7 +122,7 @@ class StructuralModel:
             for (s0, n0), (s1, n1) in zip(dedup[:-1], dedup[1:]):
                 elems.append(self.frame.element(n0, n1, mat.E, mat.G, sp.A, sp.Iy, sp.Iz, sp.It, i.up, i.id))
             self.members[i.id] = {"instance": i, "profile": prof, "props": sp, "material": mat, "length": Lm,
-                                  "p0": p0, "p1": p1, "x": x, "elements": elems, "role": i.part.role}
+                                  "p0": p0, "p1": p1, "x": x, "elements": elems, "role": i.role}
         # Coacciones horizontales isostáticas: sin empujes hiperestáticos entre pies (conservador para
         # flexión de bastidores y para el desplome; el rozamiento real con el suelo no se cuenta).
         sups = m.structure.get("supports", [])

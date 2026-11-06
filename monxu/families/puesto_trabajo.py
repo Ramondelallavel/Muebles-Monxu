@@ -115,9 +115,11 @@ class PuestoTrabajo(MesaIndustrial):
              "values": {"LONGITUD": 1200.0, "ANCHURA": 700.0, "ALTURA": 850.0, "ALTURA_TOTAL": 1700.0,
                         "CARGA_TOTAL": 100.0, "NUMERO_BALDAS": 0, "ESTANTE_SUPERIOR": 0, "USO": "inspeccion",
                         "CARGA_HORIZONTAL": 150.0, "ACABADO": "RAL5015_POLVO", "ANCLAJE": "al_suelo"}},
-            {"id": "PT-1800-EMBALAJE", "name": "Puesto de embalaje 1.800 mm con estante superior", "family": self.id,
+            {"id": "PT-1800-EMBALAJE", "name": "Puesto de embalaje 1.800 mm con estante superior y peto trasero",
+             "family": self.id,
              "values": {"LONGITUD": 1800.0, "ANCHURA": 800.0, "ALTURA": 900.0, "ALTURA_TOTAL": 1900.0,
                         "CARGA_TOTAL": 250.0, "NUMERO_BALDAS": 1, "CARGA_BALDA": 120.0, "PANEL_HERRAMIENTAS": 0,
+                        "PETO_TRASERO": 50.0,
                         "PROFUNDIDAD_ESTANTE": 350.0, "ALTURA_ESTANTE": 1500.0, "CARGA_ESTANTE": 60.0,
                         "USO": "embalaje", "ACABADO": "RAL7016_POLVO", "ANCLAJE": "al_suelo"}},
             {"id": "PT-2000-TALLER", "name": "Puesto de taller pesado 2.000 mm", "family": self.id,
@@ -421,16 +423,17 @@ class PuestoTrabajo(MesaIndustrial):
         levels = []
         if d["shelf"]:
             levels.append(("ALTURA_BALDA", "BAL.BANDEJA"))
-        levels.append(("ALTURA_ENCIMERA", "ENC.BANDEJA"))
+        levels.append(("ALTURA_ENCIMERA", "ENC.BANDEJA", v["ALTURA"]))
+        levels += self._peto_level(d, v["ALTURA"])
         if d["shelf_top"]:
             levels.append(("ALTURA_ESTANTE", "ALT.BANDEJA"))
-        zs = [0.0] + [{"ALTURA_BALDA": d.get("z_shelf"), "ALTURA_ENCIMERA": v["ALTURA"], "ALTURA_ESTANTE": d.get("est_z")}[n]
-                      for n, _ in levels]
+        zs = [0.0] + [{"ALTURA_BALDA": d.get("z_shelf"), "ALTURA_ENCIMERA": v["ALTURA"], "ALTURA_ESTANTE": d.get("est_z"),
+                       "COTA_PETO": v["ALTURA"] + d["peto"]}[n] for n, *_ in levels]
         model.dims["ALTURA_ENCIMERA"] = v["ALTURA"]
         model.dims.update({
             "ALTURA_TOTAL": d["z_top_alt"],
             "envelope": {"ids": ["ENC.BANDEJA", "EST.PATA.TI", "EST.PATA.TD"], "dx": v["LONGITUD"], "dy": v["ANCHURA"],
-                         "zmax": d["z_top_alt"], "names": ("LONGITUD", "ANCHURA")},
+                         "zmax": max(d["z_top_alt"], v["ALTURA"] + d["peto"]), "names": ("LONGITUD", "ANCHURA")},
             "levels": levels,
             "drawing_expected": {f"DIST_NIVEL_{k + 1}": zs[k + 1] - zs[k] for k in range(len(levels))},
             "load_text": (f"Cargas de proyecto: encimera {v.get('CARGA_TOTAL') or 'NO DEFINIDA'} kg"

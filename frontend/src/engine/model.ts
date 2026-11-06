@@ -159,9 +159,11 @@ export class ProductModel {
   add(id, name, part, T, group, opts = {}) {
     if (this._ids.has(id)) throw new Error(`Identificador de instancia duplicado: ${id}`);
     this._ids.add(id);
+    // función de la instancia: la de la pieza pedida, aunque se reutilice otra pieza geométricamente idéntica
+    const role = opts.role ?? part.role;
     part = this.part(part);
     const f = this.ctx.current;
-    const inst = { id, name, part, T, group, feature: f ? f.id : "", axis: null, up: null, structural: false, tags: {}, ...opts };
+    const inst = { id, name, part, T, group, feature: f ? f.id : "", axis: null, up: null, structural: false, tags: {}, ...opts, role };
     if (f) f.produces.push(id);
     this.instances.push(inst);
     return inst;
