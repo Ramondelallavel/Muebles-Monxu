@@ -85,7 +85,9 @@ class ProfilePart(PartDef):
         super().__init__(role, name, material, finish)
         self.profile = catalog.profile(profile_code)
         self.length = round(float(length), 2)
-        self.holes = tuple(holes)
+        # cotas redondeadas a 0,001 mm: piezas geométricamente idénticas comparten referencia aunque las
+        # cotas se hayan obtenido por caminos aritméticos distintos (p. ej. niveles de una estantería)
+        self.holes = tuple((f, round(float(z), 3), round(float(o), 3), d) for f, z, o, d in holes)
         self.end_angles = end_angles
 
     @property

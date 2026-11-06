@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { ViewerPayload } from "./api";
+import { IS_LOCAL, type ViewerPayload } from "./api";
+
+const cssColor = (name: string, fallback: string) => {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return new THREE.Color(v || fallback);
+};
 
 export type ViewName = "iso" | "alzado" | "perfil" | "planta";
 interface Props {
@@ -13,9 +18,11 @@ interface Props {
   onSelect: (id: string | null) => void;
   measuring: boolean;
   view: { name: ViewName; n: number };
+  theme?: string;
 }
 
-function decode(b64: string, T: Float32ArrayConstructor | Uint32ArrayConstructor) {
+function decode(b64: string | Float32Array | Uint32Array, T: Float32ArrayConstructor | Uint32ArrayConstructor) {
+  if (typeof b64 !== "string") return b64;
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -118,13 +125,15 @@ export default function Viewer(p: Props) {
     const c = ctx.current;
     if (!c) return;
     const tech = p.mode === "tecnico";
-    c.scene.background = new THREE.Color(tech ? 0xf4f6f8 : 0xdfe4ea);
+    c.scene.background = tech ? cssColor("--viewer", "#f2f4f7") : cssColor("--viewer-real", "#dde3ea");
+    const partTech = cssColor("--part-tech", "#d3d9e0"), sel3d = cssColor("--sel-3d", "#3a86ff"), edge = cssColor("--edge", "#1b1f24");
     c.ground.visible = !tech;
     c.renderer.toneMapping = tech ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
     for (const [id, it] of c.items) {
       const m = it.mesh.material as THREE.MeshStandardMaterial;
       const sel = id === p.selected;
-      m.color.copy(tech ? new THREE.Color(sel ? 0x3a86ff : 0xd5dae0) : it.color);
+      m.color.copy(tech ? (sel ? sel3d : partTech) : it.color);
+      ((it.group.children[1] as THREE.LineSegments).material as THREE.LineBasicMaterial).color.copy(edge);
       m.metalness = tech ? 0 : 0.35;
       m.roughness = tech ? 1 : 0.42;
       m.emissive = new THREE.Color(sel ? 0x1d4ed8 : 0x000000);
@@ -136,7 +145,7 @@ export default function Viewer(p: Props) {
       const off = it.explode.clone().multiplyScalar(p.explode);
       it.group.matrix.copy(new THREE.Matrix4().makeTranslation(off.x, off.y, off.z).multiply(it.base));
     }
-  }, [p.mode, p.selected, p.hidden, p.explode, p.payload]);
+  }, [p.mode, p.selected, p.hidden, p.explode, p.payload, p.theme]);
 
   useEffect(() => { if (p.view.n) fit(p.view.name); /* eslint-disable-next-line */ }, [p.view]);
   useEffect(() => { if (!p.measuring) { setMeasurePts([]); setDist(null); ctx.current?.measure.clear(); } }, [p.measuring]);
@@ -191,7 +200,7 @@ export default function Viewer(p: Props) {
   return (
     <div className="viewer" ref={host} onDoubleClick={pick} onClick={(e) => p.measuring && pick(e)}>
       {p.mode === "comercial" && <div className="viewer-badge warn">Visualización comercial · no es documentación técnica</div>}
-      {p.mode === "tecnico" && <div className="viewer-badge">Modelo CAD técnico · B-rep OpenCascade teselado</div>}
+      {p.mode === "tecnico" && <div className="viewer-badge">{IS_LOCAL ? "Modelo técnico · malla generada en el navegador (taladros no representados)" : "Modelo CAD técnico · B-rep OpenCascade teselado"}</div>}
       {p.measuring && (
         <div className="viewer-measure">
           {dist === null ? `Medición: seleccione ${2 - measurePts.length} punto(s)` :

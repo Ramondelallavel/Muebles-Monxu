@@ -21,6 +21,7 @@ from .plate import navier
 OK, FAIL, PENDING, WARN = "CUMPLE", "NO_CUMPLE", "PENDIENTE", "ADVERTENCIA"
 G_ACC = 9.81
 MAX_ELEMENT = 100.0
+N_ZERO = 1e-3          # N: axil por debajo del cual la barra se considera sin compresión
 
 
 @dataclass
@@ -327,7 +328,9 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
                     Mmax_y, Mmax_z = max(Mmax_y, My), max(Mmax_z, Mz)
                     Vmax = max(Vmax, Vy / VyRd, Vz / VzRd)
                     Tmax = max(Tmax, T)
-            ub = (abs(Nc) / (chi * sp.A * fy / gM1) + Mmax_y / (Wy * fy / gM1) + Mmax_z / (Wz * fy / gM1)) if Nc < 0 else 0
+            # compresión real (umbral de 1 mN: el ruido numérico de barras sin axil no activa el pandeo)
+            ub = (abs(Nc) / (chi * sp.A * fy / gM1) + Mmax_y / (Wy * fy / gM1) + Mmax_z / (Wz * fy / gM1)) \
+                if Nc < -N_ZERO else 0
             u_all = max(ucs, ub, Vmax)
             if u_all > best["u"]:
                 best = {"u": u_all, "ucs": ucs, "ub": ub, "uv": Vmax, "combo": cname, "Nc": Nc, "My": Mmax_y,
@@ -344,7 +347,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             status = PENDING
         checks.append(Check(f"B.{mid}", "resistencia" if not is_leg else "pandeo", mid,
                             f"{mm['instance'].name} ({prof.code}, {mat.code}): resistencia de sección"
-                            + (" y pandeo por flexión" if best["Nc"] < 0 else ""),
+                            + (" y pandeo por flexión" if best["Nc"] < -N_ZERO else ""),
                             "EN 1993-1-1 §6.2, §6.3.1, §6.3.3", round(best["u"], 4), 1.0, "-", round(best["u"], 4),
                             status, best["combo"], details))
         member_results.append((mid, best["u"]))

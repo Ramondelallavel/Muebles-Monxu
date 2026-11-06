@@ -7,3 +7,4 @@ __pycache__/
 /frontend/dist/
 *.egg-info/
 /frontend/tsconfig.tsbuildinfo
+/frontend/dist-artifact/

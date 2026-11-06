@@ -1,11 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, fmt, type Dict, type FamilyInfo, type Project, type ViewerPayload } from "./api";
+import { api, fmt, IS_LOCAL, type Dict, type FamilyInfo, type Project, type ViewerPayload } from "./api";
+import { storageLabel } from "./local/localApi";
+
+/** Tema efectivo (atributo data-theme del visor o preferencia del sistema), para el visor 3D. */
+function useTheme() {
+  const read = () => document.documentElement.getAttribute("data-theme") ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const [t, setT] = useState(read);
+  useEffect(() => {
+    const mo = new MutationObserver(() => setT(read()));
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    const mq = matchMedia("(prefers-color-scheme: dark)");
+    const f = () => setT(read());
+    mq.addEventListener("change", f);
+    return () => { mo.disconnect(); mq.removeEventListener("change", f); };
+  }, []);
+  return t;
+}
+const tick = () => new Promise((r) => setTimeout(r, 30));
 import Viewer, { type ViewName } from "./Viewer";
 import { AlertsPanel, BomPanel, CalcPanel, ChatPanel, FabPanel, FeaturesPanel, ParamForm, PropsPanel, TreePanel } from "./panels";
 
 export default function App() {
-  const [code, setCode] = useState<string | null>(() => new URLSearchParams(location.search).get("p"));
-  useEffect(() => { history.replaceState(null, "", code ? `?p=${code}` : location.pathname); }, [code]);
+  const [code, setCode] = useState<string | null>(() => (IS_LOCAL ? null : new URLSearchParams(location.search).get("p")));
+  useEffect(() => {
+    if (IS_LOCAL) return;          // en el artefacto la navegación vive en el estado de la página
+    try { history.replaceState(null, "", code ? `?p=${code}` : location.pathname); } catch { /* marco restringido */ }
+  }, [code]);
   return code ? <Workspace code={code} onBack={() => setCode(null)} /> : <Home onOpen={setCode} />;
 }
 
@@ -16,7 +36,8 @@ function Home({ onOpen }: { onOpen: (c: string) => void }) {
   const [name, setName] = useState("");
   const [client, setClient] = useState("");
   const [err, setErr] = useState("");
-  useEffect(() => { api.library().then(setLib); api.projects().then(setProjects); }, []);
+  const [store, setStore] = useState("");
+  useEffect(() => { api.library().then(setLib); api.projects().then(setProjects); if (IS_LOCAL) storageLabel().then(setStore); }, []);
   async function create(family: string, template_id?: string) {
     try {
       const p = await api.createProject({ name: name || "Nuevo proyecto", client, family, template_id, designer: "Ingeniería" });
@@ -29,8 +50,11 @@ function Home({ onOpen }: { onOpen: (c: string) => void }) {
       <main className="home-main">
         <section>
           <h2>1 · Selección de producto</h2>
-          <div className="newp"><input placeholder="Nombre del proyecto" value={name} onChange={(e) => setName(e.target.value)} />
-            <input placeholder="Cliente" value={client} onChange={(e) => setClient(e.target.value)} />{err && <span className="bad">{err}</span>}</div>
+          {IS_LOCAL && <p className="home-note">Todo el motor (geometría, dimensionado, cálculo por barras y placas, fabricación, BOM y control de calidad)
+            se ejecuta en este navegador. Es el mismo motor del servidor, portado y contrastado con él caso a caso. STEP, interferencias B-rep
+            y planos PDF requieren el servidor.</p>}
+          <div className="newp"><input id="nombre" placeholder="Nombre del proyecto" value={name} onChange={(e) => setName(e.target.value)} />
+            <input id="cliente" placeholder="Cliente" value={client} onChange={(e) => setClient(e.target.value)} />{err && <span className="bad">{err}</span>}</div>
           <div className="cards">
             {lib?.families.map((f) => (
               <div key={f.id} className={`card ${f.status !== "implementada" ? "disabled" : ""}`}>
@@ -52,12 +76,13 @@ function Home({ onOpen }: { onOpen: (c: string) => void }) {
         </section>
         <section>
           <h2>Proyectos</h2>
-          <table className="grid"><thead><tr><th>Código</th><th>Nombre</th><th>Cliente</th><th>Familia</th><th>Revisión</th><th>Estado</th><th>Actualizado</th></tr></thead>
+          {IS_LOCAL && store && <p className="home-note">Almacenamiento: {store}.</p>}
+          <div className="scroll-x"><table className="grid"><thead><tr><th>Código</th><th>Nombre</th><th>Cliente</th><th>Familia</th><th>Revisión</th><th>Estado</th><th>Actualizado</th></tr></thead>
             <tbody>{projects.map((p) => (
               <tr key={p.code} className="link" onClick={() => onOpen(p.code)}><td>{p.code}</td><td>{p.name}</td><td>{p.client}</td><td>{p.family}</td>
                 <td>{p.revisions.at(-1)?.rev ?? "—"}</td><td><span className="chip">{p.status_label}</span></td><td>{p.updated.replace("T", " ")}</td></tr>))}
-              {projects.length === 0 && <tr><td colSpan={7} className="muted">Sin proyectos todavía.</td></tr>}
-            </tbody></table>
+              {projects.length === 0 && <tr><td colSpan={7} className="muted">Sin proyectos todavía. Abra una plantilla o pulse «Nuevo diseño».</td></tr>}
+            </tbody></table></div>
         </section>
       </main>
     </div>
@@ -67,7 +92,8 @@ function Home({ onOpen }: { onOpen: (c: string) => void }) {
 const icon = (id: string) => ({ mesa_industrial: "▭", estanteria: "☰", puesto_trabajo: "⌂", armario: "▯" } as Dict)[id] ?? "■";
 
 function Header({ children }: { children?: React.ReactNode }) {
-  return <header className="topbar"><div className="brand"><b>MONXU</b><span>Ingeniería paramétrica de mobiliario industrial</span></div>{children}</header>;
+  return <header className="topbar"><div className="brand"><b>MONXU</b><span>Ingeniería paramétrica de mobiliario industrial</span>
+    {IS_LOCAL && <span className="engine-chip">Motor en el navegador</span>}</div>{children}</header>;
 }
 
 // ============================================================================ espacio de trabajo
@@ -96,6 +122,7 @@ function Workspace({ code, onBack }: { code: string; onBack: () => void }) {
   const [measuring, setMeasuring] = useState(false);
   const [view, setView] = useState<{ name: ViewName; n: number }>({ name: "iso", n: 0 });
   const [stale, setStale] = useState(true);
+  const theme = useTheme();
 
   const load = async () => { const p = await api.project(code); setProject(p); setDraft(p.working_params); return p; };
   useEffect(() => { load().then((p) => api.family(p.family).then(setFam)); /* eslint-disable-next-line */ }, [code]);
@@ -103,10 +130,11 @@ function Workspace({ code, onBack }: { code: string; onBack: () => void }) {
   const derived = useMemo(() => Object.fromEntries((design?.parameters ?? []).filter((p: Dict) => !p.derived).map((p: Dict) => [p.name, p.value])), [design]);
 
   async function generate() {
-    setBusy("Regenerando modelo CAD, cálculo, fabricación e interferencias…"); setError("");
+    setBusy(IS_LOCAL ? "Regenerando modelo, dimensionado y cálculo en el navegador…" : "Regenerando modelo CAD, cálculo, fabricación e interferencias…"); setError("");
     try {
       const changed = Object.fromEntries(Object.entries(draft).filter(([k, v]) => project!.working_params[k] !== v));
       if (Object.keys(changed).length) await api.setParams(code, changed);
+      await tick();
       const r = await api.design(code);
       setDesign(r.design); setViewer(r.viewer); setStale(false); await load();
     } catch (e) { setError((e as Error).message); }
@@ -146,7 +174,7 @@ function Workspace({ code, onBack }: { code: string; onBack: () => void }) {
             <button className={mode === "comercial" ? "on" : ""} onClick={() => setMode("comercial")}>Acabado realista</button>
             {stale && design && <span className="chip warn">Parámetros modificados: regenerar</span>}
           </div>
-          <Viewer payload={viewer} mode={mode} explode={explode} hidden={hidden} selected={selected} onSelect={setSelected} measuring={measuring} view={view} />
+          <Viewer payload={viewer} mode={mode} explode={explode} hidden={hidden} selected={selected} onSelect={setSelected} measuring={measuring} view={view} theme={theme} />
           {busy && <div className="busy">{busy}</div>}
           {error && <div className="error" onClick={() => setError("")}>{error}</div>}
           <div className="bottom">
@@ -187,7 +215,7 @@ function Summary({ design }: { design: Dict }) {
       <tr><th>Geometría</th><td className={design.status.geometry_complete ? "good" : "bad"}>{design.status.geometry_complete ? "Completa" : "Con errores"}</td></tr>
       <tr><th>Cálculo</th><td>{design.status.structural_label}</td></tr>
       {g && <tr><th>Determinante</th><td>{g.description} ({fmt(g.utilization, 3)})</td></tr>}
-      <tr><th>Interferencias</th><td>{design.interferences.interferences.length} ({design.interferences.pairs_checked} parejas)</td></tr>
+      <tr><th>Interferencias</th><td>{design.interferences.evaluated === false ? "No evaluadas en el navegador (B-rep en servidor)" : `${design.interferences.interferences.length} (${design.interferences.pairs_checked} parejas)`}</td></tr>
       <tr><th>Tiempos (s)</th><td>{Object.entries(design.timings).map(([k, v]) => `${k} ${v}`).join(" · ")}</td></tr>
     </tbody></table>
   );
@@ -196,8 +224,9 @@ function Summary({ design }: { design: Dict }) {
 function GeneratePanel({ project, design, stale, busy, onGenerate, reload }: { project: Project; design: Dict | null; stale: boolean; busy: string; onGenerate: () => void; reload: () => void }) {
   return (
     <div className="gen">
-      <p>La generación construye la geometría B-rep, regenera todas las piezas dependientes, calcula la estructura,
-        comprueba interferencias, fabricabilidad y coherencia del BOM.</p>
+      <p>{IS_LOCAL ? "La generación resuelve los parámetros «auto» por cálculo, construye todas las piezas dependientes, calcula la estructura "
+        + "(barras y placas), y comprueba fabricabilidad y coherencia del BOM, todo en el navegador."
+        : "La generación construye la geometría B-rep, regenera todas las piezas dependientes, calcula la estructura, comprueba interferencias, fabricabilidad y coherencia del BOM."}</p>
       <button className="primary big" disabled={!!busy} onClick={onGenerate}>GENERAR DISEÑO TÉCNICO</button>
       {design && !stale && <p className="good">Diseño regenerado: {design.product_code} · {design.qa.summary}</p>}
       <DocsPanel project={project} reload={reload} design={design} stale={stale} compact />
@@ -216,6 +245,12 @@ function DocsPanel({ project, reload, design, stale, compact }: { project: Proje
     catch (e) { setMsg((e as Error).message); }
   }
   async function dossier(rev: string) {
+    if (IS_LOCAL) {
+      setJob({ status: "running", stage: "generando DXF, CSV, SVG e informe" }); await tick();
+      try { const j = await api.dossier(project.code, rev); setJob(j); setFiles((x) => ({ ...x, [rev]: j.result.files })); reload(); }
+      catch (e) { setJob({ status: "error", error: (e as Error).message }); }
+      return;
+    }
     try {
       const j = await api.dossier(project.code, rev); setJob(j);
       const poll = async () => { const s = await api.job(j.id); setJob(s); if (s.status === "running") setTimeout(poll, 1500); else { reload(); loadFiles(rev); } };
@@ -233,21 +268,25 @@ function DocsPanel({ project, reload, design, stale, compact }: { project: Proje
         {last && !last.dossier && <button className="primary" disabled={job?.status === "running"} onClick={() => dossier(last.rev)}>GENERAR EXPEDIENTE DE FABRICACIÓN</button>}
         {msg && <span className="muted">{msg}</span>}
       </div>
-      {job && <p className={job.status === "error" ? "bad" : ""}>Expediente: {job.status === "running" ? `en curso (${job.stage})…` : job.status === "ok" ? `generado en ${job.result.seconds} s · ${job.result.qa.summary}` : job.error}</p>}
+      {IS_LOCAL && <p className="local-note">El expediente se genera aquí como ZIP (carpetas 01–06 con DXF de corte 1:1, BOM y compras en CSV, desarrollos y anidados
+        en SVG, malla STL, informe de cálculo HTML y manifiesto SHA-256). STEP, planos PDF y Excel con fórmulas se generan con el servidor a partir del
+        JSON paramétrico incluido.</p>}
+      {job && <p className={job.status === "error" ? "bad" : ""}>Expediente: {job.status === "running" ? `en curso (${job.stage})…` : job.status === "ok" ? `generado en ${job.result.seconds} s · ${job.result.qa.summary}${job.result.saved === "rechazada" ? " · descarga cancelada" : ""}` : job.error}</p>}
       {!compact && (
         <>
-          <table className="grid"><thead><tr><th>Rev.</th><th>Fecha</th><th>Producto</th><th>Masa</th><th>Cálculo</th><th>Control de calidad</th><th>Expediente</th></tr></thead>
+          <div className="scroll-x"><table className="grid"><thead><tr><th>Rev.</th><th>Fecha</th><th>Producto</th><th>Masa</th><th>Cálculo</th><th>Control de calidad</th><th>Expediente</th></tr></thead>
             <tbody>{project.revisions.map((r) => (
               <tr key={r.rev}><td>{r.rev}</td><td>{r.created.replace("T", " ")}</td><td>{r.product_code}</td><td>{fmt(r.mass_kg, 2)} kg</td><td>{r.structural}</td>
-                <td>{r.qa?.summary}</td><td>{r.dossier ? <><a href={api.fileUrl(project.code, r.rev, "expediente.zip")}>ZIP</a> · <a onClick={() => loadFiles(r.rev)}>archivos</a></> :
-                  <button className="mini" onClick={() => dossier(r.rev)}>generar</button>}</td></tr>))}</tbody></table>
+                <td>{r.qa?.summary}</td><td>{r.dossier ? (IS_LOCAL ? <><button className="mini" onClick={() => dossier(r.rev)}>descargar ZIP</button> · <a onClick={() => loadFiles(r.rev)}>archivos</a></>
+                  : <><a href={api.fileUrl(project.code, r.rev, "expediente.zip") ?? undefined}>ZIP</a> · <a onClick={() => loadFiles(r.rev)}>archivos</a></>) :
+                  <button className="mini" onClick={() => dossier(r.rev)}>generar</button>}</td></tr>))}</tbody></table></div>
           {Object.entries(files).map(([rev, fl]) => (
             <div key={rev} className="filelist"><h4>Expediente revisión {rev}</h4>
-              {fl.map((f) => <div key={f.path}><a href={api.fileUrl(project.code, rev, f.path)} target="_blank">{f.path}</a> <span className="muted">{(f.bytes / 1024).toFixed(0)} kB · sha256 {f.sha256.slice(0, 12)}…</span></div>)}
+              {fl.map((f) => <div key={f.path}>{IS_LOCAL ? <span>{f.path}</span> : <a href={api.fileUrl(project.code, rev, f.path) ?? undefined} target="_blank">{f.path}</a>} <span className="muted">{Math.max(1, Math.round(f.bytes / 1024))} kB · sha256 {f.sha256.slice(0, 12)}…</span></div>)}
             </div>))}
           <h4>Estado del proyecto</h4>
           <div className="row">
-            <input placeholder="Técnico competente que valida" value={tech} onChange={(e) => setTech(e.target.value)} />
+            <input id="tecnico" placeholder="Técnico competente que valida" value={tech} onChange={(e) => setTech(e.target.value)} />
             <button onClick={() => status("validado")}>Validar</button>
             <button onClick={() => status("preparado_fabricacion")}>Preparado para fabricación</button>
             <button onClick={() => status("fabricado")}>Fabricado</button>

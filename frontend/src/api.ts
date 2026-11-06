@@ -1,3 +1,5 @@
+import { localApi } from "./local/localApi";
+
 export type Dict = Record<string, any>;
 
 export interface ParamSpec {
@@ -28,6 +30,7 @@ export interface ViewerInstance {
 }
 
 export interface ViewerPayload {
+  // mallas de `parts`: base64 (servidor) o arrays tipados (navegador)
   product_code: string; parts: Record<string, Dict>; instances: ViewerInstance[]; bbox: number[][];
   subassemblies: Dict[]; tree: Dict;
 }
@@ -48,7 +51,8 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   return r.json() as Promise<T>;
 }
 
-export const api = {
+const serverApi = {
+  mode: "servidor" as "servidor" | "local",
   library: () => req<{ families: Dict[]; templates: Dict[] }>("GET", "/api/library"),
   family: (id: string) => req<FamilyInfo>("GET", `/api/families/${id}`),
   projects: () => req<Project[]>("GET", "/api/projects"),
@@ -67,8 +71,18 @@ export const api = {
   status: (code: string, status: string, user: string, validated_by?: string) =>
     req<Project>("POST", `/api/projects/${code}/status`, { status, user, validated_by }),
   statuses: () => req<{ id: string; label: string }[]>("GET", "/api/statuses"),
-  fileUrl: (code: string, rev: string, path: string) => `/api/projects/${code}/revisions/${rev}/files/${path}`,
+  fileUrl: (code: string, rev: string, path: string): string | null => `/api/projects/${code}/revisions/${rev}/files/${path}`,
 };
+
+/** En la versión artefacto (VITE_LOCAL=1) todo el motor se ejecuta en el navegador con la misma interfaz. */
+export const IS_LOCAL = import.meta.env.VITE_LOCAL === "1";
+type Api = typeof serverApi & {
+  assistantPrompt?: (code: string, message: string) => Promise<string>;
+  design: (code: string, onProgress?: (s: string) => void) => Promise<{ design: Dict; viewer: ViewerPayload }>;
+  assistant: (code: string, message: string, answers?: Dict, apply?: boolean, llm?: Dict | null) => Promise<Dict>;
+  dossier: (code: string, rev: string, onProgress?: (s: string) => void) => Promise<Dict>;
+};
+export const api: Api = IS_LOCAL ? (localApi as unknown as Api) : (serverApi as Api);
 
 export const fmt = (v: any, d = 1) =>
   typeof v === "number" ? (Math.abs(v - Math.round(v)) < 1e-9 ? String(Math.round(v)) : v.toFixed(d).replace(".", ",")) : v ?? "—";

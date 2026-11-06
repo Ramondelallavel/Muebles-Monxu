@@ -93,6 +93,55 @@ Ejemplo de la especificación (1.500 × 600 × 2.000 mm, 5 niveles, 150 kg/nivel
 - **Con anclaje:** 486 N de tracción por anclaje.
 - **Expediente:** 31 archivos sin errores bloqueantes.
 
+## Versión artefacto (motor en el navegador)
+
+La misma interfaz funciona sin servidor: el motor completo está portado a TypeScript en
+`frontend/src/engine/` (parámetros y dependencias, familias mesa y estantería, chapa plegada y
+desarrollos, FEM 3D de barras con solver skyline LDLᵀ y renumeración Cuthill-McKee, placas de
+Navier, comprobaciones EN 1993, dimensionado automático, plan de corte, anidado, DFM, BOM, control
+de calidad e intérprete del asistente). `frontend/src/local/` contiene la API local (misma interfaz
+que la del servidor) y el generador del expediente.
+
+```bash
+cd frontend && VITE_LOCAL=1 npx vite build --mode artifact && node ../tools/build_artifact.mjs dist-artifact monxu.html
+```
+
+- **Persistencia:** base de datos privada del artefacto por usuario (`data/users/<id>/<proyecto>`), con
+  revisiones inmutables e historial; en memoria si no hay base de datos.
+- **Expediente:** ZIP con las carpetas 01–06: JSON paramétrico nativo, malla STL, desarrollos SVG
+  acotados, DXF R12 1:1 en mm por pieza y por hoja de anidado, BOM/compras/pesos en CSV, plan de
+  corte, informe de cálculo HTML y manifiesto SHA-256.
+- **Asistente:** intérprete de reglas; dentro de Claude puede completarse con Claude (capacidad
+  `sample`), y las reglas prevalecen.
+- **Sólo en el servidor:** STEP B-rep, interferencias por volumen común, planos PDF con líneas
+  ocultas y Excel con fórmulas. El JSON paramétrico del expediente los regenera.
+
+### Validación cruzada navegador ↔ servidor
+
+`tools/webcheck/compare.py` ejecuta los mismos casos en los dos motores. Compara parámetros
+resueltos y su origen, derivados, piezas y masas, nodos del modelo FEM, estado y aprovechamiento
+de cada comprobación, reacciones, plan de corte, anidado, soldadura, pintura, DFM y totales del BOM.
+
+```bash
+cd frontend && npx esbuild ../tools/webcheck/run.ts --bundle --platform=node --format=esm --outfile=/tmp/webrun.mjs
+cd .. && python tools/webcheck/compare.py /tmp/webrun.mjs 60 11
+```
+
+Con las 12 plantillas, la aceptación 2000→2400, los dos diseños por defecto y 60 casos aleatorios
+(76 casos) no hay ninguna diferencia. El aprovechamiento coincide exactamente en todas las
+comprobaciones salvo el vuelco, donde el error relativo es ≤ 1,4·10⁻⁴ por el centro de gravedad
+calculado sobre la malla. `tools/webcheck/verify_dossier.py` relee con ezdxf los DXF del expediente
+del navegador: 0 errores, contornos cerrados, unidades mm y medidas iguales a los desarrollos del
+servidor. También comprueba las sumas SHA-256 del manifiesto.
+
+La comparación destapó dos fallos del motor de referencia, ya corregidos en ambos motores:
+
+- **Referencias duplicadas en estanterías:** en estanterías de 5–6 niveles, largueros geométricamente
+  idénticos recibían referencias distintas por ruido de coma flotante en las cotas de los taladros.
+  Ahora las cotas se redondean a 0,001 mm en la clave de pieza.
+- **Interacción de pandeo activada por ruido numérico:** en barras con axil nulo, un residuo de
+  −10⁻¹¹ N activaba la interacción de pandeo. Ahora se aplica un umbral de 1 mN.
+
 ## Datos que quedan como hipótesis o pendientes
 
 - **Empuje horizontal:** 300 N por defecto en el canto de la encimera. Con ese valor, una mesa vacía y ligera no supera el vuelco EQU, y el sistema lo informa así; el asistente pide el dato real.

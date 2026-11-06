@@ -1,5 +1,19 @@
-import { useState } from "react";
-import { api, fmt, SOURCE_LABEL, type Dict, type ParamSpec, type Project } from "./api";
+import { useEffect, useState } from "react";
+import { api, fmt, IS_LOCAL, SOURCE_LABEL, type Dict, type ParamSpec, type Project } from "./api";
+
+type SampleJson = { json: (input: string, opts?: Dict) => Promise<unknown> };
+/** Capacidad 'sample' del artefacto (Claude con la cuenta del usuario); null fuera de un visor de Claude. */
+function useSample() {
+  const [s, setS] = useState<SampleJson | null>(null);
+  useEffect(() => {
+    const w = window as unknown as { claude?: { use?: (n: string) => Promise<unknown> } };
+    if (!IS_LOCAL || !w.claude?.use) return;
+    let alive = true;
+    w.claude.use("sample").then((x) => { if (alive && x) setS(x as SampleJson); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  return [s, setS] as const;
+}
 
 // ============================================================================ formulario de parámetros
 export function ParamForm({ specs, values, sources, derived, onChange }: {
@@ -50,13 +64,27 @@ export function ChatPanel({ project, onApplied }: { project: Project; onApplied:
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [last, setLast] = useState<Dict | null>(null);
+  const [sample, setSample] = useSample();
+  const [useLlm, setUseLlm] = useState(true);
   async function send(text: string, answers?: Dict, apply = false) {
     setBusy(true);
     if (text) setLog((l) => [...l, { who: "usuario", text }]);
     try {
-      const r = await api.assistant(project.code, text, answers, apply);
+      let llm: Dict | null = null, llmNote = "";
+      if (text && sample && useLlm && api.assistantPrompt) {
+        try {
+          const out = await sample.json(await api.assistantPrompt(project.code, text), { modelTier: "quick" });
+          if (out && typeof out === "object" && !Array.isArray(out)) llm = out as Dict;
+        } catch (e) {
+          const code = (e as { code?: string }).code;
+          if (code === "not_granted") { setSample(null); llmNote = "\n\n(Claude no autorizado en esta vista: se usa sólo el intérprete de reglas.)"; }
+          else llmNote = `\n\n(Claude no disponible ahora${code ? `: ${code}` : ""}; se usa el intérprete de reglas.)`;
+        }
+      }
+      const r = await api.assistant(project.code, text, answers, apply, llm);
       setLast(r);
-      setLog((l) => [...l, { who: "ia", text: r.reply + (r.applied ? "\n\n✔ Parámetros aplicados al proyecto." : ""), data: r }]);
+      setLog((l) => [...l, { who: "ia", text: r.reply + (r.applied ? "\n\n✔ Parámetros aplicados al proyecto." : "") + llmNote
+        + (r.engine === "claude+reglas" ? "\n\nInterpretación: reglas deterministas + Claude (las reglas prevalecen; cada dato queda trazado)." : ""), data: r }]);
       if (r.applied) onApplied();
     } catch (e) { setLog((l) => [...l, { who: "ia", text: "Error: " + (e as Error).message }]); }
     setBusy(false);
@@ -79,13 +107,15 @@ export function ChatPanel({ project, onApplied }: { project: Project; onApplied:
         ))}
       </div>
       <div className="chat-input">
-        <textarea value={msg} rows={3} placeholder="Escriba su solicitud o respuesta…" onChange={(e) => setMsg(e.target.value)}
+        <textarea id="mensaje" value={msg} rows={3} placeholder="Escriba su solicitud o respuesta…" onChange={(e) => setMsg(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && msg.trim()) { e.preventDefault(); send(msg); } }} />
         <div className="row">
           <button disabled={busy || !msg.trim()} onClick={() => send(msg)}>Enviar</button>
           <button className="primary" disabled={busy || !last?.ready_to_generate} onClick={() => send("", {}, true)}>
             Aplicar parámetros al diseño</button>
         </div>
+        {sample && <label className="llm-toggle"><input id="usar-claude" type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} />
+          Completar la interpretación con Claude (usa su cuenta; las reglas prevalecen)</label>}
       </div>
     </div>
   );
@@ -165,11 +195,11 @@ export function AlertsPanel({ design }: { design: Dict }) {
         <span className="chip pend">Validación definitiva por técnico competente: pendiente</span>
       </div>
       <p className="muted">{q.summary}</p>
-      <table className="grid"><thead><tr><th>Nivel</th><th>Código</th><th>Descripción</th></tr></thead><tbody>
+      <div className="scroll-x"><table className="grid"><thead><tr><th>Nivel</th><th>Código</th><th>Descripción</th></tr></thead><tbody>
         {[...design.design_notes.map((n: Dict) => ({ level: n.level, code: n.code, message: n.message })),
           ...q.items.filter((i: Dict) => i.level !== "ok"), ...q.items.filter((i: Dict) => i.level === "ok")].map((i: Dict, k: number) => (
           <tr key={k}><td><span className={`dot ${LV[i.level]}`} />{i.level}</td><td>{i.code}</td><td>{i.message}</td></tr>))}
-      </tbody></table>
+      </tbody></table></div>
     </div>
   );
 }
@@ -181,12 +211,12 @@ export function CalcPanel({ eng }: { eng: Dict }) {
       <p className="muted">Modelo de barras: {eng.fem.nodes} nodos · {eng.fem.elements} elementos · {eng.fem.dof} GDL.
         Combinaciones: {Object.keys(eng.combinations.ELU).concat(Object.keys(eng.combinations.ELS)).join(", ")}</p>
       {eng.pending.length > 0 && <ul className="pending">{eng.pending.map((p: string) => <li key={p}>PENDIENTE: {p}</li>)}</ul>}
-      <table className="grid"><thead><tr><th>Comprobación</th><th>Referencia</th><th>Comb.</th><th>Valor</th><th>Límite</th><th>Aprov.</th><th>Estado</th></tr></thead>
+      <div className="scroll-x"><table className="grid"><thead><tr><th>Comprobación</th><th>Referencia</th><th>Comb.</th><th>Valor</th><th>Límite</th><th>Aprov.</th><th>Estado</th></tr></thead>
         <tbody>{eng.checks.map((c: Dict) => (
           <tr key={c.id}><td>{c.description}</td><td className="muted">{c.standard}</td><td>{c.combination}</td>
             <td>{c.value === null ? "—" : `${fmt(c.value, 2)} ${c.unit}`}</td><td>{c.limit === null ? "—" : `${fmt(c.limit, 2)} ${c.unit}`}</td>
             <td><Bar u={c.utilization} /></td><td><span className={`dot ${LV[c.status]}`} />{c.status}</td></tr>))}
-        </tbody></table>
+        </tbody></table></div>
       <h4>Hipótesis</h4><ul>{eng.hypotheses.map((h: string) => <li key={h}>{h}</li>)}</ul>
       <h4>Limitaciones</h4><ul>{eng.limitations.map((h: string) => <li key={h}>{h}</li>)}</ul>
     </div>
@@ -202,14 +232,14 @@ export function BomPanel({ bom }: { bom: Dict }) {
   const t = bom.totals;
   return (
     <div>
-      <table className="grid"><thead><tr><th>Pos.</th><th>Referencia</th><th>Descripción</th><th>Material</th><th>Espesor</th><th>Largo</th>
+      <div className="scroll-x"><table className="grid"><thead><tr><th>Pos.</th><th>Referencia</th><th>Descripción</th><th>Material</th><th>Espesor</th><th>Largo</th>
         <th>Ancho</th><th>Cant.</th><th>Peso unit.</th><th>Peso total</th></tr></thead>
         <tbody>{bom.rows.map((r: Dict) => (
           <tr key={r.ref}><td>{r.pos}</td><td>{r.ref}</td><td>{r.description}</td><td>{r.material}</td><td>{fmt(r.thickness)}</td>
             <td>{fmt(r.length)}</td><td>{fmt(r.width)}</td><td>{r.qty}</td><td>{fmt(r.unit_mass, 3)}</td><td>{fmt(r.total_mass, 3)}</td></tr>))}
           <tr className="total"><td colSpan={7}>Totales: {t.components} componentes ({t.manufactured_parts} fabricados, {t.standard_parts} normalizados)</td>
             <td>{t.components}</td><td /><td>{fmt(t.total_mass, 2)} kg</td></tr>
-        </tbody></table>
+        </tbody></table></div>
       <div className="cols">
         <div><h4>Metros de perfil</h4><ul>{Object.entries(t.profile_meters).map(([k, v]) => <li key={k}>{k}: {fmt(v as number, 3)} m</li>)}</ul></div>
         <div><h4>Superficie de chapa</h4><ul>{Object.entries(t.sheet_area_m2).map(([k, v]) => <li key={k}>{k}: {fmt(v as number, 4)} m²</li>)}</ul></div>
