@@ -51,8 +51,8 @@ function Home({ onOpen }: { onOpen: (c: string) => void }) {
         <section>
           <h2>1 · Selección de producto</h2>
           {IS_LOCAL && <p className="home-note">Todo el motor (geometría, dimensionado, cálculo por barras y placas, fabricación, BOM y control de calidad)
-            se ejecuta en este navegador. Es el mismo motor del servidor, portado y contrastado con él caso a caso. STEP, interferencias B-rep
-            y planos PDF requieren el servidor.</p>}
+            se ejecuta en este navegador. Es el mismo motor del servidor, portado y contrastado con él caso a caso. Cada revisión se descarga como un expediente ZIP
+            con STEP, planos PDF, instrucciones de montaje, DXF de corte, BOM en Excel y CSV, plan de corte, anidado e informe de cálculo.</p>}
           <div className="newp"><input id="nombre" placeholder="Nombre del proyecto" value={name} onChange={(e) => setName(e.target.value)} />
             <input id="cliente" placeholder="Cliente" value={client} onChange={(e) => setClient(e.target.value)} />{err && <span className="bad">{err}</span>}</div>
           <div className="cards">
@@ -187,7 +187,7 @@ function Workspace({ code, onBack }: { code: string; onBack: () => void }) {
               {design && tab === "Fabricación" && <FabPanel plan={design.manufacturing} dfm={design.dfm} />}
               {design && tab === "Operaciones" && <FeaturesPanel design={design} />}
               {tab === "Documentos" && <DocsPanel project={project} reload={load} design={design} stale={stale} />}
-              {tab === "Historial" && <HistoryPanel code={code} />}
+              {tab === "Historial" && <HistoryPanel code={code} updated={project.updated} />}
             </div>
           </div>
         </section>
@@ -224,8 +224,8 @@ function Summary({ design }: { design: Dict }) {
 function GeneratePanel({ project, design, stale, busy, onGenerate, reload }: { project: Project; design: Dict | null; stale: boolean; busy: string; onGenerate: () => void; reload: () => void }) {
   return (
     <div className="gen">
-      <p>{IS_LOCAL ? "La generación resuelve los parámetros «auto» por cálculo, construye todas las piezas dependientes, calcula la estructura "
-        + "(barras y placas), y comprueba fabricabilidad y coherencia del BOM, todo en el navegador."
+      <p>{IS_LOCAL ? "La generación resuelve los parámetros «auto» por cálculo, construye los sólidos de todas las piezas, calcula la estructura "
+        + "(barras y placas) y comprueba interferencias, fabricabilidad y coherencia del BOM, todo en el navegador."
         : "La generación construye la geometría B-rep, regenera todas las piezas dependientes, calcula la estructura, comprueba interferencias, fabricabilidad y coherencia del BOM."}</p>
       <button className="primary big" disabled={!!busy} onClick={onGenerate}>GENERAR DISEÑO TÉCNICO</button>
       {design && !stale && <p className="good">Diseño regenerado: {design.product_code} · {design.qa.summary}</p>}
@@ -246,8 +246,8 @@ function DocsPanel({ project, reload, design, stale, compact }: { project: Proje
   }
   async function dossier(rev: string) {
     if (IS_LOCAL) {
-      setJob({ status: "running", stage: "generando DXF, CSV, SVG e informe" }); await tick();
-      try { const j = await api.dossier(project.code, rev); setJob(j); setFiles((x) => ({ ...x, [rev]: j.result.files })); reload(); }
+      setJob({ status: "running", stage: "regenerando la revisión" }); await tick();
+      try { const j = await api.dossier(project.code, rev, (stage: string) => setJob({ status: "running", stage })); setJob(j); setFiles((x) => ({ ...x, [rev]: j.result.files })); reload(); }
       catch (e) { setJob({ status: "error", error: (e as Error).message }); }
       return;
     }
@@ -268,9 +268,10 @@ function DocsPanel({ project, reload, design, stale, compact }: { project: Proje
         {last && !last.dossier && <button className="primary" disabled={job?.status === "running"} onClick={() => dossier(last.rev)}>GENERAR EXPEDIENTE DE FABRICACIÓN</button>}
         {msg && <span className="muted">{msg}</span>}
       </div>
-      {IS_LOCAL && <p className="local-note">El expediente se genera aquí como ZIP (carpetas 01–06 con DXF de corte 1:1, BOM y compras en CSV, desarrollos y anidados
-        en SVG, malla STL, informe de cálculo HTML y manifiesto SHA-256). STEP, planos PDF y Excel con fórmulas se generan con el servidor a partir del
-        JSON paramétrico incluido.</p>}
+      {IS_LOCAL && <p className="local-note">El expediente se genera aquí y se descarga como un único ZIP: 01 STEP del conjunto y de cada pieza, STL y JSON
+        paramétrico · 02 planos PDF A3 (conjunto, estructura, perfiles, chapas, desarrollos, pletinas, soldaduras, explosionado, montaje y despiece) · 03 DXF de
+        corte 1:1 y anidados · 04 BOM en Excel con fórmulas y CSV · 05 plan de corte y anidado · 06 instrucciones de montaje, informe de cálculo e historial,
+        con manifiesto SHA-256. Cada archivo se verifica antes de empaquetar.</p>}
       {job && <p className={job.status === "error" ? "bad" : ""}>Expediente: {job.status === "running" ? `en curso (${job.stage})…` : job.status === "ok" ? `generado en ${job.result.seconds} s · ${job.result.qa.summary}${job.result.saved === "rechazada" ? " · descarga cancelada" : ""}` : job.error}</p>}
       {!compact && (
         <>
@@ -298,9 +299,9 @@ function DocsPanel({ project, reload, design, stale, compact }: { project: Proje
   );
 }
 
-function HistoryPanel({ code }: { code: string }) {
+function HistoryPanel({ code, updated }: { code: string; updated?: string }) {
   const [p, setP] = useState<Dict | null>(null);
-  useEffect(() => { api.project(code).then(setP); }, [code]);
+  useEffect(() => { api.project(code).then(setP); }, [code, updated]);
   if (!p) return null;
   return (
     <table className="grid"><thead><tr><th>Fecha</th><th>Tipo</th><th>Autor</th><th>Detalle</th></tr></thead><tbody>

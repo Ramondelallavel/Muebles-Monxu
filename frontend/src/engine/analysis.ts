@@ -406,7 +406,8 @@ export function analyze(model, includeStability = true, includeWelds = true) {
       const Mstb = pf.gamma_G_stb * Wtot * lev, Mdst = pf.gamma_Q_dst * H_N * hgt;
       const ratio = Mstb > 0 ? Mdst / Mstb : Infinity;
       const what = st.product_word ?? "mesa";
-      const det = { peso_N: Wtot, cdg_mm: cog.map((v) => pyRound(v, 1)), brazo_mm: lev };
+      // empuje de servicio que el conjunto vacío resiste sin anclaje (EQU): γQ·H·h = γG,stb·W·brazo
+      const det = { peso_N: Wtot, cdg_mm: cog.map((v) => pyRound(v, 1)), brazo_mm: lev, empuje_admisible_N: Math.floor(Mstb / (pf.gamma_Q_dst * hgt)) };
       if (ps.ANCLAJE === "al_suelo") {
         const base = dirn === "+Y" || dirn === "-Y" ? ymax - ymin : xmax - xmin;
         const T = base > 0 ? Math.max(0.0, (Mdst - Mstb) / base) : Infinity;

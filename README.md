@@ -108,13 +108,25 @@ cd frontend && VITE_LOCAL=1 npx vite build --mode artifact && node ../tools/buil
 
 - **Persistencia:** base de datos privada del artefacto por usuario (`data/users/<id>/<proyecto>`), con
   revisiones inmutables e historial; en memoria si no hay base de datos.
-- **Expediente:** ZIP con las carpetas 01–06: JSON paramétrico nativo, malla STL, desarrollos SVG
-  acotados, DXF R12 1:1 en mm por pieza y por hoja de anidado, BOM/compras/pesos en CSV, plan de
-  corte, informe de cálculo HTML y manifiesto SHA-256.
+- **Geometría:** cada pieza es un sólido facetado cerrado con sus taladros. Los tubos se modelan como paredes y
+  esquinas EN 10219; las chapas, como base, pliegues y alas. El volumen se desvía < 0,2 % del analítico. De estos
+  sólidos salen el visor, el STEP, las aristas de los planos y la detección de interferencias (cruce de triángulos
+  con penetración > 0,25 mm, más la prueba de pieza contenida).
+- **Expediente (un único ZIP, carpetas 01–06):**
+  - 01: STEP AP214 del conjunto, con estructura de producto y una ocurrencia por instancia, y de cada pieza; STL y JSON paramétrico.
+  - 02: planos PDF A3 con cajetín ISO 7200 y vistas en primer diedro, con líneas ocultas. Hojas: conjunto, estructura
+    soldada, perfiles y plan de corte, piezas de chapa con sección del pliegue, desarrollos, pletinas, soldaduras
+    ISO 2553 con detalles, explosionado, montaje y despiece.
+  - 03: DXF R12 1:1 por pieza y por hoja de anidado.
+  - 04: BOM en Excel con fórmulas (con su valor calculado) y CSV.
+  - 05: plan de corte y anidado.
+  - 06: instrucciones de montaje en PDF (una hoja por paso), informe de cálculo HTML e historial.
+  - Manifiesto SHA-256. Antes de empaquetar se verifica cada archivo: sólidos del STEP, hojas del PDF, cotas del plano
+    frente a la geometría, Excel frente al BOM y medidas de los DXF.
 - **Asistente:** intérprete de reglas; dentro de Claude puede completarse con Claude (capacidad
   `sample`), y las reglas prevalecen.
-- **Sólo en el servidor:** STEP B-rep, interferencias por volumen común, planos PDF con líneas
-  ocultas y Excel con fórmulas. El JSON paramétrico del expediente los regenera.
+- **Diferencias con el servidor:** el STEP del navegador es facetado (caras planas), no B-rep con superficies
+  exactas. Las interferencias se detectan sobre esos sólidos facetados, no por volumen común B-rep.
 
 ### Validación cruzada navegador ↔ servidor
 
@@ -129,10 +141,21 @@ cd .. && python tools/webcheck/compare.py /tmp/webrun.mjs 60 11
 
 Con las 12 plantillas, la aceptación 2000→2400, los dos diseños por defecto y 60 casos aleatorios
 (76 casos) no hay ninguna diferencia. El aprovechamiento coincide exactamente en todas las
-comprobaciones salvo el vuelco, donde el error relativo es ≤ 1,4·10⁻⁴ por el centro de gravedad
-calculado sobre la malla. `tools/webcheck/verify_dossier.py` relee con ezdxf los DXF del expediente
-del navegador: 0 errores, contornos cerrados, unidades mm y medidas iguales a los desarrollos del
-servidor. También comprueba las sumas SHA-256 del manifiesto.
+comprobaciones salvo el vuelco, donde el error relativo es ≤ 1,6·10⁻⁴ por el centro de gravedad
+calculado sobre los sólidos facetados.
+
+`tools/webcheck/verify_dossier.py` relee el ZIP generado por el navegador con las herramientas del servidor:
+
+- **STEP:** reimportación con OpenCascade. Mesa de 2000 mm: 99/99 sólidos válidos y volumen a −0,07 % del B-rep;
+  estantería de 2888 mm: 311/311.
+- **PDF:** pdfplumber (hojas A3 con cajetín).
+- **Excel:** openpyxl (fórmulas, unidades y masa frente al BOM del servidor).
+- **DXF:** ezdxf (0 errores, contornos cerrados y medidas iguales a los desarrollos del servidor).
+- **Manifiesto:** comprobación de las sumas SHA-256.
+
+`tools/webcheck/fuzz.ts` recorre parámetros aleatorios, incluidos los avanzados. En 800 casos (20 expedientes
+completos): 0 excepciones, 0 valores no finitos y 0 sólidos abiertos. Todas las interferencias detectadas acompañan a
+un error de diseño ya señalado por las reglas (por ejemplo, tuerca soldada mayor que el interior de la pata).
 
 La comparación destapó dos fallos del motor de referencia, ya corregidos en ambos motores:
 

@@ -97,7 +97,8 @@ export default function Viewer(p: Props) {
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.BufferAttribute(decode(part.positions, Float32Array), 3));
       g.setIndex(new THREE.BufferAttribute(decode(part.indices, Uint32Array), 1));
-      g.computeVertexNormals();
+      if (part.normals) g.setAttribute("normal", new THREE.BufferAttribute(part.normals, 3));
+      else g.computeVertexNormals();
       geoms.set(key, { g, e: new THREE.EdgesGeometry(g, 28) });
     }
     for (const inst of p.payload.instances) {
@@ -200,7 +201,7 @@ export default function Viewer(p: Props) {
   return (
     <div className="viewer" ref={host} onDoubleClick={pick} onClick={(e) => p.measuring && pick(e)}>
       {p.mode === "comercial" && <div className="viewer-badge warn">Visualización comercial · no es documentación técnica</div>}
-      {p.mode === "tecnico" && <div className="viewer-badge">{IS_LOCAL ? "Modelo técnico · malla generada en el navegador (taladros no representados)" : "Modelo CAD técnico · B-rep OpenCascade teselado"}</div>}
+      {p.mode === "tecnico" && <div className="viewer-badge">{IS_LOCAL ? "Modelo técnico · sólidos facetados generados en el navegador" : "Modelo CAD técnico · B-rep OpenCascade teselado"}</div>}
       {p.measuring && (
         <div className="viewer-measure">
           {dist === null ? `Medición: seleccione ${2 - measurePts.length} punto(s)` :

@@ -45,9 +45,12 @@ async function all() { return (await (await getStore()).list()).sort((a, b) => (
 async function get(code) { const p = (await all()).find((x) => x.code === code); if (!p) throw new Error(`Proyecto no encontrado: ${code}`); return JSON.parse(JSON.stringify(p)); }
 async function put(p) {
   p.updated = now();
-  p.changes = (p.changes ?? []).slice(-300);
-  if (p.assistant_state?.history) p.assistant_state.history = p.assistant_state.history.slice(-40);
-  await (await getStore()).put(p);
+  p.changes = (p.changes ?? []).slice(-200);
+  if (p.assistant_state?.history) p.assistant_state.history = p.assistant_state.history.slice(-30);
+  // cada documento de la base de datos admite 256 KiB: se recorta el historial más antiguo si hace falta
+  while (JSON.stringify(p).length > 230000 && p.changes.length > 20) p.changes = p.changes.slice(Math.ceil(p.changes.length / 4));
+  try { await (await getStore()).put(p); }
+  catch (e) { throw new Error(`No se ha podido guardar el proyecto (${e?.code ?? e?.message ?? "error de almacenamiento"}). Vuelva a intentarlo.`); }
 }
 const log = (p, kind, detail, author = "") => (p.changes ??= []).push({ timestamp: now(), kind, author, detail });
 const projectDict = (p) => ({ ...p, status_label: STATUS_LABELS[p.status],
@@ -98,7 +101,9 @@ export const localApi = {
   },
   setParams: async (code, values, sources = null, replace = false, author = "") => {
     const p = await get(code);
-    family(p.family).newParams({ ...(replace ? {} : p.working_params), ...values });     // valida (lanza ParamError)
+    const checked = family(p.family).newParams({ ...(replace ? {} : p.working_params), ...values });     // valida (lanza ParamError)
+    // se guardan los valores ya convertidos (números, no los textos del formulario): historial y revisiones limpios
+    values = Object.fromEntries(Object.keys(values).map((k) => [k, k in checked.values ? checked.values[k] : values[k]]));
     const old = { ...p.working_params };
     const nw = replace ? { ...values } : { ...old, ...values };
     const changes = {};
@@ -155,8 +160,10 @@ export const localApi = {
     if (!r) throw new Error(`Revisión ${rev} no encontrada`);
     const id = `job-${Date.now()}`;
     const t0 = performance.now();
-    const { model, summary } = regenerate(p.family, r.params, r.sources, onProgress);
-    const out = await buildDossier(p, r, model, summary);
+    onProgress?.("regenerando la revisión congelada");
+    await new Promise((res) => setTimeout(res, 0));
+    const { model, summary } = regenerate(p.family, r.params, r.sources);
+    const out = await buildDossier(p, r, model, summary, onProgress);
     if (out.qa.blocking) throw new Error("La verificación de los archivos exportados ha fallado: no se publica el expediente. " + out.qa.items.filter((i) => i.level === "bloqueante").map((i) => i.message).join(" "));
     const saved = await deliver(out.name + ".zip", out.zip);
     if (!r.dossier) {

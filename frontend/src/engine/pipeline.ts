@@ -7,6 +7,7 @@ import { family } from "./families";
 import { instanceBBox, modelBBox, partGeometry } from "./geometry";
 import { buildBom, dfmCheck, manufacturingPlan } from "./manufacturing";
 import { build } from "./sizing";
+import { checkInterferences } from "./interference";
 import { f as fx } from "./util";
 
 const BLOCK = "bloqueante", WARN = "advertencia", OKL = "ok", PEND = "pendiente";
@@ -23,7 +24,7 @@ export class QA {
   }
 }
 
-export function modelChecks(model, eng, dfm, bom) {
+export function modelChecks(model, eng, dfm, bom, interf) {
   const q = new QA();
   const ps = model.params.values;
   // geometría: mallas cerradas y volumen positivo (la validez B-rep se comprueba en el servidor)
@@ -41,8 +42,9 @@ export function modelChecks(model, eng, dfm, bom) {
     seen.set(k, i.id);
   }
   q.add(dup.length ? BLOCK : OKL, "GEO-DUPLICADOS", dup.length ? `Componentes duplicados en la misma posición: ${JSON.stringify(dup)}` : "Sin componentes duplicados coincidentes.");
-  q.add(PEND, "GEO-INTERFERENCIAS", "Detección de interferencias por volumen común B-rep: no disponible en el navegador (requiere OpenCascade en el servidor). "
-    + "Las holguras de diseño se comprueban por regla (GEO-HOLGURAS).");
+  const nI = interf.interferences.length;
+  q.add(nI ? BLOCK : OKL, "GEO-INTERFERENCIAS", nI ? `${nI} interferencias: ` + interf.interferences.map((x) => `${x.a}↔${x.b} ${x.penetration_mm ?? "contenida"} mm`).join("; ")
+    : `Sin interferencias (${interf.pairs_checked} parejas con envolventes solapadas evaluadas sobre los sólidos facetados; penetración admitida ${String(interf.tolerance_mm).replace(".", ",")} mm por teselado).`);
   for (const n of model.design_notes) {
     if (n.level === "error") q.add(BLOCK, n.code, n.message);
     else if (n.level === "advertencia") q.add(WARN, n.code, n.message);
@@ -100,18 +102,29 @@ export function modelChecks(model, eng, dfm, bom) {
   const refs = Object.values(model.parts).map((p) => p.ref);
   q.add(new Set(refs).size === refs.length && refs.every(Boolean) ? OKL : BLOCK, "BOM-REFERENCIAS",
     new Set(refs).size === refs.length ? "Referencias únicas asignadas a todas las piezas." : "Referencias duplicadas.");
-  // desarrollo frente a la malla 3D: volumen de la malla (sin taladros) = área bruta del desarrollo·t + corrección de pliegues
-  for (const p of Object.values(model.parts)) if (p.kind === "chapa") {
-    const s = p.spec, fl = p.flat;
-    let exp = fl.grossArea * s.t;
-    for (const L of s.bendLengths()) exp += (Math.PI / 2) * s.t * s.t * (0.5 - s.K) * L;
-    const dev = Math.abs(partGeometry(p).volume - exp) / exp;
-    q.add(dev < 2e-3 ? OKL : BLOCK, "CHAPA-DESARROLLO", dev < 2e-3
-      ? `${p.ref}: desarrollo coherente con el sólido 3D plegado (desviación de volumen ${dev.toExponential(1)}, arcos teselados).`
-      : `${p.ref}: el desarrollo NO coincide con el sólido 3D (desviación de volumen ${dev.toExponential(1)}).`);
+  // sólido facetado frente a la definición analítica de cada pieza (volumen con taladros)
+  const volDev = [];
+  for (const p of Object.values(model.parts)) {
+    if (p.kind === "normalizado") continue;
+    const dev = Math.abs(partGeometry(p).volume - p.volume) / p.volume;
+    if (p.kind === "chapa") {
+      q.add(dev < 2e-3 ? OKL : BLOCK, "CHAPA-DESARROLLO", dev < 2e-3
+        ? `${p.ref}: desarrollo coherente con el sólido 3D plegado con taladros (desviación de volumen ${dev.toExponential(1)}, radios teselados).`
+        : `${p.ref}: el desarrollo NO coincide con el sólido 3D (desviación de volumen ${dev.toExponential(1)}): revisar taladros en zona de pliegue.`);
+    } else if (dev > 5e-3) volDev.push(`${p.ref} ${(dev * 100).toFixed(2)} %`);
   }
-  if (eng.status === "NO_CUMPLE") q.add(WARN, "CALC-NO-CUMPLE", "Verificación estructural preliminar NO superada (no apto para fabricación hasta modificar el diseño): "
-    + eng.checks.filter((c) => c.status === "NO_CUMPLE").map((c) => c.description).join("; "));
+  q.add(volDev.length ? BLOCK : OKL, "GEO-VOLUMEN", volDev.length ? `Volumen del sólido distinto del analítico: ${volDev.join("; ")}`
+    : "Volumen de cada sólido (perfiles con taladros y pletinas) coherente con su definición analítica (< 0,5 %, radios teselados).");
+  if (eng.status === "NO_CUMPLE") {
+    const fails = eng.checks.filter((c) => c.status === "NO_CUMPLE");
+    let advice = "";
+    const v = fails.find((c) => c.id === "E.VUELCO");
+    if (v?.details?.empuje_admisible_N != null) advice = ` · Propuesta frente al vuelco: vacía, la configuración admite ${Math.round(v.details.empuje_admisible_N)} N de empuje `
+      + `horizontal sin anclar (supuesto actual ${Math.round(ps.CARGA_HORIZONTAL ?? 0)} N). Confirme el empuje real en «Cargas y uso» o elija ANCLAJE = al suelo.`;
+    if (fails.some((c) => c.id !== "E.VUELCO")) advice += " · Las demás comprobaciones se corrigen dejando los perfiles y espesores en «auto» para que el dimensionado los aumente.";
+    q.add(WARN, "CALC-NO-CUMPLE", "Verificación estructural preliminar NO superada (no apto para fabricación hasta modificar el diseño): "
+      + fails.map((c) => c.description).join("; ") + advice);
+  }
   else if (eng.status === "PENDIENTE") q.add(PEND, "CALC-PENDIENTE", "Verificación estructural incompleta: " + (eng.pending.length ? eng.pending : ["datos pendientes"]).join("; "));
   else q.add(OKL, "CALC", "Verificación estructural preliminar automatizada: CUMPLE.");
   q.add(PEND, "VALIDACION-TECNICA", "Validación definitiva por técnico competente pendiente de firma.");
@@ -138,15 +151,17 @@ export function regenerate(familyId, values, sources = {}, onProgress = null) {
   const dfm = dfmCheck(model, plan);
   const bom = buildBom(model, plan);
   t.fabricacion = (now() - t1) / 1000;
-  const q = modelChecks(model, eng, dfm, bom);
+  t1 = now();
+  const interf = checkInterferences(model);
+  t.interferencias = (now() - t1) / 1000;
+  const q = modelChecks(model, eng, dfm, bom, interf);
   t.total = (now() - t0) / 1000;
   const qa = q.result();
   const summary = {
     family: familyId, product_code: model.product_code, parameters: model.parameterTable(), requested: { ...model.requested.values },
     design_notes: model.design_notes, feature_tree: model.featureTree(), component_tree: model.componentTree(),
     engineering: eng, manufacturing: plan, bom, dfm,
-    interferences: { pairs_checked: 0, instances: model.instances.length, interferences: [], tolerance_mm3: 0.5, evaluated: false,
-      note: "No evaluadas en el navegador (requiere B-rep)." },
+    interferences: interf,
     qa, status: { geometry_complete: qa.blocking === 0, technically_verified: eng.status === "CUMPLE", structural: eng.status, structural_label: eng.status_label },
     mass_kg: bom.totals.total_mass, timings: Object.fromEntries(Object.entries(t).map(([k, v]) => [k, Math.round(v * 1000) / 1000])),
     catalog_versions: C.versions, engine: "navegador",
