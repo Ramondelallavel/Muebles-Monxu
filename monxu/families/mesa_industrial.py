@@ -30,16 +30,16 @@ from .base import ProductFamily, register
 
 SHS = [c for c, p in catalog.profiles().items() if p.type == "SHS"]
 ALLP = list(catalog.profiles())
-STRUCT_MATERIALS = ["S235JRH", "S355J2H", "1.4301", "1.4404", "EN AW-6082 T6"]
-SHEET_MATERIALS = ["S235JR", "DC01", "1.4301", "1.4404", "EN AW-5754 H22"]
+STRUCT_MATERIALS = [c for c, m in catalog._load("materials")["materials"].items() if "tubo" in m.get("forms", [])]
+SHEET_MATERIALS = [c for c, m in catalog._load("materials")["materials"].items() if "chapa" in m.get("forms", [])]
 FEET = [c for c, d in catalog.components().items() if d["category"] == "patas"]
 
 # Candidatos de dimensionado (orden creciente de masa por metro)
 CANDIDATES = {
     "PERFIL_PATA": ["SHS 40x40x2", "SHS 40x40x3", "SHS 50x50x2", "SHS 50x50x3", "SHS 60x60x3", "SHS 70x70x3",
-                    "SHS 80x80x3", "SHS 80x80x4"],
+                    "SHS 80x80x3", "SHS 80x80x4", "SHS 90x90x4", "SHS 100x100x4"],
     "PERFIL_LARGUERO": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2", "RHS 80x40x2", "RHS 60x40x3",
-                        "RHS 80x40x3", "RHS 100x50x3"],
+                        "RHS 80x40x3", "RHS 100x50x3", "RHS 100x50x4", "RHS 120x60x4"],
     "PERFIL_TRAVESANO": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2", "RHS 80x40x2"],
     "PERFIL_BASTIDOR": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2"],
 }
@@ -128,19 +128,19 @@ class MesaIndustrial(ProductFamily):
             P("MATERIAL_ESTRUCTURAL", "Material de la estructura", "choice", "S235JRH", None, "materiales",
               choices=STRUCT_MATERIALS),
             P("MATERIAL_CHAPA", "Material de chapa", "choice", "S235JR", None, "materiales", choices=SHEET_MATERIALS),
-            P("ESPESOR_CHAPA", "Espesor de chapa de encimera", "float", 2.0, "mm", "materiales", 0.8, 6,
+            P("ESPESOR_CHAPA", "Espesor de chapa de encimera", "float", AUTO, "mm", "materiales", 0.8, 6,
               allow_auto=True),
-            P("ESPESOR_BALDA", "Espesor de chapa de balda", "float", 1.5, "mm", "materiales", 0.8, 4,
+            P("ESPESOR_BALDA", "Espesor de chapa de balda", "float", AUTO, "mm", "materiales", 0.8, 4,
               allow_auto=True),
             P("ESPESOR_PLACA_BASE", "Espesor de placa base", "float", 5.0, "mm", "materiales", 3, 12),
             P("ACABADO", "Acabado", "choice", "RAL7035_POLVO", None, "materiales", choices=list(catalog.finishes())),
-            P("PERFIL_PATA", "Perfil de patas", "choice", "SHS 40x40x2", None, "construccion", choices=SHS,
+            P("PERFIL_PATA", "Perfil de patas", "choice", AUTO, None, "construccion", choices=SHS,
               allow_auto=True),
-            P("PERFIL_LARGUERO", "Perfil de largueros superiores", "choice", "RHS 60x40x2", None, "construccion",
+            P("PERFIL_LARGUERO", "Perfil de largueros superiores", "choice", AUTO, None, "construccion",
               choices=ALLP, allow_auto=True),
-            P("PERFIL_TRAVESANO", "Perfil de travesaños superiores", "choice", "RHS 40x20x2", None, "construccion",
+            P("PERFIL_TRAVESANO", "Perfil de travesaños superiores", "choice", AUTO, None, "construccion",
               choices=ALLP, allow_auto=True),
-            P("PERFIL_BASTIDOR", "Perfil del bastidor inferior", "choice", "RHS 40x20x2", None, "construccion",
+            P("PERFIL_BASTIDOR", "Perfil del bastidor inferior", "choice", AUTO, None, "construccion",
               choices=ALLP, allow_auto=True),
             P("NUMERO_TRAVESANOS", "Travesaños intermedios bajo encimera", "int", AUTO, "ud", "construccion", 0, 20,
               allow_auto=True, help="'auto': mínimo número que verifica la chapa (o la separación máxima si no "
@@ -200,6 +200,21 @@ class MesaIndustrial(ProductFamily):
              "values": {**base, "LONGITUD": 1800.0, "ANCHURA": 800.0, "ALTURA": 900.0}},
             {"id": "MI-2200", "name": "Mesa industrial de 2.200 mm", "family": self.id,
              "values": {**base, "LONGITUD": 2200.0, "ANCHURA": 800.0, "ALTURA": 900.0, "CARGA_TOTAL": 400.0}},
+            {"id": "MI-1500-INOX", "name": "Mesa de inspección inoxidable 1.500 mm (alimentaria)", "family": self.id,
+             "values": {"LONGITUD": 1500.0, "ANCHURA": 700.0, "ALTURA": 900.0, "CARGA_TOTAL": 150.0, "NUMERO_BALDAS": 1,
+                        "CARGA_BALDA": 50.0, "MATERIAL_ESTRUCTURAL": "1.4301", "MATERIAL_CHAPA": "1.4301",
+                        "ACABADO": "INOX_SATINADO", "USO": "inspeccion", "ENTORNO": "alimentario",
+                        "CARGA_HORIZONTAL": 100.0}},
+            {"id": "MI-2400-PESADA", "name": "Mesa de trabajo pesado 2.400 mm", "family": self.id,
+             "values": {"LONGITUD": 2400.0, "ANCHURA": 900.0, "ALTURA": 900.0, "CARGA_TOTAL": 800.0,
+                        "CARGA_PUNTUAL": 150.0, "NUMERO_BALDAS": 1, "CARGA_BALDA": 200.0, "USO": "trabajo_pesado",
+                        "ESPESOR_CHAPA": AUTO, "ESPESOR_BALDA": AUTO, "PERFIL_PATA": AUTO, "PERFIL_LARGUERO": AUTO,
+                        "PERFIL_TRAVESANO": AUTO, "PERFIL_BASTIDOR": AUTO, "ACABADO": "RAL7016_POLVO",
+                        "ANCLAJE": "al_suelo"}},
+            {"id": "PT-1200-ERG", "name": "Puesto de montaje ligero 1.200 mm (galvanizado + polvo)", "family": self.id,
+             "values": {"LONGITUD": 1200.0, "ANCHURA": 750.0, "ALTURA": 850.0, "CARGA_TOTAL": 100.0,
+                        "NUMERO_BALDAS": 0, "USO": "montaje_ligero", "MATERIAL_CHAPA": "S250GD+Z",
+                        "ACABADO": "RAL5015_POLVO", "CARGA_HORIZONTAL": 100.0}},
             {"id": "BM-1500", "name": "Banco de montaje 1.500 mm (trabajo pesado)", "family": self.id,
              "values": {"LONGITUD": 1500.0, "ANCHURA": 750.0, "ALTURA": 850.0, "CARGA_TOTAL": 500.0,
                         "CARGA_PUNTUAL": 100.0, "ESPESOR_CHAPA": 3.0, "USO": "trabajo_pesado",

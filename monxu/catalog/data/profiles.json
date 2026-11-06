@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026.11-1",
+    "version": "2026.11-2",
     "note": "Perfiles huecos conformados en frío EN 10219-2:2006. Radios para cálculo y modelado según EN 10219-2 Anexo B (t <= 6 mm): radio exterior ro = 2t, radio interior ri = t. Las propiedades de sección se calculan a partir de la geometría real de la sección, no se toman de tabla. Convención de designación h x b x t: H = canto (primera cota), B = ancho.",
     "bar_lengths_mm": [
       6000,
@@ -10,87 +10,24 @@
     "default_bar_length_mm": 6000
   },
   "profiles": {
-    "SHS 20x20x2": {
-      "type": "SHS",
+    "RHS 30x20x2": {
+      "type": "RHS",
       "B": 20,
-      "H": 20,
-      "t": 2.0,
-      "standard": "EN 10219-2"
-    },
-    "SHS 25x25x2": {
-      "type": "SHS",
-      "B": 25,
-      "H": 25,
-      "t": 2.0,
-      "standard": "EN 10219-2"
-    },
-    "SHS 30x30x2": {
-      "type": "SHS",
-      "B": 30,
       "H": 30,
       "t": 2.0,
-      "standard": "EN 10219-2"
-    },
-    "SHS 40x40x2": {
-      "type": "SHS",
-      "B": 40,
-      "H": 40,
-      "t": 2.0,
-      "standard": "EN 10219-2"
-    },
-    "SHS 40x40x3": {
-      "type": "SHS",
-      "B": 40,
-      "H": 40,
-      "t": 3.0,
-      "standard": "EN 10219-2"
-    },
-    "SHS 50x50x2": {
-      "type": "SHS",
-      "B": 50,
-      "H": 50,
-      "t": 2.0,
-      "standard": "EN 10219-2"
-    },
-    "SHS 50x50x3": {
-      "type": "SHS",
-      "B": 50,
-      "H": 50,
-      "t": 3.0,
-      "standard": "EN 10219-2"
-    },
-    "SHS 60x60x3": {
-      "type": "SHS",
-      "B": 60,
-      "H": 60,
-      "t": 3.0,
-      "standard": "EN 10219-2"
-    },
-    "SHS 70x70x3": {
-      "type": "SHS",
-      "B": 70,
-      "H": 70,
-      "t": 3.0,
-      "standard": "EN 10219-2"
-    },
-    "SHS 80x80x3": {
-      "type": "SHS",
-      "B": 80,
-      "H": 80,
-      "t": 3.0,
-      "standard": "EN 10219-2"
-    },
-    "SHS 80x80x4": {
-      "type": "SHS",
-      "B": 80,
-      "H": 80,
-      "t": 4.0,
       "standard": "EN 10219-2"
     },
     "RHS 40x20x2": {
       "type": "RHS",
       "B": 20,
       "H": 40,
+      "t": 2.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 50x25x2": {
+      "type": "RHS",
+      "B": 25,
+      "H": 50,
       "t": 2.0,
       "standard": "EN 10219-2"
     },
@@ -101,11 +38,25 @@
       "t": 2.0,
       "standard": "EN 10219-2"
     },
+    "RHS 50x30x3": {
+      "type": "RHS",
+      "B": 30,
+      "H": 50,
+      "t": 3.0,
+      "standard": "EN 10219-2"
+    },
     "RHS 60x30x2": {
       "type": "RHS",
       "B": 30,
       "H": 60,
       "t": 2.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 60x30x3": {
+      "type": "RHS",
+      "B": 30,
+      "H": 60,
+      "t": 3.0,
       "standard": "EN 10219-2"
     },
     "RHS 60x40x2": {
@@ -122,6 +73,13 @@
       "t": 3.0,
       "standard": "EN 10219-2"
     },
+    "RHS 60x40x4": {
+      "type": "RHS",
+      "B": 40,
+      "H": 60,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
     "RHS 80x40x2": {
       "type": "RHS",
       "B": 40,
@@ -136,17 +94,333 @@
       "t": 3.0,
       "standard": "EN 10219-2"
     },
+    "RHS 80x40x4": {
+      "type": "RHS",
+      "B": 40,
+      "H": 80,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 80x60x3": {
+      "type": "RHS",
+      "B": 60,
+      "H": 80,
+      "t": 3.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 80x60x4": {
+      "type": "RHS",
+      "B": 60,
+      "H": 80,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 100x40x3": {
+      "type": "RHS",
+      "B": 40,
+      "H": 100,
+      "t": 3.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 100x40x4": {
+      "type": "RHS",
+      "B": 40,
+      "H": 100,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
     "RHS 100x50x3": {
       "type": "RHS",
       "B": 50,
       "H": 100,
       "t": 3.0,
       "standard": "EN 10219-2"
+    },
+    "RHS 100x50x4": {
+      "type": "RHS",
+      "B": 50,
+      "H": 100,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 100x50x5": {
+      "type": "RHS",
+      "B": 50,
+      "H": 100,
+      "t": 5.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 100x60x3": {
+      "type": "RHS",
+      "B": 60,
+      "H": 100,
+      "t": 3.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 100x60x4": {
+      "type": "RHS",
+      "B": 60,
+      "H": 100,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 120x60x4": {
+      "type": "RHS",
+      "B": 60,
+      "H": 120,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 120x60x5": {
+      "type": "RHS",
+      "B": 60,
+      "H": 120,
+      "t": 5.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 120x80x4": {
+      "type": "RHS",
+      "B": 80,
+      "H": 120,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 120x80x5": {
+      "type": "RHS",
+      "B": 80,
+      "H": 120,
+      "t": 5.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 20x20x1.5": {
+      "type": "SHS",
+      "B": 20,
+      "H": 20,
+      "t": 1.5,
+      "standard": "EN 10219-2"
+    },
+    "SHS 20x20x2": {
+      "type": "SHS",
+      "B": 20,
+      "H": 20,
+      "t": 2.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 25x25x1.5": {
+      "type": "SHS",
+      "B": 25,
+      "H": 25,
+      "t": 1.5,
+      "standard": "EN 10219-2"
+    },
+    "SHS 25x25x2": {
+      "type": "SHS",
+      "B": 25,
+      "H": 25,
+      "t": 2.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 30x30x1.5": {
+      "type": "SHS",
+      "B": 30,
+      "H": 30,
+      "t": 1.5,
+      "standard": "EN 10219-2"
+    },
+    "SHS 30x30x2": {
+      "type": "SHS",
+      "B": 30,
+      "H": 30,
+      "t": 2.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 30x30x3": {
+      "type": "SHS",
+      "B": 30,
+      "H": 30,
+      "t": 3.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 40x40x1.5": {
+      "type": "SHS",
+      "B": 40,
+      "H": 40,
+      "t": 1.5,
+      "standard": "EN 10219-2"
+    },
+    "SHS 40x40x2": {
+      "type": "SHS",
+      "B": 40,
+      "H": 40,
+      "t": 2.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 40x40x3": {
+      "type": "SHS",
+      "B": 40,
+      "H": 40,
+      "t": 3.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 40x40x4": {
+      "type": "SHS",
+      "B": 40,
+      "H": 40,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 50x50x2": {
+      "type": "SHS",
+      "B": 50,
+      "H": 50,
+      "t": 2.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 50x50x3": {
+      "type": "SHS",
+      "B": 50,
+      "H": 50,
+      "t": 3.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 50x50x4": {
+      "type": "SHS",
+      "B": 50,
+      "H": 50,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 50x50x5": {
+      "type": "SHS",
+      "B": 50,
+      "H": 50,
+      "t": 5.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 60x60x2": {
+      "type": "SHS",
+      "B": 60,
+      "H": 60,
+      "t": 2.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 60x60x3": {
+      "type": "SHS",
+      "B": 60,
+      "H": 60,
+      "t": 3.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 60x60x4": {
+      "type": "SHS",
+      "B": 60,
+      "H": 60,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 60x60x5": {
+      "type": "SHS",
+      "B": 60,
+      "H": 60,
+      "t": 5.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 70x70x3": {
+      "type": "SHS",
+      "B": 70,
+      "H": 70,
+      "t": 3.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 70x70x4": {
+      "type": "SHS",
+      "B": 70,
+      "H": 70,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 70x70x5": {
+      "type": "SHS",
+      "B": 70,
+      "H": 70,
+      "t": 5.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 80x80x3": {
+      "type": "SHS",
+      "B": 80,
+      "H": 80,
+      "t": 3.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 80x80x4": {
+      "type": "SHS",
+      "B": 80,
+      "H": 80,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 80x80x5": {
+      "type": "SHS",
+      "B": 80,
+      "H": 80,
+      "t": 5.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 90x90x3": {
+      "type": "SHS",
+      "B": 90,
+      "H": 90,
+      "t": 3.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 90x90x4": {
+      "type": "SHS",
+      "B": 90,
+      "H": 90,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 100x100x3": {
+      "type": "SHS",
+      "B": 100,
+      "H": 100,
+      "t": 3.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 100x100x4": {
+      "type": "SHS",
+      "B": 100,
+      "H": 100,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 100x100x5": {
+      "type": "SHS",
+      "B": 100,
+      "H": 100,
+      "t": 5.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 120x120x4": {
+      "type": "SHS",
+      "B": 120,
+      "H": 120,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "SHS 120x120x5": {
+      "type": "SHS",
+      "B": 120,
+      "H": 120,
+      "t": 5.0,
+      "standard": "EN 10219-2"
     }
   },
   "available_materials": {
     "acero_carbono": [
       "S235JRH",
+      "S275J0H",
       "S355J2H"
     ],
     "acero_inoxidable": [
@@ -154,6 +428,7 @@
       "1.4404"
     ],
     "aluminio": [
+      "EN AW-6060 T66",
       "EN AW-6082 T6"
     ]
   }

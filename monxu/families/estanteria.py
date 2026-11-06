@@ -30,9 +30,9 @@ from .mesa_industrial import ALLP, FEET, SHEET_MATERIALS, SHS, STRUCT_MATERIALS,
 
 CANDIDATES = {
     "PERFIL_MONTANTE": ["SHS 40x40x2", "SHS 40x40x3", "SHS 50x50x2", "SHS 50x50x3", "SHS 60x60x3", "SHS 70x70x3",
-                        "SHS 80x80x3", "SHS 80x80x4"],
+                        "SHS 80x80x3", "SHS 80x80x4", "SHS 90x90x4", "SHS 100x100x4"],
     "PERFIL_LARGUERO": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2", "RHS 80x40x2", "RHS 60x40x3",
-                        "RHS 80x40x3"],
+                        "RHS 80x40x3", "RHS 100x50x3", "RHS 100x50x4"],
     "PERFIL_TRAVESANO": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2"],
 }
 CONSTRUCTIVE_DEFAULTS = {"PERFIL_MONTANTE": "SHS 40x40x2", "PERFIL_LARGUERO": "RHS 40x20x2",
@@ -137,6 +137,16 @@ class Estanteria(MesaIndustrial):
             {"id": "ES-1500-5", "name": "Estantería de cinco niveles 1.500 mm", "family": self.id,
              "values": {"ANCHURA": 1500.0, "PROFUNDIDAD": 600.0, "ALTURA": 2000.0, "NUMERO_NIVELES": 5,
                         "CARGA_POR_NIVEL": 150.0, "ANCLAJE": "al_suelo"}},
+            {"id": "ES-2000-4-PESADA", "name": "Estantería pesada de cuatro niveles 2.000 mm", "family": self.id,
+             "values": {"ANCHURA": 2000.0, "PROFUNDIDAD": 800.0, "ALTURA": 2500.0, "NUMERO_NIVELES": 4,
+                        "CARGA_POR_NIVEL": 350.0, "ANCLAJE": "al_suelo", "ACABADO": "RAL5010_POLVO"}},
+            {"id": "ES-800-5-INOX", "name": "Estantería inoxidable de cinco niveles 800 mm (cámara)", "family": self.id,
+             "values": {"ANCHURA": 800.0, "PROFUNDIDAD": 400.0, "ALTURA": 1800.0, "NUMERO_NIVELES": 5,
+                        "CARGA_POR_NIVEL": 60.0, "MATERIAL_ESTRUCTURAL": "1.4301", "MATERIAL_CHAPA": "1.4301",
+                        "ACABADO": "INOX_SATINADO", "ENTORNO": "interior_humedo", "ANCLAJE": "al_suelo"}},
+            {"id": "ES-1200-6-ARCHIVO", "name": "Estantería de archivo de seis niveles 1.200 mm", "family": self.id,
+             "values": {"ANCHURA": 1200.0, "PROFUNDIDAD": 400.0, "ALTURA": 2200.0, "NUMERO_NIVELES": 6,
+                        "CARGA_POR_NIVEL": 80.0, "ANCLAJE": "al_suelo", "ACABADO": "RAL7035_POLVO"}},
         ]
 
     # ------------------------------------------------------------------ construcción

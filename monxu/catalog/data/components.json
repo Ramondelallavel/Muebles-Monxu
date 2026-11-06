@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026.11-1",
+    "version": "2026.11-2",
     "note": "Componentes normalizados y comerciales. Las capacidades de carga de componentes comerciales (pies, ruedas) son datos de catálogo de referencia genéricos y DEBEN confirmarse con la ficha técnica del proveedor seleccionado; el informe de cálculo las marca como tales. Masas de tornillería: valores típicos de catálogo (orientativos)."
   },
   "components": {
@@ -32,6 +32,34 @@
       "rated_load_source": "catalogo_generico",
       "mass_kg": 0.19
     },
+    "PIE_NIV_M12_D80": {
+      "category": "patas",
+      "name": "Pie nivelador M12, base Ø80 antideslizante",
+      "standard": "Comercial",
+      "thread": "M12",
+      "base_d": 80,
+      "base_h": 10,
+      "stem_len": 55,
+      "nominal_height": 38,
+      "adjust": 25,
+      "rated_load_kg": 800,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 0.28
+    },
+    "PIE_NIV_M16_D100": {
+      "category": "patas",
+      "name": "Pie nivelador M16, base Ø100 de acero",
+      "standard": "Comercial",
+      "thread": "M16",
+      "base_d": 100,
+      "base_h": 12,
+      "stem_len": 70,
+      "nominal_height": 45,
+      "adjust": 35,
+      "rated_load_kg": 1500,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 0.62
+    },
     "PIE_NIV_M16_D80": {
       "category": "patas",
       "name": "Pie nivelador M16, base Ø80 articulada",
@@ -45,6 +73,34 @@
       "rated_load_kg": 1000,
       "rated_load_source": "catalogo_generico",
       "mass_kg": 0.38
+    },
+    "PIE_NIV_M20_D120": {
+      "category": "patas",
+      "name": "Pie nivelador M20, base Ø120 de acero",
+      "standard": "Comercial",
+      "thread": "M20",
+      "base_d": 120,
+      "base_h": 14,
+      "stem_len": 80,
+      "nominal_height": 50,
+      "adjust": 40,
+      "rated_load_kg": 2500,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 1.05
+    },
+    "PIE_NIV_M8_D40": {
+      "category": "patas",
+      "name": "Pie nivelador M8, base Ø40 articulada",
+      "standard": "Comercial",
+      "thread": "M8",
+      "base_d": 40,
+      "base_h": 7,
+      "stem_len": 35,
+      "nominal_height": 25,
+      "adjust": 15,
+      "rated_load_kg": 150,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 0.07
     },
     "RUEDA_100_GIR_FRENO": {
       "category": "ruedas",
@@ -203,6 +259,24 @@
       "s": 24,
       "m": 13,
       "mass_kg": 0.034
+    },
+    "TUERCA_SOLDAR_M20": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M20",
+      "standard": "DIN 929",
+      "thread": "M20",
+      "s": 30,
+      "m": 16,
+      "mass_kg": 0.07
+    },
+    "TUERCA_SOLDAR_M8": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M8",
+      "standard": "DIN 929",
+      "thread": "M8",
+      "s": 14,
+      "m": 6.5,
+      "mass_kg": 0.0055
     }
   },
   "consumables": {

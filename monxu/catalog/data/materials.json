@@ -1,79 +1,692 @@
 {
   "_meta": {
-    "version": "2026.11-1",
+    "version": "2026.11-2",
     "units": "density kg/m3; E, G, fy, fu en MPa",
     "note": "Valores característicos según la norma de producto indicada. 'fy_guaranteed=false' indica que la norma no garantiza un límite elástico mínimo y el valor de cálculo es una hipótesis que debe confirmarse con certificado 3.1 (EN 10204)."
   },
   "materials": {
     "S235JR": {
-      "name": "Acero no aleado S235JR", "family": "acero_carbono", "standard": "EN 10025-2:2019",
-      "density": 7850, "E": 210000, "G": 81000, "nu": 0.3, "fy": 235, "fu": 360, "fy_guaranteed": true,
-      "gamma_M0": 1.0, "gamma_M1": 1.0, "gamma_M2": 1.25, "beta_w": 0.8, "design_code": "EN 1993-1-1",
-      "weldable": true, "forms": ["chapa", "pletina"], "render_color": [0.42, 0.43, 0.45]
+      "name": "Acero no aleado S235JR",
+      "family": "acero_carbono",
+      "standard": "EN 10025-2:2019",
+      "density": 7850,
+      "E": 210000,
+      "G": 81000,
+      "nu": 0.3,
+      "fy": 235,
+      "fu": 360,
+      "fy_guaranteed": true,
+      "gamma_M0": 1.0,
+      "gamma_M1": 1.0,
+      "gamma_M2": 1.25,
+      "beta_w": 0.8,
+      "design_code": "EN 1993-1-1",
+      "weldable": true,
+      "forms": [
+        "chapa",
+        "pletina"
+      ],
+      "render_color": [
+        0.42,
+        0.43,
+        0.45
+      ]
     },
     "S235JRH": {
-      "name": "Acero S235JRH (tubo conformado en frío)", "family": "acero_carbono", "standard": "EN 10219-1:2006",
-      "density": 7850, "E": 210000, "G": 81000, "nu": 0.3, "fy": 235, "fu": 360, "fy_guaranteed": true,
-      "gamma_M0": 1.0, "gamma_M1": 1.0, "gamma_M2": 1.25, "beta_w": 0.8, "design_code": "EN 1993-1-1",
-      "weldable": true, "forms": ["tubo"], "render_color": [0.42, 0.43, 0.45]
+      "name": "Acero S235JRH (tubo conformado en frío)",
+      "family": "acero_carbono",
+      "standard": "EN 10219-1:2006",
+      "density": 7850,
+      "E": 210000,
+      "G": 81000,
+      "nu": 0.3,
+      "fy": 235,
+      "fu": 360,
+      "fy_guaranteed": true,
+      "gamma_M0": 1.0,
+      "gamma_M1": 1.0,
+      "gamma_M2": 1.25,
+      "beta_w": 0.8,
+      "design_code": "EN 1993-1-1",
+      "weldable": true,
+      "forms": [
+        "tubo"
+      ],
+      "render_color": [
+        0.42,
+        0.43,
+        0.45
+      ]
     },
     "S355J2H": {
-      "name": "Acero S355J2H (tubo conformado en frío)", "family": "acero_carbono", "standard": "EN 10219-1:2006",
-      "density": 7850, "E": 210000, "G": 81000, "nu": 0.3, "fy": 355, "fu": 470, "fy_guaranteed": true,
-      "gamma_M0": 1.0, "gamma_M1": 1.0, "gamma_M2": 1.25, "beta_w": 0.9, "design_code": "EN 1993-1-1",
-      "weldable": true, "forms": ["tubo"], "render_color": [0.42, 0.43, 0.45]
+      "name": "Acero S355J2H (tubo conformado en frío)",
+      "family": "acero_carbono",
+      "standard": "EN 10219-1:2006",
+      "density": 7850,
+      "E": 210000,
+      "G": 81000,
+      "nu": 0.3,
+      "fy": 355,
+      "fu": 470,
+      "fy_guaranteed": true,
+      "gamma_M0": 1.0,
+      "gamma_M1": 1.0,
+      "gamma_M2": 1.25,
+      "beta_w": 0.9,
+      "design_code": "EN 1993-1-1",
+      "weldable": true,
+      "forms": [
+        "tubo"
+      ],
+      "render_color": [
+        0.42,
+        0.43,
+        0.45
+      ]
     },
     "DC01": {
-      "name": "Acero laminado en frío DC01", "family": "acero_carbono", "standard": "EN 10130:2006",
-      "density": 7850, "E": 210000, "G": 81000, "nu": 0.3, "fy": 140, "fu": 270, "fy_guaranteed": false,
-      "gamma_M0": 1.0, "gamma_M1": 1.0, "gamma_M2": 1.25, "beta_w": 0.8, "design_code": "EN 1993-1-1",
-      "weldable": true, "forms": ["chapa"], "render_color": [0.45, 0.46, 0.48]
+      "name": "Acero laminado en frío DC01",
+      "family": "acero_carbono",
+      "standard": "EN 10130:2006",
+      "density": 7850,
+      "E": 210000,
+      "G": 81000,
+      "nu": 0.3,
+      "fy": 140,
+      "fu": 270,
+      "fy_guaranteed": false,
+      "gamma_M0": 1.0,
+      "gamma_M1": 1.0,
+      "gamma_M2": 1.25,
+      "beta_w": 0.8,
+      "design_code": "EN 1993-1-1",
+      "weldable": true,
+      "forms": [
+        "chapa"
+      ],
+      "render_color": [
+        0.45,
+        0.46,
+        0.48
+      ]
     },
     "1.4301": {
-      "name": "Acero inoxidable 1.4301 (X5CrNi18-10, AISI 304)", "family": "acero_inoxidable", "standard": "EN 10088-2:2014",
-      "density": 7900, "E": 200000, "G": 76900, "nu": 0.3, "fy": 210, "fu": 520, "fy_guaranteed": true,
-      "gamma_M0": 1.1, "gamma_M1": 1.1, "gamma_M2": 1.25, "beta_w": 1.0, "design_code": "EN 1993-1-4",
-      "weldable": true, "forms": ["chapa", "tubo", "pletina"], "render_color": [0.75, 0.76, 0.78]
+      "name": "Acero inoxidable 1.4301 (X5CrNi18-10, AISI 304)",
+      "family": "acero_inoxidable",
+      "standard": "EN 10088-2:2014",
+      "density": 7900,
+      "E": 200000,
+      "G": 76900,
+      "nu": 0.3,
+      "fy": 210,
+      "fu": 520,
+      "fy_guaranteed": true,
+      "gamma_M0": 1.1,
+      "gamma_M1": 1.1,
+      "gamma_M2": 1.25,
+      "beta_w": 1.0,
+      "design_code": "EN 1993-1-4",
+      "weldable": true,
+      "forms": [
+        "chapa",
+        "tubo",
+        "pletina"
+      ],
+      "render_color": [
+        0.75,
+        0.76,
+        0.78
+      ]
     },
     "1.4404": {
-      "name": "Acero inoxidable 1.4404 (X2CrNiMo17-12-2, AISI 316L)", "family": "acero_inoxidable", "standard": "EN 10088-2:2014",
-      "density": 8000, "E": 200000, "G": 76900, "nu": 0.3, "fy": 220, "fu": 520, "fy_guaranteed": true,
-      "gamma_M0": 1.1, "gamma_M1": 1.1, "gamma_M2": 1.25, "beta_w": 1.0, "design_code": "EN 1993-1-4",
-      "weldable": true, "forms": ["chapa", "tubo", "pletina"], "render_color": [0.76, 0.77, 0.79]
+      "name": "Acero inoxidable 1.4404 (X2CrNiMo17-12-2, AISI 316L)",
+      "family": "acero_inoxidable",
+      "standard": "EN 10088-2:2014",
+      "density": 8000,
+      "E": 200000,
+      "G": 76900,
+      "nu": 0.3,
+      "fy": 220,
+      "fu": 520,
+      "fy_guaranteed": true,
+      "gamma_M0": 1.1,
+      "gamma_M1": 1.1,
+      "gamma_M2": 1.25,
+      "beta_w": 1.0,
+      "design_code": "EN 1993-1-4",
+      "weldable": true,
+      "forms": [
+        "chapa",
+        "tubo",
+        "pletina"
+      ],
+      "render_color": [
+        0.76,
+        0.77,
+        0.79
+      ]
     },
     "EN AW-6082 T6": {
-      "name": "Aluminio EN AW-6082 T6 (perfil extruido)", "family": "aluminio", "standard": "EN 755-2:2016",
-      "density": 2700, "E": 70000, "G": 27000, "nu": 0.3, "fy": 250, "fu": 290, "fy_guaranteed": true,
-      "gamma_M0": 1.1, "gamma_M1": 1.1, "gamma_M2": 1.25, "beta_w": 1.0, "design_code": "EN 1999-1-1",
-      "weldable": true, "haz_reduction_required": true, "forms": ["tubo"], "render_color": [0.80, 0.81, 0.83]
+      "name": "Aluminio EN AW-6082 T6 (perfil extruido)",
+      "family": "aluminio",
+      "standard": "EN 755-2:2016",
+      "density": 2700,
+      "E": 70000,
+      "G": 27000,
+      "nu": 0.3,
+      "fy": 250,
+      "fu": 290,
+      "fy_guaranteed": true,
+      "gamma_M0": 1.1,
+      "gamma_M1": 1.1,
+      "gamma_M2": 1.25,
+      "beta_w": 1.0,
+      "design_code": "EN 1999-1-1",
+      "weldable": true,
+      "haz_reduction_required": true,
+      "forms": [
+        "tubo"
+      ],
+      "render_color": [
+        0.8,
+        0.81,
+        0.83
+      ]
     },
     "EN AW-5754 H22": {
-      "name": "Aluminio EN AW-5754 H22 (chapa)", "family": "aluminio", "standard": "EN 485-2:2016",
-      "density": 2670, "E": 70000, "G": 27000, "nu": 0.3, "fy": 130, "fu": 220, "fy_guaranteed": true,
-      "gamma_M0": 1.1, "gamma_M1": 1.1, "gamma_M2": 1.25, "beta_w": 1.0, "design_code": "EN 1999-1-1",
-      "weldable": true, "haz_reduction_required": true, "forms": ["chapa"], "render_color": [0.82, 0.83, 0.85]
+      "name": "Aluminio EN AW-5754 H22 (chapa)",
+      "family": "aluminio",
+      "standard": "EN 485-2:2016",
+      "density": 2670,
+      "E": 70000,
+      "G": 27000,
+      "nu": 0.3,
+      "fy": 130,
+      "fu": 220,
+      "fy_guaranteed": true,
+      "gamma_M0": 1.1,
+      "gamma_M1": 1.1,
+      "gamma_M2": 1.25,
+      "beta_w": 1.0,
+      "design_code": "EN 1999-1-1",
+      "weldable": true,
+      "haz_reduction_required": true,
+      "forms": [
+        "chapa"
+      ],
+      "render_color": [
+        0.82,
+        0.83,
+        0.85
+      ]
     },
     "CONTRACHAPADO_ABEDUL": {
-      "name": "Tablero contrachapado de abedul", "family": "madera", "standard": "EN 636:2012",
-      "density": 680, "E": null, "G": null, "nu": null, "fy": null, "fu": null, "fy_guaranteed": false,
-      "design_code": null, "weldable": false, "forms": ["tablero"], "render_color": [0.80, 0.66, 0.45],
+      "name": "Tablero contrachapado de abedul",
+      "family": "madera",
+      "standard": "EN 636:2012",
+      "density": 680,
+      "E": null,
+      "G": null,
+      "nu": null,
+      "fy": null,
+      "fu": null,
+      "fy_guaranteed": false,
+      "design_code": null,
+      "weldable": false,
+      "forms": [
+        "tablero"
+      ],
+      "render_color": [
+        0.8,
+        0.66,
+        0.45
+      ],
       "note": "Propiedades resistentes dependientes del fabricante y de la dirección de las chapas: verificación estructural no disponible sin ficha técnica."
     },
     "HPL_COMPACTO": {
-      "name": "Laminado compacto HPL", "family": "material_tecnico", "standard": "EN 438-4:2016",
-      "density": 1400, "E": null, "G": null, "nu": null, "fy": null, "fu": null, "fy_guaranteed": false,
-      "design_code": null, "weldable": false, "forms": ["tablero"], "render_color": [0.25, 0.27, 0.30],
+      "name": "Laminado compacto HPL",
+      "family": "material_tecnico",
+      "standard": "EN 438-4:2016",
+      "density": 1400,
+      "E": null,
+      "G": null,
+      "nu": null,
+      "fy": null,
+      "fu": null,
+      "fy_guaranteed": false,
+      "design_code": null,
+      "weldable": false,
+      "forms": [
+        "tablero"
+      ],
+      "render_color": [
+        0.25,
+        0.27,
+        0.3
+      ],
       "note": "Verificación estructural no disponible sin ficha técnica del fabricante."
+    },
+    "S275J0H": {
+      "name": "Acero S275J0H (tubo conformado en frío)",
+      "family": "acero_carbono",
+      "standard": "EN 10219-1:2006",
+      "density": 7850,
+      "E": 210000,
+      "G": 81000,
+      "nu": 0.3,
+      "gamma_M0": 1.0,
+      "gamma_M1": 1.0,
+      "gamma_M2": 1.25,
+      "design_code": "EN 1993-1-1",
+      "weldable": true,
+      "render_color": [
+        0.42,
+        0.43,
+        0.45
+      ],
+      "fy": 275,
+      "fu": 410,
+      "fy_guaranteed": true,
+      "beta_w": 0.85,
+      "forms": [
+        "tubo"
+      ]
+    },
+    "S275JR": {
+      "name": "Acero no aleado S275JR",
+      "family": "acero_carbono",
+      "standard": "EN 10025-2:2019",
+      "density": 7850,
+      "E": 210000,
+      "G": 81000,
+      "nu": 0.3,
+      "gamma_M0": 1.0,
+      "gamma_M1": 1.0,
+      "gamma_M2": 1.25,
+      "design_code": "EN 1993-1-1",
+      "weldable": true,
+      "render_color": [
+        0.42,
+        0.43,
+        0.45
+      ],
+      "fy": 275,
+      "fu": 410,
+      "fy_guaranteed": true,
+      "beta_w": 0.85,
+      "forms": [
+        "chapa",
+        "pletina"
+      ],
+      "note": "fu adoptado 410 MPa (mínimo para 3 ≤ t ≤ 100 mm; para t < 3 mm la norma da 430 MPa)."
+    },
+    "S355JR": {
+      "name": "Acero no aleado S355JR",
+      "family": "acero_carbono",
+      "standard": "EN 10025-2:2019",
+      "density": 7850,
+      "E": 210000,
+      "G": 81000,
+      "nu": 0.3,
+      "gamma_M0": 1.0,
+      "gamma_M1": 1.0,
+      "gamma_M2": 1.25,
+      "design_code": "EN 1993-1-1",
+      "weldable": true,
+      "render_color": [
+        0.42,
+        0.43,
+        0.45
+      ],
+      "fy": 355,
+      "fu": 470,
+      "fy_guaranteed": true,
+      "beta_w": 0.9,
+      "forms": [
+        "chapa",
+        "pletina"
+      ],
+      "note": "fu adoptado 470 MPa (mínimo para 3 ≤ t ≤ 100 mm)."
+    },
+    "S250GD+Z": {
+      "name": "Acero galvanizado en continuo S250GD+Z275",
+      "family": "acero_carbono",
+      "standard": "EN 10346:2015",
+      "density": 7850,
+      "E": 210000,
+      "G": 81000,
+      "nu": 0.3,
+      "gamma_M0": 1.0,
+      "gamma_M1": 1.0,
+      "gamma_M2": 1.25,
+      "design_code": "EN 1993-1-1",
+      "weldable": true,
+      "render_color": [
+        0.7,
+        0.72,
+        0.74
+      ],
+      "fy": 250,
+      "fu": 330,
+      "fy_guaranteed": true,
+      "beta_w": 0.85,
+      "forms": [
+        "chapa"
+      ]
+    },
+    "DX51D+Z": {
+      "name": "Acero galvanizado en continuo DX51D+Z275",
+      "family": "acero_carbono",
+      "standard": "EN 10346:2015",
+      "density": 7850,
+      "E": 210000,
+      "G": 81000,
+      "nu": 0.3,
+      "gamma_M0": 1.0,
+      "gamma_M1": 1.0,
+      "gamma_M2": 1.25,
+      "design_code": "EN 1993-1-1",
+      "weldable": true,
+      "render_color": [
+        0.7,
+        0.72,
+        0.74
+      ],
+      "fy": 140,
+      "fu": 270,
+      "fy_guaranteed": false,
+      "beta_w": 0.8,
+      "forms": [
+        "chapa"
+      ],
+      "note": "Acero de conformado: la norma no garantiza límite elástico mínimo; 140 MPa es hipótesis."
+    },
+    "1.4016": {
+      "name": "Acero inoxidable ferrítico 1.4016 (X6Cr17, AISI 430)",
+      "family": "acero_inoxidable",
+      "standard": "EN 10088-2:2014",
+      "density": 7700,
+      "E": 220000,
+      "G": 84600,
+      "nu": 0.3,
+      "fy": 260,
+      "fu": 450,
+      "fy_guaranteed": true,
+      "gamma_M0": 1.1,
+      "gamma_M1": 1.1,
+      "gamma_M2": 1.25,
+      "beta_w": 1.0,
+      "design_code": "EN 1993-1-4",
+      "weldable": true,
+      "forms": [
+        "chapa"
+      ],
+      "render_color": [
+        0.74,
+        0.75,
+        0.77
+      ],
+      "note": "Valores de banda laminada en frío (C) según EN 10088-2; soldabilidad limitada en espesores gruesos."
+    },
+    "EN AW-6060 T66": {
+      "name": "Aluminio EN AW-6060 T66 (perfil extruido)",
+      "family": "aluminio",
+      "standard": "EN 755-2:2016",
+      "density": 2700,
+      "E": 70000,
+      "G": 27000,
+      "nu": 0.3,
+      "fy": 160,
+      "fu": 215,
+      "fy_guaranteed": true,
+      "gamma_M0": 1.1,
+      "gamma_M1": 1.1,
+      "gamma_M2": 1.25,
+      "beta_w": 1.0,
+      "design_code": "EN 1999-1-1",
+      "weldable": true,
+      "haz_reduction_required": true,
+      "forms": [
+        "tubo"
+      ],
+      "render_color": [
+        0.8,
+        0.81,
+        0.83
+      ],
+      "note": "f0 y fu para t ≤ 3 mm (EN 1999-1-1 tabla 3.2b)."
     }
   },
   "finishes": {
-    "RAL7035_POLVO": {"name": "Pintura en polvo epoxi-poliéster RAL 7035 (gris luz)", "color": [0.84, 0.85, 0.83], "compatible": ["acero_carbono"], "consumable_kg_m2": 0.12},
-    "RAL5010_POLVO": {"name": "Pintura en polvo epoxi-poliéster RAL 5010 (azul genciana)", "color": [0.05, 0.31, 0.55], "compatible": ["acero_carbono"], "consumable_kg_m2": 0.12},
-    "RAL7016_POLVO": {"name": "Pintura en polvo epoxi-poliéster RAL 7016 (gris antracita)", "color": [0.22, 0.25, 0.28], "compatible": ["acero_carbono"], "consumable_kg_m2": 0.12},
-    "RAL2004_POLVO": {"name": "Pintura en polvo epoxi-poliéster RAL 2004 (naranja puro)", "color": [0.96, 0.33, 0.05], "compatible": ["acero_carbono"], "consumable_kg_m2": 0.12},
-    "GALVANIZADO": {"name": "Galvanizado en caliente EN ISO 1461", "color": [0.66, 0.68, 0.70], "compatible": ["acero_carbono"], "consumable_kg_m2": 0.0},
-    "INOX_SATINADO": {"name": "Inoxidable satinado (grano 240)", "color": [0.78, 0.79, 0.80], "compatible": ["acero_inoxidable"], "consumable_kg_m2": 0.0},
-    "ANODIZADO_NATURAL": {"name": "Anodizado natural 15 µm", "color": [0.82, 0.83, 0.85], "compatible": ["aluminio"], "consumable_kg_m2": 0.0},
-    "SIN_ACABADO": {"name": "Sin acabado (protección temporal aceitada)", "color": [0.45, 0.46, 0.48], "compatible": ["acero_carbono", "acero_inoxidable", "aluminio"], "consumable_kg_m2": 0.0}
+    "ANODIZADO_NATURAL": {
+      "name": "Anodizado natural 15 µm",
+      "color": [
+        0.82,
+        0.83,
+        0.85
+      ],
+      "compatible": [
+        "aluminio"
+      ],
+      "consumable_kg_m2": 0.0
+    },
+    "CATAFORESIS_POLVO": {
+      "name": "Cataforesis (KTL) + pintura en polvo RAL 7035",
+      "color": [
+        0.84,
+        0.85,
+        0.83
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.12
+    },
+    "GALVANIZADO": {
+      "name": "Galvanizado en caliente EN ISO 1461",
+      "color": [
+        0.66,
+        0.68,
+        0.7
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.0
+    },
+    "INOX_PULIDO": {
+      "name": "Inoxidable pulido brillo (grano 400)",
+      "color": [
+        0.85,
+        0.86,
+        0.88
+      ],
+      "compatible": [
+        "acero_inoxidable"
+      ],
+      "consumable_kg_m2": 0.0
+    },
+    "INOX_SATINADO": {
+      "name": "Inoxidable satinado (grano 240)",
+      "color": [
+        0.78,
+        0.79,
+        0.8
+      ],
+      "compatible": [
+        "acero_inoxidable"
+      ],
+      "consumable_kg_m2": 0.0
+    },
+    "RAL1023_POLVO": {
+      "name": "Pintura en polvo epoxi-poliéster RAL 1023 (amarillo tráfico)",
+      "color": [
+        0.95,
+        0.71,
+        0.0
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.12
+    },
+    "RAL2004_POLVO": {
+      "name": "Pintura en polvo epoxi-poliéster RAL 2004 (naranja puro)",
+      "color": [
+        0.96,
+        0.33,
+        0.05
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.12
+    },
+    "RAL3020_POLVO": {
+      "name": "Pintura en polvo epoxi-poliéster RAL 3020 (rojo tráfico)",
+      "color": [
+        0.73,
+        0.1,
+        0.09
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.12
+    },
+    "RAL5010_POLVO": {
+      "name": "Pintura en polvo epoxi-poliéster RAL 5010 (azul genciana)",
+      "color": [
+        0.05,
+        0.31,
+        0.55
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.12
+    },
+    "RAL5015_POLVO": {
+      "name": "Pintura en polvo epoxi-poliéster RAL 5015 (azul cielo)",
+      "color": [
+        0.13,
+        0.44,
+        0.7
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.12
+    },
+    "RAL6011_POLVO": {
+      "name": "Pintura en polvo epoxi-poliéster RAL 6011 (verde reseda)",
+      "color": [
+        0.34,
+        0.47,
+        0.33
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.12
+    },
+    "RAL7012_POLVO": {
+      "name": "Pintura en polvo epoxi-poliéster RAL 7012 (gris basalto)",
+      "color": [
+        0.35,
+        0.38,
+        0.4
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.12
+    },
+    "RAL7016_POLVO": {
+      "name": "Pintura en polvo epoxi-poliéster RAL 7016 (gris antracita)",
+      "color": [
+        0.22,
+        0.25,
+        0.28
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.12
+    },
+    "RAL7035_POLVO": {
+      "name": "Pintura en polvo epoxi-poliéster RAL 7035 (gris luz)",
+      "color": [
+        0.84,
+        0.85,
+        0.83
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.12
+    },
+    "RAL7040_POLVO": {
+      "name": "Pintura en polvo epoxi-poliéster RAL 7040 (gris ventana)",
+      "color": [
+        0.61,
+        0.64,
+        0.66
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.12
+    },
+    "RAL9005_POLVO": {
+      "name": "Pintura en polvo epoxi-poliéster RAL 9005 (negro intenso)",
+      "color": [
+        0.05,
+        0.05,
+        0.06
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.12
+    },
+    "RAL9010_POLVO": {
+      "name": "Pintura en polvo epoxi-poliéster RAL 9010 (blanco puro)",
+      "color": [
+        0.94,
+        0.93,
+        0.88
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.12
+    },
+    "SIN_ACABADO": {
+      "name": "Sin acabado (protección temporal aceitada)",
+      "color": [
+        0.45,
+        0.46,
+        0.48
+      ],
+      "compatible": [
+        "acero_carbono",
+        "acero_inoxidable",
+        "aluminio"
+      ],
+      "consumable_kg_m2": 0.0
+    },
+    "ZINCADO_CONTINUO": {
+      "name": "Galvanizado en continuo de origen (Z275, sin pintar)",
+      "color": [
+        0.7,
+        0.72,
+        0.74
+      ],
+      "compatible": [
+        "acero_carbono"
+      ],
+      "consumable_kg_m2": 0.0
+    }
   }
 }
