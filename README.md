@@ -5,8 +5,8 @@ geométrica, mecánica y constructivamente: modelo B-rep real, cálculo, planos,
 BOM, optimización de corte y expediente de fabricación, todo derivado de una única fuente de
 parámetros.
 
-> **Estado:** núcleo funcional con cuatro familias completas (**mesa industrial**, **estantería
-> industrial**, **puesto de trabajo** y **carro de taller**) y el caso de aceptación §23 superado por
+> **Estado:** núcleo funcional con cinco familias completas (**mesa industrial**, **estantería
+> industrial**, **puesto de trabajo**, **carro de taller** y **carro estantería**) y el caso de aceptación §23 superado por
 > pruebas automáticas. Los armarios (puertas, cajones) están previstos en la arquitectura pero
 > **no implementados**.
 
@@ -47,7 +47,7 @@ python -m pytest -q
 | 4. Documentación | ✔ | 12 hojas de planos (conjunto, estructura, perfiles, chapa, desarrollos, pletinas, soldaduras con detalles, explosionado, montaje, despiece), STEP de conjunto y de cada pieza, STL, BREP, GLB, DXF, Excel con fórmulas, informe PDF |
 | 5. Fabricación | ✔ | Desarrollos con BA = π/2·(Ri+K·t), DFM (láser, plegadora, perfiles, soldadura, montaje), corte de barras hasta la cota inferior, anidado de chapa |
 | 6. Asistente IA | ✔ | Interpretación en español con evidencia, preguntas de datos faltantes, propuesta preliminar diferenciada de lo verificado |
-| 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) y **carro de taller** (ruedas de espiga con freno; asa en uno, dos o ningún extremo). Peto trasero opcional en mesa, puesto y carro. Armarios: sólo se identifican en el asistente |
+| 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) **carro de taller** (ruedas de espiga con freno; asa en uno, dos o ningún extremo) y **carro estantería** (N niveles sobre ruedas, asa opcional). Peto trasero opcional en mesa, puesto y carro. Armarios: sólo se identifican en el asistente |
 | 8. Validación | ✔ | 64 pruebas: unidades frente a soluciones analíticas y tablas, las cuatro familias, QA, API, aceptación §23, validación cruzada navegador ↔ servidor, expediente del navegador y legibilidad de planos |
 
 ### Verificaciones de la cadena (no simuladas)
@@ -132,6 +132,25 @@ Plantillas: 4 de puesto de trabajo (montaje, inspección, embalaje con peto, tal
 carro (dos niveles, transporte, dos asas, mesa móvil con peto, inoxidable alimentario) y la mesa de
 laboratorio inoxidable con peto de 100 mm.
 
+## Carro estantería
+
+`carro_estanteria` (`CE`) es la estantería industrial montada sobre ruedas: carro de picking, de
+bandejas o de transporte interno, con 2 a 6 niveles. Tiene montantes, bastidores por nivel y bandejas
+de chapa plegada, como la estantería. Las cuatro ruedas giratorias de espiga roscada van en las
+tuercas soldadas de las placas base, con freno en el extremo izquierdo, y se eligen por cálculo.
+
+- **Asa de empuje** (`ASA_EMPUJE`: un extremo, dos o ninguna): tubo soldado entre los montantes de un
+  extremo, a `ALTURA_ASA`. Debe dejar 40 mm de holgura para la mano respecto a las bandejas y
+  bastidores de cada nivel; si no, se informa `GEO-ASA-NIVEL` y aparecen las interferencias reales.
+- **Vuelco:** un carro no se ancla. La fuerza de maniobra se aplica a la altura de empuje (la del
+  asa o, sin asa, `ALTURA_ASA` como altura de la mano), nunca por encima de la altura total. El
+  desplome y las barras se siguen comprobando con la fuerza en el nivel superior.
+- El asistente reconoce «carro estantería», «carro de picking / de bandejas / de baldas», «carro de
+  N niveles» y «estantería con ruedas / móvil».
+
+Plantillas: tres niveles de 1.000 mm, picking de cuatro niveles de 1.200 mm con asa en los dos
+extremos, y bandejas inoxidable de cinco niveles de 800 mm.
+
 ## Presupuesto estimado
 
 Cada diseño lleva un presupuesto unitario calculado desde el modelo y el plan de fabricación con
@@ -177,8 +196,10 @@ La auditoría (`frontend/src/engine/layout.ts`) busca textos que se pisan, líne
 texto, globos que pisan algo, líneas de referencia cruzadas y textos fuera del marco o dentro del
 cajetín. Su resultado entra en el control de calidad del expediente como `PLANO-LEGIBILIDAD`.
 
-- **Plantillas:** las 19 plantillas (las 4 familias) salen con 0 conflictos en planos y montaje,
-  salvo un cruce de líneas de referencia en el explosionado de PT-2000-TALLER.
+- **Plantillas:** las 25 plantillas (las 5 familias) salen con 0 conflictos en planos y montaje,
+  salvo un cruce de líneas de referencia en el explosionado de PT-2000-TALLER. Una pasada final
+  recoloca cualquier globo cuya referencia cruce otra; en ese caso no existe una posición libre
+  de cruces y la hoja sigue siendo legible.
 - **Configuraciones aleatorias:** en 60 configuraciones (1.032 hojas) quedan 6 conflictos: 5 cruces
   de referencias y 1 línea que toca un texto. Antes de estos cambios, 40 configuraciones (626 hojas)
   daban 117 conflictos, entre ellos textos superpuestos.
@@ -188,7 +209,7 @@ cajetín. Su resultado entra en el control de calidad del expediente como `PLANO
 ## Versión artefacto (motor en el navegador)
 
 La misma interfaz funciona sin servidor: el motor completo está portado a TypeScript en
-`frontend/src/engine/` (parámetros y dependencias, las cuatro familias, chapa plegada y
+`frontend/src/engine/` (parámetros y dependencias, las cinco familias, chapa plegada y
 desarrollos, FEM 3D de barras con solver skyline LDLᵀ y renumeración Cuthill-McKee, placas de
 Navier, comprobaciones EN 1993, dimensionado automático, plan de corte, anidado, DFM, BOM, control
 de calidad e intérprete del asistente). `frontend/src/local/` contiene la API local (misma interfaz
@@ -231,16 +252,19 @@ cd frontend && npx esbuild ../tools/webcheck/run.ts --bundle --platform=node --f
 cd .. && python tools/webcheck/compare.py /tmp/webrun.mjs 60 11
 ```
 
-Con las 19 plantillas de las cuatro familias, la aceptación 2000→2400, los dos diseños por defecto y
-14 casos aleatorios de todas las familias (37 casos) no hay ninguna diferencia. El aprovechamiento
-coincide exactamente en todas las comprobaciones salvo el vuelco, donde el error relativo es
-≤ 2,4·10⁻⁴ por el centro de gravedad calculado sobre los sólidos facetados.
+Con las 25 plantillas de las cinco familias, la aceptación 2000→2400, los dos diseños por defecto y
+30 casos aleatorios de todas las familias (59 casos) no hay ninguna diferencia, ni en el presupuesto.
+Los casos aleatorios incluyen peto, asas y carro estantería. Una segunda tanda de 66 casos (40
+aleatorios) tampoco tuvo diferencias. El aprovechamiento coincide exactamente en todas las
+comprobaciones salvo el vuelco, donde el error relativo es ≤ 2,4·10⁻⁴ por el centro de gravedad
+calculado sobre los sólidos facetados.
 
 `tools/webcheck/verify_dossier.py` relee el ZIP generado por el navegador con las herramientas del servidor:
 
 - **STEP:** reimportación con OpenCascade. Mesa de 2000 mm: 99/99 sólidos válidos y volumen a −0,07 % del B-rep;
   estantería de 2888 mm: 311/311. Puesto de trabajo de 1500 mm: 137 ocurrencias, 139/139 sólidos válidos
-  (−0,08 %). Carro de 1200 mm: 81 ocurrencias, 95/95 sólidos válidos (−0,22 %). Cada rueda se compone de varios
+  (−0,08 %). Carro de 1200 mm: 81 ocurrencias, 95/95 sólidos válidos (−0,22 %). Carro estantería de picking
+  de 1200 mm: 126 ocurrencias, 140/140 sólidos válidos (−0,15 %). Cada rueda se compone de varios
   cuerpos: horquilla, espiga, cabezal, rueda y pedal.
 - **PDF:** pdfplumber (hojas A3 con cajetín).
 - **Excel:** openpyxl (fórmulas, unidades y masa frente al BOM del servidor).
@@ -253,6 +277,11 @@ completos): 0 excepciones, 0 valores no finitos y 0 sólidos abiertos. Otros 400
 corregidos. Las 168 configuraciones con interferencias acompañan, todas, a un error de diseño ya señalado por las
 reglas (por ejemplo, tuerca soldada mayor que el interior de la pata). `tools/webcheck/layout_fuzz.ts` hace lo
 mismo con la auditoría de legibilidad de los planos.
+
+Tras añadir el peto, las asas y el carro estantería, otros 300 casos de las cinco familias (con 2
+expedientes completos) dieron 0 excepciones, 0 valores no finitos, 0 sólidos abiertos y 0 expedientes
+fallidos. Las 132 configuraciones con interferencias van, todas, acompañadas de otro error de diseño
+que las explica (`tools/webcheck/interf_why.ts`: 0 sospechosas).
 
 La comparación destapó dos fallos del motor de referencia, ya corregidos en ambos motores:
 

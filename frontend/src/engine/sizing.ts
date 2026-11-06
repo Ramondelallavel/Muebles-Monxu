@@ -172,7 +172,7 @@ function selectFeet(family, ps, notes) {
     if (c.rated_load_kg >= need && fits) {
       ps.values[sp] = code;
       ps.sources[sp] = "calculo";
-      notes.push({ level: "propuesta", code: "DIM-PIES", message: `${word} seleccionado por cálculo: ${c.name} (capacidad nominal de catálogo `
+      notes.push({ level: "propuesta", code: "DIM-PIES", message: `${word} seleccionad${word === "Rueda" ? "a" : "o"} por cálculo: ${c.name} (capacidad nominal de catálogo `
         + `${c.rated_load_kg} kg ≥ reacción de servicio ${pyRound(need, 0).toFixed(0)} kg por apoyo). Capacidad a confirmar con la ficha del proveedor.` });
       return;
     }

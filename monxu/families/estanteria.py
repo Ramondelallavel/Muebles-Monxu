@@ -222,7 +222,7 @@ class Estanteria(MesaIndustrial):
                 fpart, fname = self._support_part(k, ps)
                 model.add(f"{g}.PIE.{k}", f"{fname} {cname[k]}", fpart, G.translation(x, y, 0.0), g)
                 desc = (f"Pie roscado {foot['thread']} en tuerca soldada" if fpart.role == "pie_nivelador" else
-                        f"{fname} roscada {foot['thread']} en tuerca soldada")
+                        f"{fname} roscad{'a' if fpart.role == 'rueda' else 'o'} {foot['thread']} en tuerca soldada")
                 model.add_joint(Joint(f"J.PIE.{k}", "roscada", (f"{g}.PIE.{k}", f"EST.TUERCA.{k}"), (x, y, d["hn"]), desc))
         tray = SheetPart("balda", f"Bandeja chapa {d['spec'].t:g} mm", d["spec"], mat_c, fin)
         for i, (lid, z) in enumerate(zip(d["level_ids"], d["z_levels"]), start=1):

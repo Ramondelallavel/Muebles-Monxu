@@ -637,8 +637,12 @@ def plan_assembly(d: Drawing, X: _Ctx):
         d.notes(cell[0] + 3, cell[1] + 14, [texts.get(sa.id, "")], h=2.1, width=118)
     d.c.setLineWidth(0.3)
     d.c.rect(284, 84, 124, 90)
+    sups = m.structure.get("supports") or []
+    castor = bool(sups) and catalog.component(sups[0]["component"])["category"].startswith("ruedas")
+    support_tools = (["· Llave fija 17/19 para contratuerca de ruedas"] if castor else
+                     ["· Llave fija 17/19 para contratuerca de pies", "· Nivel de burbuja"])
     d.notes(287, 170, ["HERRAMIENTAS:", "· Remachadora para tuercas M6", "· Llave Allen 4 mm (dinamométrica)",
-                       "· Llave fija 17/19 para contratuerca de pies", "· Nivel de burbuja", "",
+                       *support_tools, "",
                        "PARES DE APRIETE:", "· ISO 7380 M6 8.8 en remachable de acero: 8 N·m", "",
                        "DESMONTAJE:", "Encimera y balda desmontables (uniones atornilladas). La estructura es un",
                        "subconjunto soldado no desmontable.", "",

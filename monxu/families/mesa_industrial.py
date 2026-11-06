@@ -326,7 +326,8 @@ class MesaIndustrial(ProductFamily):
                 fpart, fname = self._support_part(k, ps)
                 model.add(f"{g}.PIE.{k}", f"{fname} {corner_names[k]}", fpart, G.translation(x, y, 0.0), g)
                 model.add_joint(Joint(f"J.PIE.{k}", "roscada", (f"{g}.PIE.{k}", f"EST.TUERCA.{k}"),
-                                      (x, y, d["hn"]), f"{fname} roscado {foot['thread']} en tuerca soldada"))
+                                      (x, y, d["hn"]), f"{fname} roscad{'a' if fpart.role == 'rueda' else 'o'} "
+                                                       f"{foot['thread']} en tuerca soldada"))
 
         # ---------------------------------------------------------------- chapas
         with ctx.feature("F20", "Encimera de chapa plegada"):

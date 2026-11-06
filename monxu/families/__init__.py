@@ -4,3 +4,4 @@ from . import mesa_industrial  # noqa: F401
 from . import estanteria  # noqa: F401
 from . import puesto_trabajo  # noqa: F401
 from . import carro_taller  # noqa: F401
+from . import carro_estanteria  # noqa: F401

@@ -1012,7 +1012,14 @@ export const ASSEMBLY_TEXTS = {
   BAL: "Colocar la balda sobre el bastidor inferior, con las escotaduras alrededor de las patas. Fijar con tornillos ISO 7380 M6x12 (par 8 N·m, llave Allen 4 mm).",
   ENC: "Colocar la encimera sobre el bastidor superior y fijarla con tornillos ISO 7380 M6x12 por las pestañas (par 8 N·m). Apretar en cruz desde el centro.",
 };
-const TOOLS = ["HERRAMIENTAS:", "· Remachadora para tuercas M6", "· Llave Allen 4 mm (dinamométrica)", "· Llave fija 17/19 para contratuerca de pies", "· Nivel de burbuja", "",
+/** Herramientas, pares y avisos de montaje según el tipo de apoyo (pies niveladores o ruedas). */
+const toolsFor = (m) => {
+  const sup = m.structure.supports?.[0];
+  const castor = !!sup && C.component(sup.component).category.startsWith("ruedas");
+  return ["HERRAMIENTAS:", "· Remachadora para tuercas M6", "· Llave Allen 4 mm (dinamométrica)",
+    ...(castor ? ["· Llave fija 17/19 para contratuerca de ruedas"] : ["· Llave fija 17/19 para contratuerca de pies", "· Nivel de burbuja"]), "", ...TOOLS_TAIL];
+};
+const TOOLS_TAIL = [
   "PARES DE APRIETE:", "· ISO 7380 M6 8.8 en remachable de acero: 8 N·m", "", "DESMONTAJE:", "Chapas desmontables (uniones atornilladas). La estructura es un subconjunto soldado no desmontable.", "",
   "SEGURIDAD:", "Manipular las chapas entre dos personas; usar guantes (cantos de chapa)."];
 
@@ -1034,7 +1041,7 @@ function planAssembly(d, X) {
     d.notes(cell[0] + 3, cell[1] + 14, [texts[sa.id] ?? ""], 2.1, 118);
   });
   d.rect(284, 84, 124, 90, 0.3);
-  d.notes(287, 170, TOOLS, 2.2, 118);
+  d.notes(287, 170, toolsFor(m), 2.2, 118);
 }
 
 function planBom(d, X) {
@@ -1097,7 +1104,7 @@ export async function assemblyInstructions(model, summary, info, X = null, onPro
   d.reserve([283, 83, 409, 275]);
   balloons(d, v0, partTargets(X, m.instances, true), { region: [24, 84, 280, 285] });
   let y = d.notes(287, 268, [`${m.family_name} ${m.product_code}`, `Masa total ${summary.bom.totals.total_mass.toFixed(1)} kg · ${summary.bom.totals.components} componentes`, "",
-    "ORDEN DE MONTAJE:", ...order.map((s, n) => `${n + 1}. ${s.name}`), "", ...TOOLS], 2.4, 118, true);
+    "ORDEN DE MONTAJE:", ...order.map((s, n) => `${n + 1}. ${s.name}`), "", ...toolsFor(m)], 2.4, 118, true);
   void y;
   const shown = [];
   order.forEach((sa, n) => {

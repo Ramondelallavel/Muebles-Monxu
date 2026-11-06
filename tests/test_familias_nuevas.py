@@ -16,6 +16,7 @@ CT = {"LONGITUD": 1000, "ANCHURA": 600, "ALTURA": 900, "CARGA_TOTAL": 100, "NUME
 def test_registered_and_implemented():
     lib = {f["id"]: f["status"] for f in library()}
     assert lib["puesto_trabajo"] == "implementada" and lib["carro_taller"] == "implementada"
+    assert lib["carro_estanteria"] == "implementada"
     assert lib["armario"] == "en_desarrollo"
 
 
@@ -129,3 +130,48 @@ def test_assistant_mobile_table_and_upstand():
     assert st["values"]["PETO_TRASERO"] == 60 and not st["unsupported"]
     r2 = assistant.handle(assistant.new_state(), "Carro de taller 1200x700x900 con dos asas, 150 kg")
     assert r2["state"]["values"]["ASA_EMPUJE"] == "dos_extremos"
+
+
+CE = {"ANCHURA": 1200, "PROFUNDIDAD": 600, "ALTURA": 1600, "NUMERO_NIVELES": 4, "ALTURA_PRIMER_NIVEL": 250,
+      "CARGA_POR_NIVEL": 40, "ALTURA_ASA": 1000, "ASA_EMPUJE": "dos_extremos", "CARGA_HORIZONTAL": 60}
+
+
+def test_shelving_cart():
+    r = regenerate("carro_estanteria", CE)
+    m = r.model
+    assert m.product_code == "CE1200-600-1600"
+    assert sum(i.id.startswith("BAL.BANDEJA.") for i in m.instances) == 4
+    wheels = {i.id: i.part.code for i in m.instances if i.role == "rueda"}
+    assert len(wheels) == 4 and all(c.endswith("_FRENO") == k.endswith((".DI", ".TI")) for k, c in wheels.items())
+    assert m.params.values["RUEDA"].startswith("RUEDA_ESP_")
+    assert sorted(i.id for i in m.instances if i.role == "asa") == ["EST.ASA", "EST.ASA_D"]
+    assert m.instance("EST.ASA").axis[0][2] == pytest.approx(1000 - catalog.profile(m.params.values["PERFIL_ASA"]).H / 2)
+    assert m.structure["push_height"] == 1000 and m.structure["product_word"] == "carro"
+    vuelco = next(c for c in r.eng["checks"] if c["id"] == "E.VUELCO")
+    assert vuelco["status"] == "CUMPLE" and "carro" in vuelco["description"]
+    assert r.eng["status"] == "CUMPLE" and r.interferences["interferences"] == [] and r.qa.result()["blocking"] == 0
+
+
+def test_shelving_cart_handle_clearance():
+    r = regenerate("carro_estanteria", {**CE, "NUMERO_NIVELES": 3, "ALTURA": 1400, "ALTURA_PRIMER_NIVEL": 300,
+                                        "ALTURA_ASA": 860, "ASA_EMPUJE": "un_extremo"})
+    assert any(n["code"] == "GEO-ASA-NIVEL" for n in r.model.design_notes)
+    assert r.qa.result()["blocking"] > 0
+
+
+def test_assistant_shelving_cart():
+    r = assistant.handle(assistant.new_state(), "Carro de picking de 4 niveles 1200x600x1600, 40 kg por nivel, "
+                                                "con asa en los dos extremos")
+    st = r["state"]
+    assert st["family"] == "carro_estanteria" and not st["unsupported"]
+    assert st["values"]["ASA_EMPUJE"] == "dos_extremos" and st["values"]["NUMERO_NIVELES"] == 4
+    assert st["values"]["CARGA_POR_NIVEL"] == 40 and st["values"]["PROFUNDIDAD"] == 600
+
+
+@pytest.mark.slow
+def test_shelving_cart_dossier(tmp_path):
+    r = regenerate("carro_estanteria", CE)
+    res = generate_dossier(r, {"code": "P-CE", "revision": "A"}, tmp_path / "exp")
+    assert res["qa"]["blocking"] == 0
+    assert any(i["code"] == "EXP-STEP" and i["level"] == "ok" for i in res["qa"]["items"])
+    assert any(i["code"] == "PLANO-GEOMETRIA" and i["level"] == "ok" for i in res["qa"]["items"])

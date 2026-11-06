@@ -17,6 +17,7 @@ NUM = r"(\d{1,3}(?:[.\s]\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)"
 UNIT = r"(?:(mm|milimetros?|cm|centimetros?|m|metros?)\b)"
 
 FAMILY_KEYWORDS = [
+    ("carro_estanteria", r"carros? (estanteria|de (baldas|bandejas|picking|estantes))|carros? de \d+ (niveles|baldas|bandejas|estantes)|estanterias? (con ruedas|movil|movible|rodante|sobre ruedas)"),
     ("puesto_trabajo", r"puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion|embalaje)"),
     ("carro_taller", r"\bcarros?\b|\bcarritos?\b|carro de (taller|transporte)"),
     ("estanteria", r"estanteri"),
@@ -24,8 +25,10 @@ FAMILY_KEYWORDS = [
     ("armario", r"\barmario"),
 ]
 #: accesorios que sí implementa una familia (no se marcan como no soportados) y parámetro que activan
-SUPPORTED_BY = {("puesto_trabajo", "panel_trasero"): ("PANEL_HERRAMIENTAS", 1), ("carro_taller", "ruedas"): None}
+SUPPORTED_BY = {("puesto_trabajo", "panel_trasero"): ("PANEL_HERRAMIENTAS", 1), ("carro_taller", "ruedas"): None,
+                ("carro_estanteria", "ruedas"): None}
 MESA_LIKE = ("mesa_industrial", "puesto_trabajo", "carro_taller")
+SHELF_LIKE = ("estanteria", "carro_estanteria")
 
 UNSUPPORTED_ACCESSORIES = [
     ("cajones", r"cajon|cajonera", "Cajones / cajonera"),
@@ -125,7 +128,7 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
             if mm:
                 it.set(param, to_mm(to_number(mm.group(1)), mm.group(2)), mm.group(0))
                 break
-    if it.family == "estanteria" and "ANCHURA" in it.values:
+    if it.family in SHELF_LIKE and "ANCHURA" in it.values:
         # en estanterías: anchura = frente, profundidad = fondo
         pm = re.search(rf"{NUM}\s*{UNIT}?\s*(?:de\s+)?(?:profundidad|fondo)", t)
         if pm:
@@ -160,7 +163,7 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
     if re.search(r"balda (sin carga|vacia)|sin carga en la balda", t):
         it.set("CARGA_BALDA", 0.0, "balda sin carga")
     mm = re.search(rf"{NUM}\s*(n|newton)\b", t)
-    if mm and re.search(r"horizontal|empuje", t):
+    if mm and re.search(r"horizontal|empuje|maniobra|arrastre", t):
         it.set("CARGA_HORIZONTAL", to_number(mm.group(1)), mm.group(0))
     elif re.search(r"(sin|no hay|despreciables?) (empujes|esfuerzos horizontales)|empujes? (ligeros?|despreciables?)|empujes? horizontales? ligeros?", t):
         it.set("CARGA_HORIZONTAL", 100.0, "empujes horizontales ligeros")
@@ -250,7 +253,7 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
             it.set("ESTANTE_SUPERIOR", 1, "estante superior")
         if re.search(r"sin panel", t):
             it.set("PANEL_HERRAMIENTAS", 0, "sin panel")
-    if it.family == "carro_taller":
+    if it.family in ("carro_taller", "carro_estanteria"):
         if re.search(r"sin asas?\b", t) or (mobile_table and not re.search(r"\basas?\b", t)):
             it.set("ASA_EMPUJE", "ninguna", "sin asa" if "sin asa" in t else "mesa sobre ruedas")
         elif re.search(r"dos asas|doble asa|asas? en (ambos|los dos) (extremos|lados)|asa en cada (extremo|lado)", t):
@@ -279,7 +282,7 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
             mm = re.search(rf"(\d+)\s+(?:{rx})", t)
             it.unsupported.append(label + (f" ({mm.group(1)} uds)" if mm else ""))
             it.accessories.append(key)
-    if it.family == "estanteria":
+    if it.family in SHELF_LIKE:
         if "LONGITUD" in it.values:            # en estanterías el "largo" es la anchura de frente
             L, ev = it.values.pop("LONGITUD"), it.evidence.pop("LONGITUD")
             if "PROFUNDIDAD" not in it.values and "ANCHURA" in it.values and it.evidence.get("ANCHURA") == ev:
@@ -296,6 +299,7 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
 
 LABELS = {"mesa_industrial": "Mesa industrial", "estanteria": "Estantería industrial",
           "puesto_trabajo": "Puesto de trabajo industrial", "carro_taller": "Carro de taller",
+          "carro_estanteria": "Carro estantería",
           "armario": "Armario / mobiliario auxiliar"}
 DIM_PROPOSAL = {"mesa_industrial": (1800.0, 800.0, 900.0), "puesto_trabajo": (1500.0, 750.0, 900.0),
                 "carro_taller": (1000.0, 600.0, 900.0)}
@@ -305,8 +309,8 @@ def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = N
     """Preguntas concretas para la familia (sólo mesa industrial implementada)."""
     asked = asked or set()
     q: list[Question] = []
-    if family == "estanteria":
-        return _missing_shelf(values, asked)
+    if family in SHELF_LIKE:
+        return _missing_shelf(values, asked, family)
     if family not in MESA_LIKE:
         return q
     dL, dW, dH = DIM_PROPOSAL[family]
@@ -366,23 +370,31 @@ def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = N
     return q
 
 
-def _missing_shelf(values: dict[str, Any], asked: set[str]) -> list[Question]:
+def _missing_shelf(values: dict[str, Any], asked: set[str], family: str = "estanteria") -> list[Question]:
     q: list[Question] = []
-    for p, lbl, prop in (("ANCHURA", "anchura de frente", 1500.0), ("PROFUNDIDAD", "profundidad", 600.0),
-                         ("ALTURA", "altura total", 2000.0)):
+    cart = family == "carro_estanteria"
+    for p, lbl, prop in (("ANCHURA", "anchura de frente", 1000.0 if cart else 1500.0),
+                         ("PROFUNDIDAD", "profundidad", 600.0), ("ALTURA", "altura total", 1400.0 if cart else 2000.0)):
         if p not in values:
             q.append(Question(p, f"¿Qué {lbl} necesita (mm)?", "Dimensión principal necesaria para generar la geometría.",
                               blocking="generacion", proposal=prop))
     if "NUMERO_NIVELES" not in values:
+        opts = [(3, 4), 3] if cart else [(4, 5), 5]
         q.append(Question("NUMERO_NIVELES", "¿Cuántos niveles de bandejas?", "Define el número de bastidores y bandejas.",
-                          [{"label": "4 niveles", "value": 4}, {"label": "5 niveles", "value": 5}], "generacion", 5))
+                          [{"label": f"{n} niveles", "value": n} for n in opts[0]], "generacion", opts[1]))
     if values.get("CARGA_POR_NIVEL") is None:
+        loads = (25, 40, 60) if cart else (80, 150, 250)
         q.append(Question("CARGA_POR_NIVEL", "¿Qué carga soportará cada nivel (kg) y estará repartida (cajas) o "
                                              "concentrada (piezas pesadas)?",
                           "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.",
-                          [{"label": "80 kg", "value": 80}, {"label": "150 kg", "value": 150},
-                           {"label": "250 kg", "value": 250}], "verificacion"))
-    if "ANCLAJE" not in values and "ANCLAJE" not in asked:
+                          [{"label": f"{n} kg", "value": n} for n in loads], "verificacion"))
+    if cart and "CARGA_HORIZONTAL" not in values and "CARGA_HORIZONTAL" not in asked:
+        q.append(Question("CARGA_HORIZONTAL", "¿Qué fuerza de maniobra tendrá el carro (empuje con las ruedas frenadas "
+                                              "o contra un obstáculo)?",
+                          "Es la acción que puede volcar el carro; un carro no se ancla.",
+                          [{"label": "Ligera (50 N)", "value": 50}, {"label": "Normal (100 N)", "value": 100}],
+                          "verificacion", 100.0))
+    if not cart and "ANCLAJE" not in values and "ANCLAJE" not in asked:
         q.append(Question("ANCLAJE", "¿Se anclará la estantería al suelo o a la pared?",
                           "Una estantería alta y estrecha sin anclaje puede volcar con un empuje moderado.",
                           [{"label": "Anclada al suelo", "value": "al_suelo"}, {"label": "Sin anclaje", "value": "ninguno"}],
@@ -402,10 +414,13 @@ def _missing_shelf(values: dict[str, Any], asked: set[str]) -> list[Question]:
 
 def proposal_for(family: str, values: dict[str, Any]) -> dict[str, Any]:
     """Configuración constructiva preliminar (propuesta IA) para completar lo no indicado."""
-    if family == "estanteria":
-        p = {k: v for k, v in (("ANCHURA", 1500.0), ("PROFUNDIDAD", 600.0), ("ALTURA", 2000.0), ("NUMERO_NIVELES", 5))
-             if k not in values}
-        for k in ("PERFIL_MONTANTE", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ESPESOR_BALDA"):
+    if family in SHELF_LIKE:
+        cart = family == "carro_estanteria"
+        dims = ((("ANCHURA", 1000.0), ("PROFUNDIDAD", 600.0), ("ALTURA", 1400.0), ("NUMERO_NIVELES", 3)) if cart else
+                (("ANCHURA", 1500.0), ("PROFUNDIDAD", 600.0), ("ALTURA", 2000.0), ("NUMERO_NIVELES", 5)))
+        p = {k: v for k, v in dims if k not in values}
+        for k in ("PERFIL_MONTANTE", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ESPESOR_BALDA") + \
+                (("PERFIL_ASA", "RUEDA") if cart else ()):
             if k not in values:
                 p[k] = "auto"
         return p
@@ -437,7 +452,7 @@ def proposal_for(family: str, values: dict[str, Any]) -> dict[str, Any]:
 def describe(it: Interpretation) -> list[str]:
     v = it.values
     out = [f"Familia: {LABELS.get(it.family, 'no identificada')}."]
-    lab = {"LONGITUD": "Longitud", "ANCHURA": "Anchura (frente)" if it.family == "estanteria" else "Anchura/fondo",
+    lab = {"LONGITUD": "Longitud", "ANCHURA": "Anchura (frente)" if it.family in SHELF_LIKE else "Anchura/fondo",
            "PROFUNDIDAD": "Profundidad", "ALTURA": "Altura"}
     for k, l in lab.items():
         if k in v:
@@ -467,6 +482,11 @@ def describe(it: Interpretation) -> list[str]:
                    + ("no" if v.get("PANEL_HERRAMIENTAS") == 0 else "sí") + ".")
     if it.family in MESA_LIKE and v.get("PETO_TRASERO"):
         out.append(f"Peto trasero: {v['PETO_TRASERO']:g} mm sobre la encimera.")
+    if it.family == "carro_estanteria":
+        asa = v.get("ASA_EMPUJE", "un_extremo")
+        out.append("Asa de empuje: " + {"un_extremo": "en un extremo", "dos_extremos": "en los dos extremos",
+                                         "ninguna": "sin asa"}[asa] + ".")
+        out.append("Apoyos: ruedas giratorias de espiga roscada, con freno en un extremo (sin anclaje).")
     if it.family == "carro_taller":
         asa = v.get("ASA_EMPUJE", "un_extremo")
         out.append("Asa de empuje: " + {"un_extremo": "en un extremo", "dos_extremos": "en los dos extremos",

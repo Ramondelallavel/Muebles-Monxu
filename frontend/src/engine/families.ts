@@ -309,7 +309,7 @@ function feet(model, d, corners, cname, code, foot, g = "APO", partOf = null) {
     const [fpart, fname] = partOf ? partOf(k) : [shared, "Pie nivelador"];
     model.add(`${g}.PIE.${k}`, `${fname} ${cname[k]}`, fpart, translation(x, y, 0.0), g);
     model.joint({ id: `J.PIE.${k}`, kind: "roscada", members: [`${g}.PIE.${k}`, `EST.TUERCA.${k}`], location: [x, y, d.hn],
-      description: partOf ? `${fname} roscado ${foot.thread} en tuerca soldada` : `Pie roscado ${foot.thread} en tuerca soldada` });
+      description: partOf ? `${fname} roscad${fpart.role === "rueda" ? "a" : "o"} ${foot.thread} en tuerca soldada` : `Pie roscado ${foot.thread} en tuerca soldada` });
   }
 }
 
@@ -471,24 +471,25 @@ class Estanteria extends MesaIndustrial {
     const ctx = new ParamContext(ps);
     const V = ps.values;
     const A = V.ANCHURA, Pf = V.PROFUNDIDAD, H = V.ALTURA;
-    const model = new ProductModel(this.id, this.name, `ES${fx(A)}-${fx(Pf)}-${fx(H)}`, ps, ctx);
+    const model = new ProductModel(this.id, this.name, `${this.def.prefix ?? "ES"}${fx(A)}-${fx(Pf)}-${fx(H)}`, ps, ctx);
     model.requested = ps;
     const d = this._deriveShelf(ctx, model);
     const mat_s = V.MATERIAL_ESTRUCTURAL, mat_c = V.MATERIAL_CHAPA, fin = V.ACABADO;
     model.addSub("EST", "Estructura soldada", { welded: true, step: 1 });
-    model.addSub("APO", "Apoyos niveladores", { explode: [0, 0, -160], step: 2 });
+    model.addSub(this.support_group[0], this.support_group[1], { explode: [0, 0, -160], step: 2 });
     model.addSub("BAL", "Bandejas", { explode: [0, -0.9 * Pf, 0], step: 3 });
     const { leg, rail, trv, a } = d;
     const corners = { DI: [a / 2, a / 2], DD: [A - a / 2, a / 2], TI: [a / 2, Pf - a / 2], TD: [A - a / 2, Pf - a / 2] };
     const cname = { DI: "delantero izquierdo", DD: "delantero derecho", TI: "trasero izquierdo", TD: "trasero derecho" };
-    const foot = C.component(V.PIE_NIVELADOR);
+    const sp = this.support_param;
+    const foot = C.component(V[sp]);
     const thread = parseFloat(foot.thread.slice(1));
     const nutCode = `TUERCA_SOLDAR_M${fx(thread)}`;
     const weld = makeWelder(model);
     const legs = {};
     ctx.feature("F10", "Estructura soldada", () => {
       ctx.feature("F11", "Montantes, placas base y tuercas", () => {
-        ctx.uses("LONGITUD_MONTANTE", "PERFIL_MONTANTE", "ANCHURA", "PROFUNDIDAD", "ESPESOR_PLACA_BASE", "PIE_NIVELADOR",
+        ctx.uses("LONGITUD_MONTANTE", "PERFIL_MONTANTE", "ANCHURA", "PROFUNDIDAD", "ESPESOR_PLACA_BASE", sp,
           "MATERIAL_ESTRUCTURAL", "ACABADO");
         legsAndPlates(model, d, legs, corners, cname, mat_s, fin, thread, nutCode, "montante", `Montante ${leg.code}`, "EST.MONT",
           "Montante", "Placa base a montante", H);
@@ -504,9 +505,9 @@ class Estanteria extends MesaIndustrial {
         });
       });
     });
-    ctx.feature("F40", "Apoyos niveladores", () => {
-      ctx.uses("PIE_NIVELADOR", "ANCHURA", "PROFUNDIDAD", "PERFIL_MONTANTE");
-      feet(model, d, corners, cname, V.PIE_NIVELADOR, foot);
+    ctx.feature("F40", this.support_group[1], () => {
+      ctx.uses(sp, "ANCHURA", "PROFUNDIDAD", "PERFIL_MONTANTE");
+      feet(model, d, corners, cname, V[sp], foot, this.support_group[0], sp === "PIE_NIVELADOR" ? null : (k) => this._supportPart(k, V));
     });
     const tray = sheetPart("balda", `Bandeja chapa ${g(d.spec.t)} mm`, d.spec, mat_c, fin);
     d.level_ids.forEach((lid, i0) => {
@@ -519,6 +520,7 @@ class Estanteria extends MesaIndustrial {
         fasteners(model, d.fix[lid], "BAL", `BAL.N${i}`, tid);
       });
     });
+    this._extras(model, ctx, d, legs, corners);
     model.structure = this._shelfStructure(model, d, legs);
     const n = d.z_levels.length, q = V.CARGA_POR_NIVEL;
     model.dims = { ANCHURA: A, PROFUNDIDAD: Pf, ALTURA: H, LONGITUD_MONTANTE: d.leg_len,
@@ -526,6 +528,7 @@ class Estanteria extends MesaIndustrial {
       levels: range(n).map((i) => [`NIVEL_${i + 1}`, `BAL.BANDEJA.${i + 1}`]),
       drawing_expected: Object.fromEntries(range(n).map((k) => [`DIST_NIVEL_${k + 1}`, k === 0 ? d.z_levels[0] : d.z_levels[k] - d.z_levels[k - 1]])),
       load_text: q ? `Carga distribuida por nivel de proyecto: ${g(q)} kg (${n} niveles, total ${g(n * q)} kg)` : "Carga por nivel: NO DEFINIDA" };
+    this._extraDims(model, d);
     model.numberParts();
     return model;
   }
@@ -545,10 +548,11 @@ class Estanteria extends MesaIndustrial {
       const leg = C.profile(ctx.get("PERFIL_MONTANTE")), rail = C.profile(ctx.get("PERFIL_LARGUERO")), trv = C.profile(ctx.get("PERFIL_TRAVESANO"));
       if (leg.B !== leg.H) throw new Error("Los montantes deben ser de tubo cuadrado");
       const a = leg.B;
-      const foot = C.component(ctx.get("PIE_NIVELADOR"));
+      const sp = this.support_param;
+      const foot = C.component(ctx.get(sp));
       const hn = +foot.nominal_height, tp = ctx.get("ESPESOR_PLACA_BASE");
       const A = ctx.get("ANCHURA"), Pf = ctx.get("PROFUNDIDAD"), H = ctx.get("ALTURA");
-      const z_leg0 = ctx.derive("COTA_INICIO_MONTANTE", (p) => +C.component(p.get("PIE_NIVELADOR")).nominal_height + p.get("ESPESOR_PLACA_BASE"),
+      const z_leg0 = ctx.derive("COTA_INICIO_MONTANTE", (p) => +C.component(p.get(sp)).nominal_height + p.get("ESPESOR_PLACA_BASE"),
         "mm", "Cota inicio de montante");
       const leg_len = ctx.derive("LONGITUD_MONTANTE", (p) => p.get("ALTURA") - p.get("COTA_INICIO_MONTANTE"), "mm", "Longitud de corte de montante");
       const head_h = +C.component("TUERCA_REMACHABLE_M6").head_h;
@@ -599,7 +603,7 @@ class Estanteria extends MesaIndustrial {
     const area = d.Lx * d.Ly - 4 * notch * notch;
     const surfaces = d.level_ids.map((lid, i) => ({ id: lid, label: `Bandeja del nivel ${i + 1}`, level: lid, load_param: "CARGA_POR_NIVEL",
       sheet_instance: `BAL.BANDEJA.${i + 1}`, area_mm2: area }));
-    return { levels: model.structure.levels ?? {}, surfaces, supports: supportsOf(model, legs), horizontal_points: [legs.DI, legs.DD],
+    return { levels: model.structure.levels ?? {}, surfaces, supports: supportsOf(model, legs, this.support_group[0]), horizontal_points: [legs.DI, legs.DD],
       worktop_height: model.params.values.ALTURA, leg_ids: Object.values(legs), product_word: "estantería", member_roles: memberRoles(model),
       assembly_texts: {
         EST: "Recepción de la estructura soldada y pintada. Insertar las tuercas remachables M6 en los taladros Ø9,1 de largueros y "
@@ -951,8 +955,87 @@ class CarroTaller extends MesaIndustrial {
   }
 }
 
+// ============================================================================ carro estantería (port de carro_estanteria.py)
+const HAND_CLEARANCE = 40.0;
+class CarroEstanteria extends Estanteria {
+  constructor() {
+    super();
+    const d = FAM.families.carro_estanteria;
+    Object.assign(this, { id: "carro_estanteria", name: d.name, category: d.category, description: d.description, def: d,
+      candidates: d.candidates, constructive_defaults: d.constructive_defaults, leg_param: d.leg_param, frame_params: d.frame_params,
+      auto_in_construct: d.auto_in_construct, verification_inputs: d.verification_inputs,
+      support_param: "RUEDA", support_category: "ruedas_espiga", support_group: ["RUE", "Ruedas"] });
+  }
+  paramForRole(role) { return role === "asa" ? "PERFIL_ASA" : super.paramForRole(role); }
+  _supportPart(corner, V) {
+    const code = V.RUEDA;
+    return corner === "DI" || corner === "TI" ? [standardPart("rueda", `${code}_FRENO`), "Rueda con freno"] : [standardPart("rueda", code), "Rueda giratoria"];
+  }
+  _deriveShelf(ctx, model) {
+    const d = super._deriveShelf(ctx, model);
+    const mode = ctx.get("ASA_EMPUJE");
+    Object.assign(d, { asa_mode: mode, z_asa: null });
+    ctx.feature("F06", "Asa de empuje y altura de maniobra", () => {
+      const H = ctx.get("ALTURA");
+      const asa = C.profile(ctx.get("PERFIL_ASA"));
+      d.asa = asa;
+      ctx.derive("ALTURA_EMPUJE", (p) => Math.min(p.get("ALTURA_ASA"), p.get("ALTURA")), "mm", "Altura de aplicación de la fuerza de maniobra (vuelco)");
+      if (mode !== "ninguna") {
+        const za = ctx.derive("COTA_ASA", (p) => p.get("ALTURA_ASA"), "mm", "Cota superior del asa");
+        d.z_asa = za;
+        if (za > H + 1e-9) model.note("error", "GEO-ASA-ALTA", `El asa (${g(za)} mm) queda por encima de los montantes (${g(H)} mm): reduzca ALTURA_ASA.`);
+        if (asa.B > d.a) model.note("error", "DFM-ASA-ANCHO", `El perfil del asa ${asa.code} es más ancho que el montante.`);
+        const band = d.ts + Math.max(d.rail.H, d.trv.H);
+        const lo_b = za - asa.H, hi_b = za, ala = ctx.get("ALA_BALDA");
+        for (let i = 0; i < d.z_levels.length; i++) {
+          const z = d.z_levels[i], lo_l = z - Math.max(ala, band);
+          if (!(lo_b >= z + HAND_CLEARANCE || hi_b <= lo_l - HAND_CLEARANCE)) {
+            model.note("error", "GEO-ASA-NIVEL", `El asa (${g(lo_b)}–${g(hi_b)} mm) no deja ${g(HAND_CLEARANCE)} mm de holgura para la mano `
+              + `con el nivel ${i + 1} (${g(lo_l)}–${g(z)} mm): cambie ALTURA_ASA o la distancia entre niveles.`);
+            break;
+          }
+        }
+      }
+      ctx.setDerived("DIAMETRO_RUEDA", C.component(ctx.get("RUEDA")).wheel_d, "mm", "Diámetro de rueda", ["RUEDA"]);
+    });
+    return d;
+  }
+  _extras(model, ctx, d, legs, corners) {
+    if (d.asa_mode === "ninguna") return;
+    const V = model.params.values;
+    const { asa, a } = d, A = V.ANCHURA, Pf = V.PROFUNDIDAD;
+    const weld = makeWelder(model);
+    const two = d.asa_mode === "dos_extremos";
+    const handles = [["EST.ASA", a / 2, "DI", "TI", two ? " izquierda" : ""]];
+    if (two) handles.push(["EST.ASA_D", A - a / 2, "DD", "TD", " derecha"]);
+    ctx.feature("F16", "Asa de empuje soldada", () => {
+      ctx.uses("PERFIL_ASA", "ALTURA_ASA", "ASA_EMPUJE", "PROFUNDIDAD", "PERFIL_MONTANTE", "MATERIAL_ESTRUCTURAL", "ACABADO");
+      const part = profilePart("asa", `Asa de empuje ${asa.code}`, asa.code, Pf - 2 * a, V.MATERIAL_ESTRUCTURAL, V.ACABADO);
+      const zc = d.z_asa - asa.H / 2;
+      for (const [iid, x, l0, l1, side] of handles) {
+        const p0 = [x, a, zc], p1 = [x, Pf - a, zc];
+        model.add(iid, `Asa de empuje${side}`, part, axisFrame(p0, p1, [0, 0, 1]), "EST", { axis: [p0, p1], up: [0, 0, 1], structural: true });
+        weld(`J.${iid}.0`, iid, 0, legs[l0], asa, "Asa a montante");
+        weld(`J.${iid}.1`, iid, 1, legs[l1], asa, "Asa a montante");
+      }
+    });
+  }
+  _shelfStructure(model, d, legs) {
+    const st = super._shelfStructure(model, d, legs);
+    const V = model.params.values;
+    st.product_word = "carro";
+    st.push_height = Math.min(V.ALTURA_ASA, V.ALTURA);        // vuelco: altura de la mano o del asa
+    const { APO, ...texts } = st.assembly_texts;
+    texts.RUE = "Roscar las ruedas de espiga en las tuercas soldadas de las placas base hasta el tope y bloquearlas con su contratuerca. "
+      + "Las ruedas con freno van en el extremo izquierdo (X = 0).";
+    st.assembly_texts = texts;
+    return st;
+  }
+  _extraDims(model, d) { if (d.z_asa != null) model.dims.ALTURA_ASA = d.z_asa; }
+}
+
 export const REGISTRY = { mesa_industrial: new MesaIndustrial(), estanteria: new Estanteria(), puesto_trabajo: new PuestoTrabajo("puesto_trabajo"),
-  carro_taller: new CarroTaller("carro_taller") };
+  carro_taller: new CarroTaller("carro_taller"), carro_estanteria: new CarroEstanteria() };
 export function family(fid) {
   const f = REGISTRY[fid];
   if (!f) {

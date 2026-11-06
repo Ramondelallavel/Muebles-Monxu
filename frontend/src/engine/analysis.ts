@@ -410,7 +410,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     const xs = sups.map((s) => s.point[0]), ys = sups.map((s) => s.point[1]);
     const xmin = Math.min(...xs), xmax = Math.max(...xs), ymin = Math.min(...ys), ymax = Math.max(...ys);
     const levers = { "+X": xmax - cog[0], "-X": cog[0] - xmin, "+Y": ymax - cog[1], "-Y": cog[1] - ymin };
-    const hgt = st.worktop_height;
+    const hgt = st.push_height ?? st.worktop_height;     // altura de empuje para el vuelco (carros: asa o mano)
     let [dirn, lev] = Object.entries(levers)[0];
     for (const [k, v] of Object.entries(levers)) if (v < lev) { dirn = k; lev = v; }
     if (H_N) {

@@ -226,7 +226,7 @@ def _select_feet(family, ps: ParameterSet, notes: list) -> None:
             ps.values[sp] = code
             ps.sources[sp] = "calculo"
             notes.append({"level": "propuesta", "code": "DIM-PIES",
-                          "message": f"{word} seleccionado por cálculo: {c['name']} (capacidad nominal de catálogo "
+                          "message": f"{word} seleccionad{'a' if word == 'Rueda' else 'o'} por cálculo: {c['name']} (capacidad nominal de catálogo "
                                      f"{c['rated_load_kg']} kg ≥ reacción de servicio {need:.0f} kg por apoyo). Capacidad "
                                      "a confirmar con la ficha del proveedor."})
             return

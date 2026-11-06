@@ -515,7 +515,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         xmin, xmax = pts[:, 0].min(), pts[:, 0].max()
         ymin, ymax = pts[:, 1].min(), pts[:, 1].max()
         levers = {"+X": xmax - cog[0], "-X": cog[0] - xmin, "+Y": ymax - cog[1], "-Y": cog[1] - ymin}
-        hgt = st["worktop_height"]
+        hgt = st.get("push_height", st["worktop_height"])     # altura de empuje para el vuelco (carros: asa o mano)
         dirn, lev = min(levers.items(), key=lambda kv: kv[1])
         if H_N:
             Mstb = pf["gamma_G_stb"] * Wtot * lev

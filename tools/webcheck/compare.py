@@ -35,6 +35,14 @@ for k in range(n_rand):
              "NUMERO_BALDAS": rng.choice([0, 1]), "CARGA_BALDA": rng.choice([None, 50, 100]),
              "CARGA_HORIZONTAL": rng.choice([50, 100, 150]),
              "ASA_EMPUJE": rng.choice(["un_extremo", "dos_extremos", "ninguna"]), "PETO_TRASERO": rng.choice([0, 0, 50, 100])}
+    elif u >= 0.82:
+        fid = "carro_estanteria"
+        H = rng.choice(range(1000, 1801, 100))
+        n = rng.randint(2, 5)
+        v = {"ANCHURA": rng.choice(range(600, 1601, 100)), "PROFUNDIDAD": rng.choice(range(400, 801, 50)), "ALTURA": H,
+             "NUMERO_NIVELES": n, "ALTURA_PRIMER_NIVEL": rng.choice([250, 300, 350]),
+             "CARGA_POR_NIVEL": rng.choice([None, 20, 40, 80]), "ASA_EMPUJE": rng.choice(["un_extremo", "dos_extremos", "ninguna"]),
+             "ALTURA_ASA": rng.choice([900, 1000, 1100]), "CARGA_HORIZONTAL": rng.choice([40, 60, 100])}
     elif u >= 0.7:
         fid = "puesto_trabajo"
         H = rng.choice(range(800, 1001, 50))
