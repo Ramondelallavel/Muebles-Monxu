@@ -42,8 +42,10 @@ class SheetMetalSpec:
     r: float                        # radio interior de plegado
     K: float                        # factor K
     flanges: tuple[FlangeSpec, ...] = ()
-    notch: tuple[float, float] = (0.0, 0.0)     # escotadura en las 4 esquinas (nx, ny)
+    notch: tuple[float, float] = (0.0, 0.0)     # escotadura de esquina (nx, ny)
     holes: tuple[tuple, ...] = ()   # ("round", x, y, d) | ("rect", x, y, w, h)
+    #: esquinas con escotadura (por defecto las 4): "x0y0" (delantera izquierda), "x1y0", "x0y1", "x1y1"
+    notch_corners: tuple[str, ...] = ("x0y0", "x1y0", "x0y1", "x1y1")
 
     # ------------------------------------------------------------------ magnitudes
     @property
@@ -73,15 +75,19 @@ class SheetMetalSpec:
         by1 = self.Ly - R if self.flange("y1") else self.Ly
         return bx0, bx1, by0, by1
 
+    def notched(self, corner: str) -> bool:
+        return self.notch[0] > 0 and self.notch[1] > 0 and corner in self.notch_corners
+
     def flange_extent(self, edge: str) -> tuple[float, float]:
         nx, ny = self.notch
         R = self.R
         if edge in ("x0", "x1"):
-            s0 = max(ny, R if self.flange("y0") else 0.0)
-            s1 = self.Ly - max(ny, R if self.flange("y1") else 0.0)
+            s0 = max(ny if self.notched(f"{edge}y0") else 0.0, R if self.flange("y0") else 0.0)
+            s1 = self.Ly - max(ny if self.notched(f"{edge}y1") else 0.0, R if self.flange("y1") else 0.0)
         else:
-            s0 = max(nx, R if self.flange("x0") else 0.0)
-            s1 = self.Lx - max(nx, R if self.flange("x1") else 0.0)
+            e = edge[1]
+            s0 = max(nx if self.notched(f"x0y{e}") else 0.0, R if self.flange("x0") else 0.0)
+            s1 = self.Lx - max(nx if self.notched(f"x1y{e}") else 0.0, R if self.flange("x1") else 0.0)
         return s0, s1
 
     def base_region(self) -> Polygon:
@@ -89,9 +95,11 @@ class SheetMetalSpec:
         poly = sbox(bx0, by0, bx1, by1)
         nx, ny = self.notch
         if nx > 0 and ny > 0:
-            cuts = [sbox(-1, -1, nx, ny), sbox(self.Lx - nx, -1, self.Lx + 1, ny),
-                    sbox(-1, self.Ly - ny, nx, self.Ly + 1), sbox(self.Lx - nx, self.Ly - ny, self.Lx + 1, self.Ly + 1)]
-            poly = poly.difference(unary_union(cuts))
+            boxes = {"x0y0": sbox(-1, -1, nx, ny), "x1y0": sbox(self.Lx - nx, -1, self.Lx + 1, ny),
+                     "x0y1": sbox(-1, self.Ly - ny, nx, self.Ly + 1), "x1y1": sbox(self.Lx - nx, self.Ly - ny, self.Lx + 1, self.Ly + 1)}
+            cuts = [b for k, b in boxes.items() if k in self.notch_corners]
+            if cuts:
+                poly = poly.difference(unary_union(cuts))
         return poly
 
     # ------------------------------------------------------------------ 3D
@@ -129,7 +137,17 @@ class SheetMetalSpec:
     def solid(self) -> cq.Shape:
         base = self.base_region()
         coords = list(base.exterior.coords)[:-1]
-        solid = G._polyline_face_extrude(coords, self.t).translate((0, 0, -self.t))
+        rects = [h for h in self.holes if h[0] == "rect"]
+        if rects:
+            # perforaciones rectangulares como contornos interiores de la cara base (una sola extrusión, sin
+            # booleanas por agujero: los paneles perforados tienen cientos)
+            outer = cq.Wire.makePolygon([cq.Vector(x, y, 0) for x, y in coords], close=True)
+            inners = [cq.Wire.makePolygon([cq.Vector(x - w / 2, y - hh / 2, 0), cq.Vector(x + w / 2, y - hh / 2, 0),
+                                           cq.Vector(x + w / 2, y + hh / 2, 0), cq.Vector(x - w / 2, y + hh / 2, 0)],
+                                          close=True) for _, x, y, w, hh in rects]
+            solid = cq.Solid.extrudeLinear(outer, inners, cq.Vector(0, 0, self.t)).translate(cq.Vector(0, 0, -self.t))
+        else:
+            solid = G._polyline_face_extrude(coords, self.t).translate((0, 0, -self.t))
         tools: list[cq.Shape] = []
         for f in self.flanges:
             s0, s1 = self.flange_extent(f.edge)
@@ -146,9 +164,6 @@ class SheetMetalSpec:
             if h[0] == "round":
                 _, x, y, d = h
                 tools.append(G.cylinder(d, self.t + 2.0, (x, y, -self.t - 1.0)))
-            else:
-                _, x, y, w, hh = h
-                tools.append(G.box(x - w / 2, y - hh / 2, -self.t - 1.0, x + w / 2, y + hh / 2, 1.0))
         solid = solid.clean()
         return G.cut_many(solid, tools)
 
@@ -266,12 +281,18 @@ class FlatPattern:
         return FlatPattern(translate(self.outline, -x0, -y0), holes, bends, self.t)
 
 
-def volume_consistency(spec: SheetMetalSpec, solid_volume: float) -> tuple[float, float]:
-    """Devuelve (volumen esperado a partir del desarrollo, desviación relativa)."""
+def analytic_volume(spec: SheetMetalSpec) -> float:
+    """Volumen exacto de la pieza plegada a partir del desarrollo (área neta · t + corrección de cada pliegue)."""
     fp = spec.flat_pattern()
     expected = fp.net_area() * spec.t
     for L in spec.bend_lengths():
         expected += (math.pi / 2) * spec.t ** 2 * (0.5 - spec.K) * L
+    return expected
+
+
+def volume_consistency(spec: SheetMetalSpec, solid_volume: float) -> tuple[float, float]:
+    """Devuelve (volumen esperado a partir del desarrollo, desviación relativa)."""
+    expected = analytic_volume(spec)
     return expected, abs(solid_volume - expected) / expected
 
 

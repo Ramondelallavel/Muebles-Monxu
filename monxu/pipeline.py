@@ -171,7 +171,9 @@ def generate_dossier(design: Design, project: dict[str, Any], dest_root: Path,
             json.dumps(native, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
         re = cq.importers.importStep(str(step)).solids().vals()
         files["step"] = {"solids": len(re), "volume": sum(s.Volume() for s in re),
-                         "model_volume": sum(i.part.volume for i in m.instances)}
+                         "model_volume": sum(i.part.volume for i in m.instances),
+                         # una pieza puede tener varios cuerpos (rueda: espiga y horquilla + rueda)
+                         "model_solids": sum(len(i.part.shape.Solids()) for i in m.instances)}
         # ---- 02 planos
         dr = plans.generate(m, design.plan, design.bom, design.eng, info, dirs["02_PLANOS"] / f"{code}_planos.pdf")
         cons = QA.drawing_consistency(m, dr)

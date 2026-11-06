@@ -55,24 +55,34 @@ function partRep(w, c, part, styles) {
   const { verts, faces } = g.brep;
   const pts = new Map();
   const P = (k) => { if (!pts.has(k)) pts.set(k, w.point(verts[k])); return pts.get(k); };
+  // una capa cerrada por componente conexo (p. ej. una rueda: espiga, cabezal, horquilla y rueda son cuerpos que se tocan)
+  const find = (i) => faces[i].comp ?? 0;
+  const groups = new Map();
   const fs = [];
-  for (const f of faces) {
-    const bounds = f.loops.map((l, i) => {
+  faces.forEach((f, i) => {
+    const bounds = f.loops.map((l, k) => {
       const loop = w.add(`POLY_LOOP('',(${l.map(P).join(",")}))`);
-      return w.add(`${i === 0 ? "FACE_OUTER_BOUND" : "FACE_BOUND"}('',${loop},.T.)`);
+      return w.add(`${k === 0 ? "FACE_OUTER_BOUND" : "FACE_BOUND"}('',${loop},.T.)`);
     });
     const o = verts[f.loops[0][0]], q = verts[f.loops[0][1]];
     let x = vsub(q, o);
     x = vnorm(vsub(x, f.n.map((v) => v * vdot(x, f.n))));
     const plane = w.add(`PLANE('',${w.axis(o, f.n, x)})`);
-    fs.push(w.add(`FACE_SURFACE('',(${bounds.join(",")}),${plane},.T.)`));
-  }
-  const shell = w.add(`CLOSED_SHELL('',(${fs.join(",")}))`);
-  const brep = w.add(`FACETED_BREP(${S(part.ref)},${shell})`);
+    const id = w.add(`FACE_SURFACE('',(${bounds.join(",")}),${plane},.T.)`);
+    fs.push(id);
+    const r = find(i);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(id);
+  });
+  const breps = [...groups.values()].map((ids, k, all) => {
+    const shell = w.add(`CLOSED_SHELL('',(${ids.join(",")}))`);
+    const brep = w.add(`FACETED_BREP(${S(all.length > 1 ? `${part.ref}-${k + 1}` : part.ref)},${shell})`);
+    styles.push([brep, part]);
+    return brep;
+  });
   const origin = w.axis([0, 0, 0], [0, 0, 1], [1, 0, 0]);
-  const rep = w.add(`FACETED_BREP_SHAPE_REPRESENTATION(${S(part.ref)},(${brep},${origin}),${c.ctx})`);
-  styles.push([brep, part]);
-  return { rep, origin, faces: faces.length };
+  const rep = w.add(`FACETED_BREP_SHAPE_REPRESENTATION(${S(part.ref)},(${breps.join(",")},${origin}),${c.ctx})`);
+  return { rep, origin, faces: faces.length, shells: breps.length };
 }
 
 function colours(w, c, styles, colorFor) {

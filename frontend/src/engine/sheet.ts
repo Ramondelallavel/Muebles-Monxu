@@ -46,27 +46,42 @@ export function rectUnion(rects) {
   return { outline: out, area };
 }
 
-export function makeSpec({ Lx, Ly, t, r, K, flanges = [], notch = [0, 0], holes = [] }) {
+export const ALL_CORNERS = ["x0y0", "x1y0", "x0y1", "x1y1"];
+
+/** Patrón regular de perforaciones centrado en [x0,x1]×[y0,y1] (port de sheetmetal.perforation_grid). */
+export function perforationGrid(x0, y0, x1, y1, pitch, w, h = null, shape = "rect") {
+  h = h ?? w;
+  const nx = Math.floor((x1 - x0 - w) / pitch) + 1, ny = Math.floor((y1 - y0 - h) / pitch) + 1;
+  if (nx < 1 || ny < 1) return [];
+  const ox = x0 + (x1 - x0 - (nx - 1) * pitch) / 2, oy = y0 + (y1 - y0 - (ny - 1) * pitch) / 2;
+  const out = [];
+  for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) out.push(shape === "rect" ? ["rect", ox + i * pitch, oy + j * pitch, w, h] : ["round", ox + i * pitch, oy + j * pitch, w]);
+  return out;
+}
+export function makeSpec({ Lx, Ly, t, r, K, flanges = [], notch = [0, 0], holes = [], notchCorners = ALL_CORNERS }) {
   const R = r + t, BA = bendAllowance(t, r, K), BD = bendDeduction(t, r, K);
   const fl = (e) => flanges.find((f) => f.edge === e);
   const base = [fl("x0") ? R : 0, fl("x1") ? Lx - R : Lx, fl("y0") ? R : 0, fl("y1") ? Ly - R : Ly];
   const [nx, ny] = notch;
+  const notched = (c) => nx > 0 && ny > 0 && notchCorners.includes(c);
   const extent = (e) => {
-    if (e === "x0" || e === "x1") return [Math.max(ny, fl("y0") ? R : 0), Ly - Math.max(ny, fl("y1") ? R : 0)];
-    return [Math.max(nx, fl("x0") ? R : 0), Lx - Math.max(nx, fl("x1") ? R : 0)];
+    if (e === "x0" || e === "x1") return [Math.max(notched(`${e}y0`) ? ny : 0, fl("y0") ? R : 0), Ly - Math.max(notched(`${e}y1`) ? ny : 0, fl("y1") ? R : 0)];
+    const k = e[1];
+    return [Math.max(notched(`x0y${k}`) ? nx : 0, fl("x0") ? R : 0), Lx - Math.max(notched(`x1y${k}`) ? nx : 0, fl("x1") ? R : 0)];
   };
-  /** Región plana de la base como rectángulos (base menos escotaduras de esquina). */
+  /** Región plana de la base como rectángulos (base menos escotaduras de esquina): tres franjas horizontales. */
   const baseRects = () => {
     const [bx0, bx1, by0, by1] = base;
-    if (!(nx > 0 && ny > 0)) return [[bx0, by0, bx1, by1]];
-    const out = [[Math.max(bx0, nx), by0, Math.min(bx1, Lx - nx), by1],
-      [bx0, Math.max(by0, ny), bx1, Math.min(by1, Ly - ny)]];
-    return out.filter((q) => q[2] > q[0] && q[3] > q[1]);
+    if (!(nx > 0 && ny > 0) || !notchCorners.length) return [[bx0, by0, bx1, by1]];
+    const out = [[notched("x0y0") ? Math.max(bx0, nx) : bx0, by0, notched("x1y0") ? Math.min(bx1, Lx - nx) : bx1, Math.min(by1, ny)],
+      [bx0, Math.max(by0, ny), bx1, Math.min(by1, Ly - ny)],
+      [notched("x0y1") ? Math.max(bx0, nx) : bx0, Math.max(by0, Ly - ny), notched("x1y1") ? Math.min(bx1, Lx - nx) : bx1, by1]];
+    return out.filter((q) => q[2] > q[0] + 1e-9 && q[3] > q[1] + 1e-9);
   };
   const spec = {
-    Lx, Ly, t, r, K, flanges, notch, holes, R, BA, BD, flatBoundsBase: base, flangeExtent: extent, baseRects,
+    Lx, Ly, t, r, K, flanges, notch, notchCorners, notched, holes, R, BA, BD, flatBoundsBase: base, flangeExtent: extent, baseRects,
     rectUnionOutline: () => rectUnion(baseRects()).outline,
-    signature: JSON.stringify([Lx, Ly, t, r, K, notch, flanges.map((f) => [f.edge, f.height, f.direction, f.holes]), holes]),
+    signature: JSON.stringify([Lx, Ly, t, r, K, notch, notchCorners, flanges.map((f) => [f.edge, f.height, f.direction, f.holes]), holes]),
     bendLengths: () => flanges.map((f) => { const [s0, s1] = extent(f.edge); return s1 - s0; }),
     flat() {
       const [bx0, bx1, by0, by1] = base;

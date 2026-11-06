@@ -2,6 +2,7 @@
 // Escritor PDF 1.4 mínimo para planos (unidades de usuario en mm): líneas, polígonos, círculos, texto Helvetica
 // con codificación WinAnsi y flujos de contenido comprimidos (FlateDecode) cuando el entorno ofrece CompressionStream.
 import HELV from "./data/helvetica.json";
+import { textBox } from "./layout";
 
 const MM = 72 / 25.4;
 const CP1252 = { 0x20ac: 0x80, 0x201a: 0x82, 0x0192: 0x83, 0x201e: 0x84, 0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87, 0x02c6: 0x88, 0x2030: 0x89, 0x0160: 0x8a,
@@ -40,23 +41,29 @@ export class PDF {
   dash(d = null) { const s = d && d.length ? `[${d.map(num).join(" ")}] 0 d` : "[] 0 d"; if (this._dash !== s) { this.o(s); this._dash = s; } return this; }
   stroke(c = [0, 0, 0]) { const s = c[0] === c[1] && c[1] === c[2] ? `${num(c[0])} G` : `${num(c[0])} ${num(c[1])} ${num(c[2])} RG`; if (this._sc !== s) { this.o(s); this._sc = s; } return this; }
   fill(c = [0, 0, 0]) { const s = c[0] === c[1] && c[1] === c[2] ? `${num(c[0])} g` : `${num(c[0])} ${num(c[1])} ${num(c[2])} rg`; if (this._fc !== s) { this.o(s); this._fc = s; } return this; }
-  line(x1, y1, x2, y2) { this.o(`${num(x1)} ${num(y1)} m ${num(x2)} ${num(y2)} l S`); return this; }
+  /** Registro opcional de lo dibujado (ocupación de la hoja para colocar textos y auditar solapes). */
+  _seg(x1, y1, x2, y2) { if (this.rec) this.rec.addSeg([x1, y1, x2, y2], this.cat ?? "misc", this.gid); }
+  line(x1, y1, x2, y2) { this._seg(x1, y1, x2, y2); this.o(`${num(x1)} ${num(y1)} m ${num(x2)} ${num(y2)} l S`); return this; }
   /** Varios segmentos [[x1,y1,x2,y2], ...] en un único trazado. */
   segments(segs) {
     if (!segs.length) return this;
     const parts = [];
-    for (const s of segs) parts.push(`${num(s[0])} ${num(s[1])} m ${num(s[2])} ${num(s[3])} l`);
+    for (const s of segs) { this._seg(s[0], s[1], s[2], s[3]); parts.push(`${num(s[0])} ${num(s[1])} m ${num(s[2])} ${num(s[3])} l`); }
     for (let i = 0; i < parts.length; i += 400) this.o(parts.slice(i, i + 400).join(" ") + " S");
     return this;
   }
   poly(pts, close = false, mode = "S") {
     if (pts.length < 2) return this;
+    if (this.rec) for (let i = 0; i < pts.length - (close ? 0 : 1); i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; this._seg(a[0], a[1], b[0], b[1]); }
     this.o(pts.map((p, i) => `${num(p[0])} ${num(p[1])} ${i ? "l" : "m"}`).join(" ") + (close ? " h" : "") + ` ${mode}`);
     return this;
   }
-  rect(x, y, w, h, mode = "S") { this.o(`${num(x)} ${num(y)} ${num(w)} ${num(h)} re ${mode}`); return this; }
+  rect(x, y, w, h, mode = "S") {
+    if (this.rec) { this._seg(x, y, x + w, y); this._seg(x + w, y, x + w, y + h); this._seg(x + w, y + h, x, y + h); this._seg(x, y + h, x, y); }
+    this.o(`${num(x)} ${num(y)} ${num(w)} ${num(h)} re ${mode}`); return this; }
   circle(cx, cy, r, mode = "S") {
     const k = 0.5523 * r;
+    if (this.rec) this.rec.addCircle([cx, cy], r, this.cat ?? "misc", this.gid);
     this.o(`${num(cx + r)} ${num(cy)} m ${num(cx + r)} ${num(cy + k)} ${num(cx + k)} ${num(cy + r)} ${num(cx)} ${num(cy + r)} c `
       + `${num(cx - k)} ${num(cy + r)} ${num(cx - r)} ${num(cy + k)} ${num(cx - r)} ${num(cy)} c ${num(cx - r)} ${num(cy - k)} ${num(cx - k)} ${num(cy - r)} ${num(cx)} ${num(cy - r)} c `
       + `${num(cx + k)} ${num(cy - r)} ${num(cx + r)} ${num(cy - k)} ${num(cx + r)} ${num(cy)} c h ${mode}`);
@@ -71,6 +78,7 @@ export class PDF {
     const dx = align === "c" ? -w / 2 : align === "r" ? -w : 0;
     const a = (angle * Math.PI) / 180, c = Math.cos(a), sn = Math.sin(a);
     const tx = x + dx * c, ty = y + dx * sn;
+    if (this.rec) this.rec.addText(textBox(tx, ty, w, h, angle), this.cat ?? "misc", s, this.gid);
     this.fill(color);
     this.o(`BT /${bold ? "F2" : "F1"} ${num(fs)} Tf ${num(c)} ${num(sn)} ${num(-sn)} ${num(c)} ${num(tx)} ${num(ty)} Tm ${pdfStr(winAnsi(s))} Tj ET`);
     this.fill([0, 0, 0]);

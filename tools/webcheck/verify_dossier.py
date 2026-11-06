@@ -37,15 +37,18 @@ with tempfile.TemporaryDirectory() as td:
     vol = sum(s.Volume() for s in sol)
     valid = sum(BRepCheck_Analyzer(s.wrapped).IsValid() for s in sol)
     ref_vol = sum(i.part.volume for i in m.instances)
-    print(f"STEP conjunto: {len(sol)} sólidos (modelo servidor {len(m.instances)}), válidos {valid}, volumen {vol:.0f} mm³ vs B-rep servidor {ref_vol:.0f} ({(vol / ref_vol - 1) * 100:+.3f} %)")
-    errs += len(sol) != len(m.instances) or valid != len(sol) or abs(vol / ref_vol - 1) > 0.005
+    occ = z.read(st).decode("latin-1").count("NEXT_ASSEMBLY_USAGE_OCCURRENCE(")
+    print(f"STEP conjunto: {occ} ocurrencias (instancias del modelo servidor {len(m.instances)}), {len(sol)} sólidos, válidos {valid}, "
+          f"volumen {vol:.0f} mm³ vs B-rep servidor {ref_vol:.0f} ({(vol / ref_vol - 1) * 100:+.3f} %)")
+    # una pieza puede tener varios cuerpos (las ruedas: horquilla, espiga, cabezal y rueda)
+    errs += occ != len(m.instances) or len(sol) < len(m.instances) or valid != len(sol) or abs(vol / ref_vol - 1) > 0.005
     comps = [n for n in names if "/componentes/" in n and n.endswith(".step")]
     okc = 0
     for n in comps:
         (td / "p.step").write_bytes(z.read(n))
         ss = cq.importers.importStep(str(td / "p.step")).solids().vals()
-        okc += len(ss) == 1 and BRepCheck_Analyzer(ss[0].wrapped).IsValid()
-    print(f"STEP por pieza: {okc}/{len(comps)} con un sólido válido")
+        okc += len(ss) >= 1 and all(BRepCheck_Analyzer(x.wrapped).IsValid() for x in ss)
+    print(f"STEP por pieza: {okc}/{len(comps)} con sus sólidos válidos")
     errs += okc != len(comps)
     # ---------------- PDF
     import pdfplumber

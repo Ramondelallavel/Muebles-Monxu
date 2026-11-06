@@ -175,6 +175,8 @@ class StandardPart(PartDef):
         cat = self.data["category"]
         if cat == "patas":
             return G.leveling_foot_solid(self.data)
+        if cat == "ruedas_espiga":
+            return G.stem_castor_solid(self.data)
         if self.code.startswith("TUERCA_SOLDAR"):
             return G.weld_nut_solid(self.data)
         if self.code.startswith("TUERCA_REMACHABLE"):

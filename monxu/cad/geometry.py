@@ -208,6 +208,37 @@ def leveling_foot_solid(c: dict) -> cq.Shape:
     return base.fuse(joint).fuse(stem).clean()
 
 
+def stem_castor_parts(c: dict) -> list[tuple[str, tuple]]:
+    """Rueda giratoria de espiga roscada descompuesta en cuerpos simples (misma definición que el motor web).
+
+    Origen en el suelo bajo el eje de giro; el plano superior del cabezal está a ``nominal_height`` y la espiga
+    sube por la tuerca soldada. Rueda de rodadura según X (eje de la rueda según Y)."""
+    d = float(c["thread"][1:])
+    D, w, nh, hd = float(c["wheel_d"]), float(c["wheel_w"]), float(c["nominal_height"]), float(c["head_d"])
+    tf, gap = 3.0, 1.0
+    yo = w / 2 + gap + tf                       # cara exterior de la horquilla
+    fl = round(0.6 * D, 3)                      # longitud de la horquilla según X
+    out = [("cyl", (d, c["stem_len"], (0, 0, nh), (0, 0, 1))),               # espiga
+           ("cyl", (hd, 8.0, (0, 0, nh - 8.0), (0, 0, 1))),                  # cabezal giratorio
+           ("box", (-fl / 2, -yo, nh - 12.0, fl / 2, yo, nh - 8.0)),          # puente de la horquilla
+           ("box", (-fl / 2, -yo, D / 2 - 6.0, fl / 2, -yo + tf, nh - 12.0)),  # brazos de la horquilla
+           ("box", (-fl / 2, yo - tf, D / 2 - 6.0, fl / 2, yo, nh - 12.0)),
+           ("cyl", (D, w, (0, -w / 2, D / 2), (0, 1, 0)))]                   # rueda
+    if c.get("brake"):                          # pedal de freno junto al puente, por encima de la rueda (1 mm de holgura)
+        out.append(("box", (fl / 2 + 1.0, -yo, nh - 12.0, D / 2 + 18.0, yo, nh - 8.0)))
+    return out
+
+
+def stem_castor_solid(c: dict) -> cq.Shape:
+    shapes = []
+    for kind, a in stem_castor_parts(c):
+        shapes.append(cylinder(*a) if kind == "cyl" else box(*a))
+    out = shapes[0]
+    for s in shapes[1:]:
+        out = out.fuse(s)
+    return out.clean()
+
+
 def weld_nut_solid(c: dict) -> cq.Shape:
     d = float(c["thread"][1:])
     return hex_prism(c["s"], c["m"], d)

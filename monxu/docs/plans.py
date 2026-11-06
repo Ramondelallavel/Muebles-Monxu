@@ -121,6 +121,17 @@ def balloons(d: Drawing, view, view_name, targets: list[tuple[str, Any]], above=
 
 
 # ============================================================================ planos
+def _support_line(m) -> str:
+    """Nota de altura según el tipo de apoyo (pies niveladores regulables o ruedas)."""
+    sups = m.structure.get("supports", [])
+    c = catalog.component(sups[0]["component"]) if sups else None
+    if c is None:
+        return ""
+    if c["category"].startswith("ruedas"):
+        return f"Altura sobre ruedas Ø{c['wheel_d']:g} mm (altura de rueda {c['nominal_height']:g} mm, sin regulación)."
+    return f"Altura con pies niveladores en posición nominal (regulación ±{c['adjust'] / 2:g} mm)."
+
+
 def plan_general(d: Drawing, X: _Ctx):
     m = X.m
     insts = m.instances
@@ -185,8 +196,7 @@ def plan_general(d: Drawing, X: _Ctx):
              f"Masa total calculada desde la geometría: {X.bom['totals']['total_mass']:.1f} kg",
              m.dims.get("load_text", ""),
              f"Estado de verificación: {eng['status_label']}",
-             "Altura con pies niveladores en posición nominal (regulación "
-             f"±{catalog.component(ps['PIE_NIVELADOR'])['adjust'] / 2:g} mm).",
+             _support_line(m),
              f"Acabado: {catalog.finish(ps['ACABADO'])['name']}"]
     if pl.oy - 30 > 52:
         d.notes(32, pl.oy - 30, lines, width=190)

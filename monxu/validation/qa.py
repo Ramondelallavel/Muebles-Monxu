@@ -77,8 +77,8 @@ def model_checks(model, interf: dict, eng: dict, dfm: list, bom: dict) -> QA:
         blo, bhi = model.bounding_box()
         over = max(lo[0] - blo[0], lo[1] - blo[1], bhi[0] - hi[0], bhi[1] - hi[1])
         if over > 0.5:
-            q.add(WARN, "GEO-SALIENTE", f"Elementos sobresalen {over:.1f} mm del contorno del producto (bases de pies "
-                                        "niveladores): considerar en implantación.")
+            q.add(WARN, "GEO-SALIENTE", f"Elementos sobresalen {over:.1f} mm del contorno del producto (apoyos: "
+                                        "bases de pies o ruedas): considerar en implantación.")
     # holguras
     g = model.ctx.derived.get("HOLGURA_ENC")
     r = model.ctx.derived.get("RADIO_ENC")
@@ -162,7 +162,8 @@ def export_checks(q: QA, model, files: dict[str, Any], bom: dict) -> QA:
     """Integridad de archivos exportados y coherencia con el modelo."""
     st = files.get("step")
     if st:
-        ok = st["solids"] == len(model.instances) and abs(st["volume"] - st["model_volume"]) / st["model_volume"] < 1e-6
+        ok = st["solids"] == st.get("model_solids", len(model.instances)) and \
+            abs(st["volume"] - st["model_volume"]) / st["model_volume"] < 1e-6
         q.add(OK if ok else BLOCK, "EXP-STEP", f"STEP reimportado: {st['solids']} sólidos, volumen {st['volume']:.0f} mm³ "
                                                f"(modelo {st['model_volume']:.0f} mm³).")
     for dx in files.get("dxf", []):

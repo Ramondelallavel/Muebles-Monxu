@@ -40,8 +40,10 @@ export async function buildDossier(project, rev, model, summary, onProgress = nu
   for (const p of Object.values(model.parts)) add(`01_MODELO_3D/componentes/${p.ref}.step`, partStep(model, p, info));
   const nauo = (stepTxt.match(/NEXT_ASSEMBLY_USAGE_OCCURRENCE\(/g) ?? []).length, breps = (stepTxt.match(/FACETED_BREP\(/g) ?? []).length;
   const open = Object.values(model.parts).filter((p) => !partGeometry(p).closed).map((p) => p.ref);
-  q.add(nauo === model.instances.length && breps === Object.keys(model.parts).length && !open.length ? "ok" : "bloqueante", "EXP-STEP",
-    `STEP AP214: ${breps} sólidos facetados cerrados (uno por pieza) y ${nauo} ocurrencias en el conjunto (modelo: ${model.instances.length} instancias)`
+  // cuerpos por pieza: uno, salvo componentes formados por varios cuerpos (ruedas)
+  const shells = Object.values(model.parts).reduce((n, p) => n + new Set(partGeometry(p).brep.faces.map((f) => f.comp ?? 0)).size, 0);
+  q.add(nauo === model.instances.length && breps === shells && !open.length ? "ok" : "bloqueante", "EXP-STEP",
+    `STEP AP214: ${breps} sólidos facetados cerrados (${Object.keys(model.parts).length} piezas) y ${nauo} ocurrencias en el conjunto (modelo: ${model.instances.length} instancias)`
     + (open.length ? `; capas abiertas en ${open.join(", ")}` : "") + ".");
   add(`01_MODELO_3D/${code}_conjunto.stl`, stlBinary(model));
   add(`01_MODELO_3D/${code}_parametrico.json`, JSON.stringify({ format: "monxu-parametrico", version: 1, family: summary.family, parameters: model.params.values,
@@ -99,6 +101,13 @@ export async function buildDossier(project, rev, model, summary, onProgress = nu
   const mo = await assemblyInstructions(model, summary, info, dr.ctx, onProgress);
   add("06_DOCUMENTACION/instrucciones_montaje.pdf", mo.pdf);
   add("06_DOCUMENTACION/documentacion_tecnica.pdf", dr.pdf);
+  // legibilidad: auditoría de todo lo dibujado (textos, cotas, globos, símbolos y geometría de las vistas)
+  const lay = { total: dr.layout.total + mo.layout.total, by: { ...dr.layout.by } };
+  for (const [k, v] of Object.entries(mo.layout.by)) lay.by[k] = (lay.by[k] ?? 0) + v;
+  const ltxt = Object.entries(lay.by).map(([k, v]) => `${v} ${k}`).join(", ");
+  q.add(lay.total ? "advertencia" : "ok", "PLANO-LEGIBILIDAD", lay.total
+    ? `Planos y montaje: ${lay.total} posibles solapes de textos o indicaciones (${ltxt}) en ${[...dr.layout.sheets, ...mo.layout.sheets].map((s) => s.number).join(", ")}; revisar esas hojas.`
+    : `Planos y montaje (${dr.total + mo.total} hojas) sin solapes: ningún texto pisa otro texto, una línea, una cota, un globo ni el cuadro de rotulación, y las líneas de referencia no se cruzan.`);
   q.add("pendiente", "VALIDACION-TECNICA", "Validación definitiva por técnico competente pendiente de firma.");
   const qa = q.result();
   add("06_DOCUMENTACION/informe_calculo_y_verificaciones.html", reportHtml({ ...summary, qa }, { ...info, project_code: project.code }));

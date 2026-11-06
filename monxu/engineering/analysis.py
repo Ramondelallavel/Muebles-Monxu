@@ -102,7 +102,8 @@ class StructuralModel:
             Lm = float(np.linalg.norm(d))
             x = d / Lm
             pts = sorted({round(float(np.dot(q - p0, x)), 3) for q in [p0, p1] + extra[i.id]} | {0.0, round(Lm, 3)})
-            pts = [s for s in pts if -1e-6 <= s <= Lm + 1e-6]
+            # (los puntos están redondeados a 0,001 mm: tolerancia acorde para no perder el extremo final)
+            pts = [s for s in pts if -1e-3 <= s <= Lm + 1e-3]
             # subdivisión
             fine: list[float] = []
             for a, b in zip(pts[:-1], pts[1:]):
@@ -217,6 +218,14 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
     # ---------------------------------------------------------------- casos de carga
     cases: list[dict[str, Any]] = []
     Gm = sm.self_weight("G")
+    # masas no estructurales colgadas de barras (p. ej. un panel atornillado a los montantes)
+    for am in st.get("attached_masses", []):
+        if am["member"] in sm.chains:
+            q = np.array(am["point"], float)
+            n = min(sm.chains[am["member"]], key=lambda c: float(np.linalg.norm(np.array(fr.nodes[c[1]]) - q)))[1]
+            P = am["mass_kg"] * G_ACC
+            fr.add_nodal_load("G", n, (0, 0, -P))
+            Gm += P
     g_sheets = 0.0
     surfaces_info = []
     for surf in st.get("surfaces", []):
@@ -390,11 +399,12 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
     if sups:
         comp = catalog.component(sups[0]["component"])
         cap = comp["rated_load_kg"] * G_ACC
+        sup_word = "Ruedas" if comp["category"].startswith("ruedas") else "Pies niveladores"
         sls_v = "ELS-1" if "ELS-1" in combos_sls else None
         if sls_v:
             rmax = max(r["Rz_N"] for r in reactions if r["combination"] == sls_v)
             st_ = _status(rmax / cap)
-            checks.append(Check("A.PIES", "apoyos", "Pies niveladores", f"Reacción máxima de servicio frente a la "
+            checks.append(Check("A.PIES", "apoyos", sup_word, f"Reacción máxima de servicio frente a la "
                                 f"capacidad nominal de {comp['name']}", "Dato de catálogo genérico — confirmar con la "
                                 "ficha técnica del proveedor", round(rmax, 1), round(cap, 1), "N",
                                 round(rmax / cap, 4), st_ if st_ != OK else OK, sls_v,
@@ -403,7 +413,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
                 hyp.append(f"Capacidad de {comp['name']}: {comp['rated_load_kg']} kg (catálogo genérico de referencia,"
                            " debe confirmarse con la ficha técnica del proveedor).")
         else:
-            checks.append(Check("A.PIES", "apoyos", "Pies niveladores", "Capacidad de los pies niveladores",
+            checks.append(Check("A.PIES", "apoyos", sup_word, f"Capacidad de los {sup_word.lower()}",
                                 "—", None, cap, "N", None, PENDING, "", {}))
 
     # ---------------------------------------------------------------- placas (encimera / balda)

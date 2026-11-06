@@ -50,7 +50,7 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
       }
     }
   }
-  const label = { encimera: "encimera", balda: "balda inferior" }[surface] ?? `bandeja (${surface})`;
+  const label = { encimera: "encimera", balda: "balda inferior", estante: "estante superior" }[surface] ?? `bandeja (${surface})`;
   if (!alternatives.length) {
     const fixed = [[t_param, autoT], [n_param, autoN]].filter(([, a]) => !a).map(([p]) => p);
     const maxT = tOpts.length ? Math.max(...tOpts) : 0;
@@ -85,8 +85,9 @@ export function resolveAuto(family, params, autos, onProgress = null) {
   if (!haveLoad && (profAutos.length || autos.some((k) => k in defaults)))
     notes.push({ level: "propuesta", code: "DIM-SIN-CARGA", message: "Sin carga vertical de trabajo definida: espesores y separación de apoyos según reglas "
       + "constructivas; los perfiles sólo se comprueban frente al empuje horizontal. La resistencia a cargas verticales queda PENDIENTE de verificación." });
-  const footAuto = v.PIE_NIVELADOR === AUTO;
-  if (footAuto) { v.PIE_NIVELADOR = defaults.PIE_NIVELADOR ?? "PIE_NIV_M12_D60"; ps.sources.PIE_NIVELADOR = "regla_diseno"; }
+  const sp = family.support_param ?? "PIE_NIVELADOR";
+  const footAuto = v[sp] === AUTO;
+  if (footAuto) { v[sp] = defaults[sp] ?? "PIE_NIV_M12_D60"; ps.sources[sp] = "regla_diseno"; }
   const targets = family.plateTargets(v);
   const sized = new Set(targets.map((t) => t.t_param));
   for (const k of Object.keys(v)) if (v[k] === AUTO && k in defaults && !(k in cands) && !sized.has(k)) { v[k] = defaults[k]; ps.sources[k] = "regla_diseno"; }
@@ -144,9 +145,9 @@ export function resolveAuto(family, params, autos, onProgress = null) {
   for (const k of Object.keys(ps.values)) if (ps.values[k] === AUTO && k in defaults) ps.values[k] = defaults[k];
   if (footAuto && haveLoad) {
     for (let it = 0; it < 3; it++) {
-      const before = ps.values.PIE_NIVELADOR;
+      const before = ps.values[sp];
       selectFeet(family, ps, notes);
-      if (ps.values.PIE_NIVELADOR === before || !runProfiles) break;
+      if (ps.values[sp] === before || !runProfiles) break;
       for (let k = notes.length - 1; k >= 0; k--) if (notes[k].code === "DIM-PERFILES" || notes[k].code === "DIM-PIES") notes.splice(k, 1);
       sizeProfiles();
     }
@@ -160,22 +161,24 @@ function selectFeet(family, ps, notes) {
   const rz = rep.reactions.filter((r) => r.combination === "ELS-1").map((r) => r.Rz_N);
   if (!rz.length) return;
   const need = Math.max(...rz) / G_ACC;
-  const feet = Object.entries(C.components()).filter(([, c]) => c.category === "patas").map((x, i) => ({ x, i }))
+  const sp = family.support_param ?? "PIE_NIVELADOR", cat = family.support_category ?? "patas";
+  const word = cat.startsWith("ruedas") ? "Rueda" : "Pie nivelador";
+  const feet = Object.entries(C.components()).filter(([, c]) => c.category === cat && !c.brake).map((x, i) => ({ x, i }))
     .sort((a, b) => a.x[1].rated_load_kg - b.x[1].rated_load_kg || a.i - b.i).map((o) => o.x);
   const leg = C.profile(ps.values[family.leg_param]);
   for (const [code, c] of feet) {
     const nut = C.component(`TUERCA_SOLDAR_${c.thread}`);
     const fits = nut.s / 0.8660254 <= leg.B - 2 * leg.t - 1;
     if (c.rated_load_kg >= need && fits) {
-      ps.values.PIE_NIVELADOR = code;
-      ps.sources.PIE_NIVELADOR = "calculo";
-      notes.push({ level: "propuesta", code: "DIM-PIES", message: `Pie nivelador seleccionado por cálculo: ${c.name} (capacidad nominal de catálogo `
+      ps.values[sp] = code;
+      ps.sources[sp] = "calculo";
+      notes.push({ level: "propuesta", code: "DIM-PIES", message: `${word} seleccionado por cálculo: ${c.name} (capacidad nominal de catálogo `
         + `${c.rated_load_kg} kg ≥ reacción de servicio ${pyRound(need, 0).toFixed(0)} kg por apoyo). Capacidad a confirmar con la ficha del proveedor.` });
       return;
     }
   }
-  notes.push({ level: "advertencia", code: "DIM-PIES", message: `Ningún pie nivelador del catálogo admite ${pyRound(need, 0).toFixed(0)} kg por apoyo con la pata/montante `
-    + `${leg.code}: se mantiene ${ps.values.PIE_NIVELADOR} y la comprobación no se cumplirá.` });
+  notes.push({ level: "advertencia", code: "DIM-PIES", message: `Ningún ${word.toLowerCase()} del catálogo admite ${pyRound(need, 0).toFixed(0)} kg por apoyo con la pata/montante `
+    + `${leg.code}: se mantiene ${ps.values[sp]} y la comprobación no se cumplirá.` });
 }
 
 /** Resuelve los 'auto' y construye el modelo (ProductFamily.build). */

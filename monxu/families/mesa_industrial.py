@@ -89,6 +89,10 @@ class MesaIndustrial(ProductFamily):
     leg_param = "PERFIL_PATA"
     frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR")
     auto_in_construct = ("RADIO_PLEGADO", "FACTOR_K", "NUMERO_TRAVESANOS", "NUMERO_TRAVESANOS_BALDA", "HOLGURA_ENCIMERA")
+    #: parámetro que elige el componente de apoyo (pie nivelador o rueda de espiga roscada)
+    support_param = "PIE_NIVELADOR"
+    support_category = "patas"
+    support_group = ("APO", "Apoyos niveladores")
 
     def param_for_role(self, role: str) -> str | None:
         return {"pata": "PERFIL_PATA", "larguero_sup": "PERFIL_LARGUERO", "travesano_ext_sup": "PERFIL_TRAVESANO",
@@ -228,13 +232,13 @@ class MesaIndustrial(ProductFamily):
                 raise ValueError(f"Parámetro sin resolver: {k}")
         ctx = ParamContext(ps)
         L, W, H = ps.values["LONGITUD"], ps.values["ANCHURA"], ps.values["ALTURA"]
-        model = ProductModel(self.id, self.name, f"MI{L:.0f}-{W:.0f}-{H:.0f}", ps, ctx)
+        model = ProductModel(self.id, self.name, f"{self.prefix}{L:.0f}-{W:.0f}-{H:.0f}", ps, ctx)
         model.requested = ps
         d = self._derive(ctx, model)
         mat_s, mat_c, fin = ps.values["MATERIAL_ESTRUCTURAL"], ps.values["MATERIAL_CHAPA"], ps.values["ACABADO"]
 
         model.add_subassembly("EST", "Estructura soldada", welded=True, step=1)
-        model.add_subassembly("APO", "Apoyos niveladores", explode=(0, 0, -160), step=2)
+        model.add_subassembly(self.support_group[0], self.support_group[1], explode=(0, 0, -160), step=2)
         if d["shelf"]:
             model.add_subassembly("BAL", "Balda inferior", explode=(0, 0, 90), step=3)
         model.add_subassembly("ENC", "Encimera", explode=(0, 0, 380), step=4)
@@ -246,28 +250,33 @@ class MesaIndustrial(ProductFamily):
                    "TI": (c + a / 2, W - c - a / 2), "TD": (L - c - a / 2, W - c - a / 2)}
         corner_names = {"DI": "delantera izquierda", "DD": "delantera derecha", "TI": "trasera izquierda",
                         "TD": "trasera derecha"}
-        foot = catalog.component(ps.values["PIE_NIVELADOR"])
+        foot = catalog.component(ps.values[self.support_param])
         thread = float(foot["thread"][1:])
         nut_code = f"TUERCA_SOLDAR_M{thread:.0f}"
         rn = catalog.component("TUERCA_REMACHABLE_M6")
         sc = catalog.component("TORNILLO_ISO7380_M6x12")
 
         weld = self._make_welder(model, d)
+        leg_parts: dict = {}
 
         # ---------------------------------------------------------------- estructura
         with ctx.feature("F10", "Estructura soldada"):
             with ctx.feature("F11", "Patas, placas base y tuercas"):
                 ctx.uses("LONGITUD_PATA", "PERFIL_PATA", "RETRANQUEO", "LONGITUD", "ANCHURA", "ESPESOR_PLACA_BASE",
-                         "PIE_NIVELADOR", "MATERIAL_ESTRUCTURAL", "ACABADO")
-                leg_part = ProfilePart("pata", f"Pata {leg.code}", leg.code, d["leg_len"], mat_s, fin)
+                         self.support_param, "MATERIAL_ESTRUCTURAL", "ACABADO", *self._leg_uses())
                 plate_mat = "S235JR" if catalog.material(mat_s).family == "acero_carbono" else mat_s
                 plate = PlatePart("placa_base", f"Placa base {a:.0f}x{a:.0f}x{d['tp']:.0f}", a, a, d["tp"],
                                   plate_mat, fin, corner_r=min(3.0, a / 10), holes=((a / 2, a / 2, thread + 1.0),))
                 nut = StandardPart("tuerca_soldar", nut_code)
                 for k, (x, y) in corners.items():
                     iid = f"EST.PATA.{k}"
-                    p0, p1 = np.array([x, y, d["z_leg0"]]), np.array([x, y, d["z_tf"]])
-                    model.add(iid, f"Pata {corner_names[k]}", leg_part, G.axis_frame(p0, p1, (0, 1, 0)), "EST",
+                    role, pname, z_top, holes = self._leg_def(k, d, leg)
+                    pk = (role, round(z_top, 4), holes)
+                    if pk not in leg_parts:
+                        leg_parts[pk] = ProfilePart(role, f"{pname} {leg.code}", leg.code, z_top - d["z_leg0"], mat_s, fin,
+                                                    holes=holes)
+                    p0, p1 = np.array([x, y, d["z_leg0"]]), np.array([x, y, z_top])
+                    model.add(iid, f"{pname} {corner_names[k]}", leg_parts[pk], G.axis_frame(p0, p1, (0, 1, 0)), "EST",
                               axis=(p0, p1), up=np.array([0, 1.0, 0]), structural=True)
                     legs[k] = iid
                     model.add(f"EST.PLACA.{k}", f"Placa base {corner_names[k]}", plate,
@@ -301,13 +310,14 @@ class MesaIndustrial(ProductFamily):
                                       weld=weld, mat=mat_s, fin=fin)
 
         # ---------------------------------------------------------------- apoyos
-        with ctx.feature("F40", "Apoyos niveladores"):
-            ctx.uses("PIE_NIVELADOR", "LONGITUD", "ANCHURA", "RETRANQUEO", "PERFIL_PATA")
-            fpart = StandardPart("pie_nivelador", ps.values["PIE_NIVELADOR"])
+        with ctx.feature("F40", self.support_group[1]):
+            ctx.uses(self.support_param, "LONGITUD", "ANCHURA", "RETRANQUEO", "PERFIL_PATA")
+            g = self.support_group[0]
             for k, (x, y) in corners.items():
-                model.add(f"APO.PIE.{k}", f"Pie nivelador {corner_names[k]}", fpart, G.translation(x, y, 0.0), "APO")
-                model.add_joint(Joint(f"J.PIE.{k}", "roscada", (f"APO.PIE.{k}", f"EST.TUERCA.{k}"),
-                                      (x, y, d["hn"]), f"Pie roscado {foot['thread']} en tuerca soldada"))
+                fpart, fname = self._support_part(k, ps)
+                model.add(f"{g}.PIE.{k}", f"{fname} {corner_names[k]}", fpart, G.translation(x, y, 0.0), g)
+                model.add_joint(Joint(f"J.PIE.{k}", "roscada", (f"{g}.PIE.{k}", f"EST.TUERCA.{k}"),
+                                      (x, y, d["hn"]), f"{fname} roscado {foot['thread']} en tuerca soldada"))
 
         # ---------------------------------------------------------------- chapas
         with ctx.feature("F20", "Encimera de chapa plegada"):
@@ -326,6 +336,8 @@ class MesaIndustrial(ProductFamily):
                 model.add("BAL.BANDEJA", "Balda inferior", tray, G.translation(c, c, d["z_shelf"]), "BAL")
                 self._fasteners(model, d["fix_shelf"], "BAL", rn, sc, ctx)
 
+        self._extras(model, ctx, d, legs, corners)
+
         # ---------------------------------------------------------------- datos estructurales
         model.structure = self._structure(model, d, legs)
         model.dims = {"LONGITUD": L, "ANCHURA": W, "ALTURA": H, "ALTURA_BALDA": d["z_shelf"] if d["shelf"] else None,
@@ -334,8 +346,30 @@ class MesaIndustrial(ProductFamily):
                       "levels": [("ALTURA_BALDA", "BAL.BANDEJA")] if d["shelf"] else [],
                       "load_text": f"Carga distribuida de proyecto sobre encimera: "
                                    f"{(str(ps.values['CARGA_TOTAL']) + ' kg') if ps.values.get('CARGA_TOTAL') else 'NO DEFINIDA'}"}
+        self._extra_dims(model, d)
         model.number_parts()
         return model
+
+    # ------------------------------------------------------------------ ganchos para familias derivadas
+    def _leg_uses(self) -> tuple:
+        return ()
+
+    def _leg_def(self, corner: str, d: dict, leg):
+        """(rol, nombre, cota superior, taladros) de la pata de cada esquina."""
+        return "pata", "Pata", d["z_tf"], ()
+
+    def _support_part(self, corner: str, ps: ParameterSet):
+        return StandardPart("pie_nivelador", ps.values[self.support_param]), "Pie nivelador"
+
+    def _top_notch(self, ctx: ParamContext, d: dict):
+        """Escotaduras de la encimera: ((nx, ny), esquinas) o None."""
+        return None
+
+    def _extras(self, model, ctx, d, legs, corners) -> None:
+        """Elementos adicionales de familias derivadas (superestructura, asa...)."""
+
+    def _extra_dims(self, model, d) -> None:
+        pass
 
     # ------------------------------------------------------------------ utilidades comunes
     @staticmethod
@@ -390,12 +424,13 @@ class MesaIndustrial(ProductFamily):
             a = leg.B
             ctx.set_derived("SECCION_PATA", f"{leg.B:g}x{leg.H:g}", "mm", "Sección de pata", ["PERFIL_PATA"])
             ctx.set_derived("ESPESOR_PERFIL_PATA", leg.t, "mm", "Espesor de pata", ["PERFIL_PATA"])
-            foot = catalog.component(ctx["PIE_NIVELADOR"])
+            foot = catalog.component(ctx[self.support_param])
             hn = float(foot["nominal_height"])
             tp = ctx["ESPESOR_PLACA_BASE"]
             z_tf = ctx.derive("COTA_BASTIDOR_SUP", lambda p: p["ALTURA"] - p["ESP_ENC"], "mm",
                               "Cota cara superior del bastidor")
-            z_leg0 = ctx.derive("COTA_INICIO_PATA", lambda p: float(catalog.component(p["PIE_NIVELADOR"])["nominal_height"])
+            sp = self.support_param
+            z_leg0 = ctx.derive("COTA_INICIO_PATA", lambda p: float(catalog.component(p[sp])["nominal_height"])
                                 + p["ESPESOR_PLACA_BASE"], "mm", "Cota inicio de pata")
             leg_len = ctx.derive("LONGITUD_PATA", lambda p: p["COTA_BASTIDOR_SUP"] - p["COTA_INICIO_PATA"], "mm",
                                  "Longitud de corte de pata")
@@ -443,7 +478,8 @@ class MesaIndustrial(ProductFamily):
             for e in EDGES:
                 holes = tuple((s, fix_top["h"][e], flange_hole_d(v["MATERIAL_CHAPA"], t, sc)) for s in fix_top["s"][e])
                 flanges.append(FlangeSpec(e, ala, "down", holes))
-            d["top_spec"] = SheetMetalSpec(L, W, t, r, K, tuple(flanges))
+            tn = self._top_notch(ctx, d)
+            d["top_spec"] = SheetMetalSpec(L, W, t, r, K, tuple(flanges), **({"notch": tn[0], "notch_corners": tn[1]} if tn else {}))
             d["fix_top"] = fix_top
 
             # ---- balda
@@ -487,10 +523,12 @@ class MesaIndustrial(ProductFamily):
         return d
 
     def _fix_layout(self, model, ctx, Lx, Ly, c, a, t, R, ala, prof_long, prof_end, z_ref, inset, hole_d, rn,
-                    pitch, short_min, tag, notch=0.0, offset=0.0):
+                    pitch, short_min, tag, notch=0.0, offset=0.0, ranges=None, profs=None):
         """Posiciones de fijación por borde en coordenadas de la chapa y altura del taladro.
 
-        ``offset`` traslada coordenadas de chapa a coordenadas globales (balda situada en x=c, y=c)."""
+        ``offset`` traslada coordenadas de chapa a coordenadas globales (balda situada en x=c, y=c; admite (ox, oy)).
+        ``ranges`` fija, por borde, el tramo útil y el número mínimo de fijaciones {borde: (s0, s1, nmin)}.
+        ``profs`` fija, por borde, el perfil sobre el que se atornilla (por defecto largueros en y0/y1)."""
         margin = 60.0
         # rango útil a lo largo de cada borde (coordenadas de chapa): sobre largueros/travesaños, fuera de patas
         long_rng = (c + a + margin, Lx - c - a - margin)
@@ -503,9 +541,11 @@ class MesaIndustrial(ProductFamily):
         n_short = count(short_rng[1] - short_rng[0], short_min)
         s = {"y0": even_positions(*long_rng, n_long), "y1": even_positions(*long_rng, n_long),
              "x0": even_positions(*short_rng, n_short), "x1": even_positions(*short_rng, n_short)}
+        for e, (s0, s1, nmin) in (ranges or {}).items():
+            s[e] = even_positions(s0, s1, count(s1 - s0, nmin))
         h = {}
         for e in EDGES:
-            prof = prof_long if e in ("y0", "y1") else prof_end
+            prof = (profs or {}).get(e) or (prof_long if e in ("y0", "y1") else prof_end)
             fl_lo, fl_hi = R + 2 * t + hole_d / 2, ala - max(t, 3.0) - hole_d / 2
             depth0 = t    # la cara superior del bastidor está a 't' bajo la cara superior de la chapa
             rail_lo = depth0 + prof.r_out + rn["hole_d"] / 2
@@ -523,7 +563,7 @@ class MesaIndustrial(ProductFamily):
                 h[e] = round((rail_lo + rail_hi) / 2, 1)
             else:
                 h[e] = round((lo + hi) / 2, 1)
-        wall = {e: (prof_long if e in ("y0", "y1") else prof_end).t for e in EDGES}
+        wall = {e: ((profs or {}).get(e) or (prof_long if e in ("y0", "y1") else prof_end)).t for e in EDGES}
         return {"s": s, "h": h, "z_ref": z_ref, "t": t, "inset": inset, "offset": offset, "Lx": Lx, "Ly": Ly,
                 "c": c, "wall": wall}
 
@@ -600,6 +640,7 @@ class MesaIndustrial(ProductFamily):
         La tuerca se elige por el espesor de pared del perfil (rango de agarre) y el tornillo por el paquete
         apretado (pestaña + holgura) con al menos 1·d de rosca útil sin sobrepasar la tuerca."""
         t, off, Lx, Ly = fix["t"], fix["offset"], fix["Lx"], fix["Ly"]
+        ox, oy = off if isinstance(off, (tuple, list)) else (off, off)
         gap = fix["gap"]
         n = 0
         for e in EDGES:
@@ -616,8 +657,8 @@ class MesaIndustrial(ProductFamily):
             for s in fix["s"][e]:
                 n += 1
                 z = fix["z_ref"] - fix["h"][e]
-                p_flange, nrm = {"y0": ((off + s, off, z), (0, -1, 0)), "y1": ((off + s, off + Ly, z), (0, 1, 0)),
-                                 "x0": ((off, off + s, z), (-1, 0, 0)), "x1": ((off + Lx, off + s, z), (1, 0, 0))}[e]
+                p_flange, nrm = {"y0": ((ox + s, oy, z), (0, -1, 0)), "y1": ((ox + s, oy + Ly, z), (0, 1, 0)),
+                                 "x0": ((ox, oy + s, z), (-1, 0, 0)), "x1": ((ox + Lx, oy + s, z), (1, 0, 0))}[e]
                 nrm = np.array(nrm, float)
                 pf = np.array(p_flange, float)
                 pr = pf - nrm * (t + gap)       # cara exterior del perfil = cara interior de la pestaña + holgura
@@ -646,8 +687,8 @@ class MesaIndustrial(ProductFamily):
                              "sheet_instance": "BAL.BANDEJA",
                              "area_mm2": (ps["LONGITUD"] - 2 * d["c"]) * (ps["ANCHURA"] - 2 * d["c"]),
                              "count_param": "NUMERO_TRAVESANOS_BALDA"})
-        feet = [{"instance": f"APO.PIE.{k}", "leg": legs[k], "point": tuple(model.instance(legs[k]).axis[0]),
-                 "component": ps["PIE_NIVELADOR"]} for k in ("DI", "DD", "TI", "TD")]
+        feet = [{"instance": f"{self.support_group[0]}.PIE.{k}", "leg": legs[k], "point": tuple(model.instance(legs[k]).axis[0]),
+                 "component": model.instance(f"{self.support_group[0]}.PIE.{k}").part.code} for k in ("DI", "DD", "TI", "TD")]
         return {"levels": lv, "surfaces": surfaces, "supports": feet,
                 "horizontal_points": [legs["DI"], legs["DD"]], "worktop_height": ps["ALTURA"],
                 "leg_ids": list(legs.values()), "member_roles": {

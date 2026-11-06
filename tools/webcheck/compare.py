@@ -26,7 +26,25 @@ MATS = [("S235JRH", "S235JR", "RAL7035_POLVO"), ("1.4301", "1.4301", "INOX_SATIN
         ("S235JRH", "DC01", "RAL5010_POLVO"), ("EN AW-6082 T6", "EN AW-5754 H22", "ANODIZADO_NATURAL")]
 for k in range(n_rand):
     m = rng.choice(MATS)
-    if rng.random() < 0.5:
+    u = rng.random()
+    if u >= 0.9:
+        fid = "carro_taller"
+        H = rng.choice(range(800, 1001, 50))
+        v = {"LONGITUD": rng.choice(range(700, 1601, 100)), "ANCHURA": rng.choice(range(450, 801, 50)), "ALTURA": H,
+             "ALTURA_ASA": H + rng.choice([100, 150, 200]), "CARGA_TOTAL": rng.choice([None, 50, 100, 200]),
+             "NUMERO_BALDAS": rng.choice([0, 1]), "CARGA_BALDA": rng.choice([None, 50, 100]),
+             "CARGA_HORIZONTAL": rng.choice([50, 100, 150])}
+    elif u >= 0.7:
+        fid = "puesto_trabajo"
+        H = rng.choice(range(800, 1001, 50))
+        top = rng.choice(range(1500, 2201, 100))
+        v = {"LONGITUD": rng.choice(range(1000, 2401, 100)), "ANCHURA": rng.choice(range(600, 901, 50)), "ALTURA": H,
+             "ALTURA_TOTAL": top, "ESTANTE_SUPERIOR": rng.choice([0, 1]), "ALTURA_ESTANTE": rng.choice(range(H + 400, top - 149, 50)),
+             "PROFUNDIDAD_ESTANTE": rng.choice(range(200, 401, 50)), "PANEL_HERRAMIENTAS": rng.choice([0, 1]),
+             "CARGA_TOTAL": rng.choice([None, 100, 200, 400]), "CARGA_ESTANTE": rng.choice([None, 20, 50, 80]),
+             "NUMERO_BALDAS": rng.choice([0, 1]), "CARGA_BALDA": rng.choice([None, 50, 100]),
+             "CARGA_HORIZONTAL": rng.choice([100, 200, 300]), "ANCLAJE": rng.choice(["ninguno", "al_suelo"])}
+    elif u < 0.4:
         fid = "mesa_industrial"
         v = {"LONGITUD": rng.choice(range(800, 3001, 100)), "ANCHURA": rng.choice(range(500, 1201, 50)),
              "ALTURA": rng.choice(range(700, 1101, 50)), "CARGA_TOTAL": rng.choice([None, 100, 200, 300, 400, 600, 800]),

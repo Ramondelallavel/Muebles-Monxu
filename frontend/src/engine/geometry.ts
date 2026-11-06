@@ -117,18 +117,21 @@ class Welder {
 function fuse(solids) {
   const W = new Welder();
   let faces = [];
-  for (const s of solids) for (const f of s.faces) {
+  solids.forEach((s, si) => { for (const f of s.faces) {
     const loops = f.loops.map((l) => { const ids = l.map((p) => W.id(p)); return ids.filter((v, k) => v !== ids[(k + 1) % ids.length]); }).filter((l) => l.length >= 3);
-    if (loops.length) faces.push({ loops, n: f.n });
-  }
+    if (loops.length) faces.push({ loops, n: f.n, src: si });
+  } });
+  // componentes conexos: dos sólidos elementales quedan unidos cuando comparten una cara (que se elimina)
+  const par = solids.map((_, i) => i);
+  const find = (a) => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
   const byKey = new Map();
   faces.forEach((f, i) => { const k = [...new Set(f.loops.flat())].sort((a, b) => a - b).join(","); if (!byKey.has(k)) byKey.set(k, []); byKey.get(k).push(i); });
   const drop = new Set();
   for (const ids of byKey.values()) for (let a = 0; a < ids.length; a++) for (let b = a + 1; b < ids.length; b++) {
     if (drop.has(ids[a]) || drop.has(ids[b])) continue;
-    if (vdot(faces[ids[a]].n, faces[ids[b]].n) < -0.999) { drop.add(ids[a]); drop.add(ids[b]); }
+    if (vdot(faces[ids[a]].n, faces[ids[b]].n) < -0.999) { drop.add(ids[a]); drop.add(ids[b]); par[find(faces[ids[a]].src)] = find(faces[ids[b]].src); }
   }
-  faces = faces.filter((_, i) => !drop.has(i));
+  faces = faces.filter((_, i) => !drop.has(i)).map((f) => ({ loops: f.loops, n: f.n, comp: find(f.src) }));
   return { verts: W.pts, faces };
 }
 
@@ -223,8 +226,35 @@ function standardSolids(part) {
     const dome = Array.from({ length: 6 }, (_, k) => { const a = (Math.PI / 2) * (k / 5); return [R * Math.cos(a) * 0.98, h * 0.35 + h * 0.65 * Math.sin(a)]; });
     return [revolve([[0, -c.length], [c.d / 2, -c.length], [c.d / 2, 0], [R, 0], [R, h * 0.35], ...dome.slice(1, -1), [0, h]], 24)];
   }
+  if (c.category === "ruedas_espiga") {
+    // horquilla (puente + brazos) como un único prisma en U; el resto según la descomposición común
+    const parts = castorParts(c);
+    const D = +c.wheel_d, w = +c.wheel_w, nh = +c.nominal_height, tf = 3.0, yo = w / 2 + 1.0 + tf, fl = Math.round(0.6 * D * 1000) / 1000;
+    const U = [[-yo, D / 2 - 6], [-yo + tf, D / 2 - 6], [-yo + tf, nh - 12], [yo - tf, nh - 12], [yo - tf, D / 2 - 6], [yo, D / 2 - 6], [yo, nh - 8], [-yo, nh - 8]];
+    const fork = transform(prism(U, [], -fl / 2, fl / 2), [[0, 0, 1, 0], [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1]]);
+    return [fork, ...parts.filter((_, k) => k < 2 || k > 4).map(([kind, a]) => (kind === "cyl" ? cylinder(...a) : box(...a)))];
+  }
   const [a, b, h] = c.dims ?? [20, 20, 10];
   return [prism([[-a / 2, -b / 2], [a / 2, -b / 2], [a / 2, b / 2], [-a / 2, b / 2]], [], 0, h)];
+}
+/** Cilindro de diámetro d y longitud L desde `base` según +Z o +Y (los únicos ejes usados). */
+function cylinder(d, L, base, dir) {
+  const s = revolve([[0, 0], [d / 2, 0], [d / 2, L], [0, L]]);
+  const T = dir[1] > 0.5 ? [[1, 0, 0, base[0]], [0, 0, 1, base[1]], [0, -1, 0, base[2]], [0, 0, 0, 1]]
+    : [[1, 0, 0, base[0]], [0, 1, 0, base[1]], [0, 0, 1, base[2]], [0, 0, 0, 1]];
+  return transform(s, T);
+}
+const box = (x0, y0, z0, x1, y1, z1) => prism([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], [], z0, z1);
+/** Rueda giratoria de espiga roscada: misma descomposición que geometry.stem_castor_parts del servidor. */
+export function castorParts(c) {
+  const d = parseFloat(c.thread.slice(1)), D = +c.wheel_d, w = +c.wheel_w, nh = +c.nominal_height, hd = +c.head_d;
+  const tf = 3.0, gap = 1.0, yo = w / 2 + gap + tf, fl = Math.round(0.6 * D * 1000) / 1000;
+  const out = [["cyl", [d, c.stem_len, [0, 0, nh], [0, 0, 1]]], ["cyl", [hd, 8.0, [0, 0, nh - 8.0], [0, 0, 1]]],
+    ["box", [-fl / 2, -yo, nh - 12.0, fl / 2, yo, nh - 8.0]],
+    ["box", [-fl / 2, -yo, D / 2 - 6.0, fl / 2, -yo + tf, nh - 12.0]], ["box", [-fl / 2, yo - tf, D / 2 - 6.0, fl / 2, yo, nh - 12.0]],
+    ["cyl", [D, w, [0, -w / 2, D / 2], [0, 1, 0]]]];
+  if (c.brake) out.push(["box", [fl / 2 + 1.0, -yo, nh - 12.0, D / 2 + 18.0, yo, nh - 8.0]]);
+  return out;
 }
 
 // ---------------------------------------------------------------------------- triangulación y propiedades

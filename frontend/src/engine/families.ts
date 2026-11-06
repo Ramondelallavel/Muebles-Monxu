@@ -3,7 +3,7 @@
 import * as C from "./catalog";
 import { AUTO, ParamContext, ParamError, ProductModel, axisFrame, frameZ, newParams, platePart, profilePart, sheetPart,
   standardPart, translation, sub, scale } from "./model";
-import { EDGES, bendDeduction, makeSpec } from "./sheet";
+import { EDGES, bendDeduction, makeSpec, perforationGrid } from "./sheet";
 import { f as fx, g, pad2, pyRound, range } from "./util";
 import FAM from "./data/families.json";
 
@@ -29,7 +29,8 @@ class MesaIndustrial {
     const d = FAM.families[id];
     Object.assign(this, { id, name: d.name, category: d.category, description: d.description, def: d,
       candidates: d.candidates, constructive_defaults: d.constructive_defaults, leg_param: d.leg_param,
-      frame_params: d.frame_params, auto_in_construct: d.auto_in_construct, verification_inputs: d.verification_inputs });
+      frame_params: d.frame_params, auto_in_construct: d.auto_in_construct, verification_inputs: d.verification_inputs,
+      support_param: "PIE_NIVELADOR", support_category: "patas", support_group: ["APO", "Apoyos niveladores"] });
   }
   specs() { return this.def.params; }
   templates() { return this.def.templates; }
@@ -67,19 +68,19 @@ class MesaIndustrial {
     const ctx = new ParamContext(ps);
     const V = ps.values;
     const L = V.LONGITUD, W = V.ANCHURA, H = V.ALTURA;
-    const model = new ProductModel(this.id, this.name, `MI${fx(L)}-${fx(W)}-${fx(H)}`, ps, ctx);
+    const model = new ProductModel(this.id, this.name, `${this.def.prefix ?? "MI"}${fx(L)}-${fx(W)}-${fx(H)}`, ps, ctx);
     model.requested = ps;
     const d = this._derive(ctx, model);
     const mat_s = V.MATERIAL_ESTRUCTURAL, mat_c = V.MATERIAL_CHAPA, fin = V.ACABADO;
     model.addSub("EST", "Estructura soldada", { welded: true, step: 1 });
-    model.addSub("APO", "Apoyos niveladores", { explode: [0, 0, -160], step: 2 });
+    model.addSub(this.support_group[0], this.support_group[1], { explode: [0, 0, -160], step: 2 });
     if (d.shelf) model.addSub("BAL", "Balda inferior", { explode: [0, 0, 90], step: 3 });
     model.addSub("ENC", "Encimera", { explode: [0, 0, 380], step: 4 });
     const { leg, rail, trv, bas, c, a } = d;
     const legs = {};
     const corners = { DI: [c + a / 2, c + a / 2], DD: [L - c - a / 2, c + a / 2], TI: [c + a / 2, W - c - a / 2], TD: [L - c - a / 2, W - c - a / 2] };
     const cname = { DI: "delantera izquierda", DD: "delantera derecha", TI: "trasera izquierda", TD: "trasera derecha" };
-    const foot = C.component(V.PIE_NIVELADOR);
+    const foot = C.component(V[this.support_param]);
     const thread = parseFloat(foot.thread.slice(1));
     const nutCode = `TUERCA_SOLDAR_M${fx(thread)}`;
     const rn = C.component("TUERCA_REMACHABLE_M6");
@@ -88,10 +89,10 @@ class MesaIndustrial {
 
     ctx.feature("F10", "Estructura soldada", () => {
       ctx.feature("F11", "Patas, placas base y tuercas", () => {
-        ctx.uses("LONGITUD_PATA", "PERFIL_PATA", "RETRANQUEO", "LONGITUD", "ANCHURA", "ESPESOR_PLACA_BASE", "PIE_NIVELADOR",
-          "MATERIAL_ESTRUCTURAL", "ACABADO");
+        ctx.uses("LONGITUD_PATA", "PERFIL_PATA", "RETRANQUEO", "LONGITUD", "ANCHURA", "ESPESOR_PLACA_BASE", this.support_param,
+          "MATERIAL_ESTRUCTURAL", "ACABADO", ...this._legUses());
         legsAndPlates(model, d, legs, corners, cname, mat_s, fin, thread, nutCode, "pata", `Pata ${leg.code}`, "EST.PATA",
-          "Pata", "Placa base a pata", d.z_tf, (k) => cname[k]);
+          "Pata", "Placa base a pata", d.z_tf, (k) => this._legDef(k, d, leg));
       });
       ctx.feature("F12", "Bastidor superior", () => {
         ctx.uses("LONGITUD_LARGUERO", "LONGITUD_TRAVESANO_EXT", "LONGITUD_TRAVESANO_INT", "N_TRAVESANOS_INT", "PERFIL_LARGUERO",
@@ -104,9 +105,9 @@ class MesaIndustrial {
         frameLevel(model, d, "INF", d.z_lf, bas, bas, d.e_shelf, d.n_shelf, legs, d.fix_shelf, weld, mat_s, fin);
       });
     });
-    ctx.feature("F40", "Apoyos niveladores", () => {
-      ctx.uses("PIE_NIVELADOR", "LONGITUD", "ANCHURA", "RETRANQUEO", "PERFIL_PATA");
-      feet(model, d, corners, cname, V.PIE_NIVELADOR, foot);
+    ctx.feature("F40", this.support_group[1], () => {
+      ctx.uses(this.support_param, "LONGITUD", "ANCHURA", "RETRANQUEO", "PERFIL_PATA");
+      feet(model, d, corners, cname, V[this.support_param], foot, this.support_group[0], (k) => this._supportPart(k, V));
     });
     ctx.feature("F20", "Encimera de chapa plegada", () => {
       ctx.uses("LONGITUD", "ANCHURA", "ALTURA", "ESP_ENC", "RADIO_ENC", "K_ENC", "ALA_ENCIMERA", "MATERIAL_CHAPA",
@@ -122,14 +123,26 @@ class MesaIndustrial {
       model.add("BAL.BANDEJA", "Balda inferior", sheetPart("balda", `Balda chapa ${g(spec.t)} mm`, spec, mat_c, fin), translation(c, c, d.z_shelf), "BAL");
       fasteners(model, d.fix_shelf, "BAL");
     });
+    this._extras(model, ctx, d, legs, corners);
     model.structure = this._structure(model, d, legs);
     model.dims = { LONGITUD: L, ANCHURA: W, ALTURA: H, ALTURA_BALDA: d.shelf ? d.z_shelf : null, LONGITUD_PATA: d.leg_len,
       envelope: { ids: ["ENC.BANDEJA"], dx: L, dy: W, zmax: H, names: ["LONGITUD", "ANCHURA"] },
       levels: d.shelf ? [["ALTURA_BALDA", "BAL.BANDEJA"]] : [],
       load_text: `Carga distribuida de proyecto sobre encimera: ${V.CARGA_TOTAL ? pyStr(V.CARGA_TOTAL) + " kg" : "NO DEFINIDA"}` };
+    this._extraDims(model, d);
     model.numberParts();
     return model;
   }
+
+  // ------------------------------------------------------------------ ganchos para familias derivadas
+  _legUses() { return []; }
+  /** [rol, nombre, cota superior, taladros] de la pata de cada esquina. */
+  _legDef(corner, d, leg) { return ["pata", "Pata", d.z_tf, []]; }
+  _supportPart(corner, V) { return [standardPart("pie_nivelador", V[this.support_param]), "Pie nivelador"]; }
+  /** Escotaduras de la encimera: [[nx, ny], esquinas] o null. */
+  _topNotch(ctx, d) { return null; }
+  _extras(model, ctx, d, legs, corners) {}
+  _extraDims(model, d) {}
 
   _derive(ctx, model) {
     const v = ctx.params.values;
@@ -158,11 +171,12 @@ class MesaIndustrial {
       const a = leg.B;
       ctx.setDerived("SECCION_PATA", `${g(leg.B)}x${g(leg.H)}`, "mm", "Sección de pata", ["PERFIL_PATA"]);
       ctx.setDerived("ESPESOR_PERFIL_PATA", leg.t, "mm", "Espesor de pata", ["PERFIL_PATA"]);
-      const foot = C.component(ctx.get("PIE_NIVELADOR"));
+      const foot = C.component(ctx.get(this.support_param));
       const hn = +foot.nominal_height;
       const tp = ctx.get("ESPESOR_PLACA_BASE");
       const z_tf = ctx.derive("COTA_BASTIDOR_SUP", (p) => p.get("ALTURA") - p.get("ESP_ENC"), "mm", "Cota cara superior del bastidor");
-      const z_leg0 = ctx.derive("COTA_INICIO_PATA", (p) => +C.component(p.get("PIE_NIVELADOR")).nominal_height + p.get("ESPESOR_PLACA_BASE"),
+      const sp = this.support_param;
+      const z_leg0 = ctx.derive("COTA_INICIO_PATA", (p) => +C.component(p.get(sp)).nominal_height + p.get("ESPESOR_PLACA_BASE"),
         "mm", "Cota inicio de pata");
       const leg_len = ctx.derive("LONGITUD_PATA", (p) => p.get("COTA_BASTIDOR_SUP") - p.get("COTA_INICIO_PATA"), "mm", "Longitud de corte de pata");
       const L = ctx.get("LONGITUD"), W = ctx.get("ANCHURA"), H = ctx.get("ALTURA");
@@ -189,8 +203,9 @@ class MesaIndustrial {
       const hd = flangeHoleD(v.MATERIAL_CHAPA, t, sc);
       const fix_top = fixLayout(model, L, W, c, a, t, r + t, ala, rail, trv, H, 0.0, hd, rn, pitch, 2, "encimera");
       fix_top.gap = gg;
+      const tn = this._topNotch(ctx, d);
       d.top_spec = makeSpec({ Lx: L, Ly: W, t, r, K, flanges: EDGES.map((e) => ({ edge: e, height: ala, direction: "down",
-        holes: fix_top.s[e].map((s) => [s, fix_top.h[e], hd]) })) });
+        holes: fix_top.s[e].map((s) => [s, fix_top.h[e], hd]) })), ...(tn ? { notch: tn[0], notchCorners: tn[1] } : {}) });
       d.fix_top = fix_top;
       if (shelf) {
         const ts = ctx.derive("ESP_BAL", (p) => p.get("ESPESOR_BALDA"), "mm", "Espesor balda");
@@ -228,27 +243,35 @@ class MesaIndustrial {
       area_mm2: ps.LONGITUD * ps.ANCHURA, count_param: "NUMERO_TRAVESANOS" }];
     if (d.shelf) surfaces.push({ id: "balda", label: "Balda inferior", level: "INF", load_param: "CARGA_BALDA", sheet_instance: "BAL.BANDEJA",
       area_mm2: (ps.LONGITUD - 2 * d.c) * (ps.ANCHURA - 2 * d.c), count_param: "NUMERO_TRAVESANOS_BALDA" });
-    return { levels: model.structure.levels ?? {}, surfaces, supports: supportsOf(model, legs), horizontal_points: [legs.DI, legs.DD],
+    return { levels: model.structure.levels ?? {}, surfaces, supports: supportsOf(model, legs, this.support_group[0]), horizontal_points: [legs.DI, legs.DD],
       worktop_height: ps.ALTURA, leg_ids: Object.values(legs), member_roles: memberRoles(model) };
   }
 }
 
 const pyStr = (x) => (Number.isInteger(x) ? `${x}.0` : String(x));   // str(float) de Python
-const supportsOf = (model, legs) => ["DI", "DD", "TI", "TD"].map((k) => ({ instance: `APO.PIE.${k}`, leg: legs[k],
-  point: [...model.instance(legs[k]).axis[0]], component: model.params.values.PIE_NIVELADOR }));
+const supportsOf = (model, legs, g = "APO") => ["DI", "DD", "TI", "TD"].map((k) => ({ instance: `${g}.PIE.${k}`, leg: legs[k],
+  point: [...model.instance(legs[k]).axis[0]], component: model.instance(`${g}.PIE.${k}`).part.code }));
 const memberRoles = (model) => Object.fromEntries(model.instances.filter((i) => i.structural).map((i) => [i.id, i.part.role]));
 
-function legsAndPlates(model, d, legs, corners, cname, mat_s, fin, thread, nutCode, role, partName, idPrefix, word, weldDesc, zTop) {
+function legsAndPlates(model, d, legs, corners, cname, mat_s, fin, thread, nutCode, role, partName, idPrefix, word, weldDesc, zTop, legDef = null) {
   const { leg, a, tp, hn } = d;
-  const legPart = profilePart(role, partName, leg.code, d.leg_len, mat_s, fin);
+  const legPart = legDef ? null : profilePart(role, partName, leg.code, d.leg_len, mat_s, fin);
+  const legParts = new Map();
   const plateMat = C.material(mat_s).family === "acero_carbono" ? "S235JR" : mat_s;
   const plate = platePart("placa_base", `Placa base ${fx(a)}x${fx(a)}x${fx(tp)}`, a, a, tp, plateMat, fin, Math.min(3.0, a / 10),
     [[a / 2, a / 2, thread + 1.0]]);
   const nut = standardPart("tuerca_soldar", nutCode);
   for (const [k, [x, y]] of Object.entries(corners)) {
     const iid = `${idPrefix}.${k}`;
-    const p0 = [x, y, d.z_leg0], p1 = [x, y, zTop];
-    model.add(iid, `${word} ${cname[k]}`, legPart, axisFrame(p0, p1, [0, 1, 0]), "EST", { axis: [p0, p1], up: [0, 1, 0], structural: true });
+    let part = legPart, top = zTop, w = word;
+    if (legDef) {
+      const [rl, pname, zt, holes] = legDef(k);
+      const pk = JSON.stringify([rl, pyRound(zt, 4), holes]);
+      if (!legParts.has(pk)) legParts.set(pk, profilePart(rl, `${pname} ${leg.code}`, leg.code, zt - d.z_leg0, mat_s, fin, holes));
+      part = legParts.get(pk); top = zt; w = pname;
+    }
+    const p0 = [x, y, d.z_leg0], p1 = [x, y, top];
+    model.add(iid, `${w} ${cname[k]}`, part, axisFrame(p0, p1, [0, 1, 0]), "EST", { axis: [p0, p1], up: [0, 1, 0], structural: true });
     legs[k] = iid;
     model.add(`EST.PLACA.${k}`, `Placa base ${cname[k]}`, plate, translation(x - a / 2, y - a / 2, hn), "EST");
     model.add(`EST.TUERCA.${k}`, `Tuerca soldada ${cname[k]}`, nut, translation(x, y, hn + tp), "EST");
@@ -262,12 +285,13 @@ function legsAndPlates(model, d, legs, corners, cname, mat_s, fin, thread, nutCo
   }
 }
 
-function feet(model, d, corners, cname, code, foot) {
-  const fpart = standardPart("pie_nivelador", code);
+function feet(model, d, corners, cname, code, foot, g = "APO", partOf = null) {
+  const shared = partOf ? null : standardPart("pie_nivelador", code);
   for (const [k, [x, y]] of Object.entries(corners)) {
-    model.add(`APO.PIE.${k}`, `Pie nivelador ${cname[k]}`, fpart, translation(x, y, 0.0), "APO");
-    model.joint({ id: `J.PIE.${k}`, kind: "roscada", members: [`APO.PIE.${k}`, `EST.TUERCA.${k}`], location: [x, y, d.hn],
-      description: `Pie roscado ${foot.thread} en tuerca soldada` });
+    const [fpart, fname] = partOf ? partOf(k) : [shared, "Pie nivelador"];
+    model.add(`${g}.PIE.${k}`, `${fname} ${cname[k]}`, fpart, translation(x, y, 0.0), g);
+    model.joint({ id: `J.PIE.${k}`, kind: "roscada", members: [`${g}.PIE.${k}`, `EST.TUERCA.${k}`], location: [x, y, d.hn],
+      description: partOf ? `${fname} roscado ${foot.thread} en tuerca soldada` : `Pie roscado ${foot.thread} en tuerca soldada` });
   }
 }
 
@@ -281,7 +305,7 @@ function makeWelder(model) {
   };
 }
 
-function fixLayout(model, Lx, Ly, c, a, t, R, ala, prof_long, prof_end, z_ref, inset, hole_d, rn, pitch, short_min, tag, notch = 0.0, offset = 0.0) {
+function fixLayout(model, Lx, Ly, c, a, t, R, ala, prof_long, prof_end, z_ref, inset, hole_d, rn, pitch, short_min, tag, notch = 0.0, offset = 0.0, ranges = null, profs = null) {
   const margin = 60.0;
   const long_rng = [c + a + margin, Lx - c - a - margin];
   const short_rng = [c + a + margin / 2, Ly - c - a - margin / 2];
@@ -290,10 +314,12 @@ function fixLayout(model, Lx, Ly, c, a, t, R, ala, prof_long, prof_end, z_ref, i
   const n_short = count(short_rng[1] - short_rng[0], short_min);
   const s = { y0: evenPositions(...long_rng, n_long), y1: evenPositions(...long_rng, n_long),
     x0: evenPositions(...short_rng, n_short), x1: evenPositions(...short_rng, n_short) };
+  for (const [e, [s0, s1, nmin]] of Object.entries(ranges ?? {})) s[e] = evenPositions(s0, s1, count(s1 - s0, nmin));
   const h = {};
   const word = tag.split(/\s+/)[0];
+  const profOf = (e) => profs?.[e] ?? (e === "y0" || e === "y1" ? prof_long : prof_end);
   for (const e of EDGES) {
-    const prof = e === "y0" || e === "y1" ? prof_long : prof_end;
+    const prof = profOf(e);
     const fl_lo = R + 2 * t + hole_d / 2, fl_hi = ala - Math.max(t, 3.0) - hole_d / 2;
     const depth0 = t;
     const rail_lo = depth0 + prof.r_out + rn.hole_d / 2;
@@ -310,7 +336,7 @@ function fixLayout(model, Lx, Ly, c, a, t, R, ala, prof_long, prof_end, z_ref, i
       h[e] = pyRound((rail_lo + rail_hi) / 2, 1);
     } else h[e] = pyRound((lo + hi) / 2, 1);
   }
-  const wall = Object.fromEntries(EDGES.map((e) => [e, (e === "y0" || e === "y1" ? prof_long : prof_end).t]));
+  const wall = Object.fromEntries(EDGES.map((e) => [e, profOf(e).t]));
   return { s, h, z_ref, t, inset, offset, Lx, Ly, c, wall };
 }
 
@@ -370,6 +396,7 @@ function frameLevel(model, d, level, z_top, prof_long, prof_end, inset, n_int, l
 
 function fasteners(model, fix, group, prefix = null, tray_id = null) {
   const { t, offset: off, Lx, Ly, gap } = fix;
+  const [ox, oy] = Array.isArray(off) ? off : [off, off];
   let n = 0;
   for (const e of EDGES) {
     const wall = fix.wall?.[e] ?? 2.0;
@@ -382,8 +409,8 @@ function fasteners(model, fix, group, prefix = null, tray_id = null) {
     for (const s of fix.s[e]) {
       n += 1;
       const z = fix.z_ref - fix.h[e];
-      const [pf, nrm] = { y0: [[off + s, off, z], [0, -1, 0]], y1: [[off + s, off + Ly, z], [0, 1, 0]],
-        x0: [[off, off + s, z], [-1, 0, 0]], x1: [[off + Lx, off + s, z], [1, 0, 0]] }[e];
+      const [pf, nrm] = { y0: [[ox + s, oy, z], [0, -1, 0]], y1: [[ox + s, oy + Ly, z], [0, 1, 0]],
+        x0: [[ox, oy + s, z], [-1, 0, 0]], x1: [[ox + Lx, oy + s, z], [1, 0, 0]] }[e];
       const pr = sub(pf, scale(nrm, t + gap));
       const pre = prefix || group;
       const sid = `${pre}.TORN.${pad2(n)}`, rid = `${pre}.TREM.${pad2(n)}`;
@@ -557,7 +584,322 @@ class Estanteria extends MesaIndustrial {
   }
 }
 
-export const REGISTRY = { mesa_industrial: new MesaIndustrial(), estanteria: new Estanteria() };
+
+// ============================================================================ puesto de trabajo (port de puesto_trabajo.py)
+const PANEL_HOLE = 10.0, PANEL_PITCH = 38.0;
+class PuestoTrabajo extends MesaIndustrial {
+  paramForRole(role) {
+    if (role === "montante") return "PERFIL_PATA";
+    if (["travesano_alto", "larguero_est", "brazo_est", "travesano_int_est"].includes(role)) return "PERFIL_ALTILLO";
+    return super.paramForRole(role);
+  }
+  verticalLoadPresent(v) { return !!v.CARGA_TOTAL || !!(v.CARGA_ESTANTE && v.ESTANTE_SUPERIOR); }
+  plateTargets(v) {
+    const out = super.plateTargets(v);
+    if (v.ESTANTE_SUPERIOR && v.CARGA_ESTANTE) out.push({ surface: "estante", t_param: "ESPESOR_ESTANTE", n_param: "NUMERO_TRAVESANOS_ESTANTE",
+      load_param: "CARGA_ESTANTE", trv_param: "PERFIL_ALTILLO", min_t_by_use: false });
+    return out;
+  }
+  sheetDefaultsWithoutLoad(v) {
+    const out = super.sheetDefaultsWithoutLoad(v);
+    if (!(v.ESTANTE_SUPERIOR && v.CARGA_ESTANTE)) out.ESPESOR_ESTANTE = this.constructive_defaults.ESPESOR_ESTANTE;
+    return out;
+  }
+  _legUses() { return ["ALTURA_TOTAL", "PANEL_HERRAMIENTAS"]; }
+  _legDef(corner, d, leg) { return corner === "TI" || corner === "TD" ? ["montante", "Montante trasero", d.z_top_alt, d.leg_holes] : ["pata", "Pata", d.z_tf, []]; }
+  _topNotch(ctx, d) { const n = d.c + d.a + ctx.get("HOLGURA_ESCOTADURA"); return [[n, n], ["x0y1", "x1y1"]]; }
+
+  _derive(ctx, model) {
+    const d = super._derive(ctx, model);
+    const v = ctx.params.values;
+    ctx.feature("F05", "Superestructura: montantes, estante y panel", () => {
+      const { a, c } = d, L = ctx.get("LONGITUD"), W = ctx.get("ANCHURA"), H = ctx.get("ALTURA");
+      const alt = C.profile(ctx.get("PERFIL_ALTILLO"));
+      const zt = ctx.derive("COTA_SUPERIOR_MONTANTE", (p) => p.get("ALTURA_TOTAL"), "mm", "Cota superior de montantes");
+      ctx.derive("LONGITUD_MONTANTE", (p) => p.get("ALTURA_TOTAL") - p.get("COTA_INICIO_PATA"), "mm", "Longitud de corte de montante trasero");
+      Object.assign(d, { alt, z_top_alt: zt, leg_holes: [] });
+      if (zt < H + 300) model.note("error", "GEO-ALTURA-TOTAL", `Altura de montantes ${g(zt)} mm insuficiente: debe superar la encimera (${g(H)} mm) en al menos 300 mm.`);
+      if (alt.B > a) model.note("error", "DFM-ALTILLO-ANCHO", `El perfil ${alt.code} es más ancho que el montante: no puede enrasarse con él.`);
+      const rn = C.component("TUERCA_REMACHABLE_M6"), sc = C.component("TORNILLO_ISO7380_M6x12");
+      const head_h = +rn.head_h;
+      d.shelf_top = !!ctx.get("ESTANTE_SUPERIOR");
+      if (d.shelf_top) {
+        const fam = C.material(v.MATERIAL_CHAPA).family;
+        const rmin = C.sheetData().press_brake.min_inner_radius_factor[fam] ?? 1.0;
+        const ts = ctx.derive("ESP_EST", (p) => p.get("ESPESOR_ESTANTE"), "mm", "Espesor del estante superior");
+        const rs = ctx.derive("RADIO_EST", (p) => (p.get("RADIO_PLEGADO") === AUTO ? pyRound(Math.max(p.get("ESP_EST"), rmin * p.get("ESP_EST")), 2) : p.get("RADIO_PLEGADO")),
+          "mm", "Radio de plegado (estante)");
+        const Ks = ctx.derive("K_EST", (p) => (p.get("FACTOR_K") === AUTO ? pyRound(C.din6935K(p.get("RADIO_EST"), p.get("ESP_EST")), 4) : p.get("FACTOR_K")),
+          null, "Factor K (estante)");
+        ctx.derive("DEDUCCION_PLEGADO_EST", (p) => pyRound(bendDeduction(p.get("ESP_EST"), p.get("RADIO_EST"), p.get("K_EST")), 4), "mm", "Deducción de plegado 90° (estante)");
+        const gg = ctx.derive("HOLGURA_EST", (p) => (p.get("HOLGURA_ENCIMERA") === AUTO ? Math.max(p.get("RADIO_EST"), head_h) : p.get("HOLGURA_ENCIMERA")),
+          "mm", "Holgura bastidor–pestaña (estante)");
+        const e = ts + gg;
+        const D = ctx.get("PROFUNDIDAD_ESTANTE"), zs = ctx.get("ALTURA_ESTANTE");
+        const notch = a + ctx.get("HOLGURA_ESCOTADURA");
+        const Lx = L - 2 * c;
+        if (e + alt.B > a) model.note("error", "DFM-BASTIDOR-ESTANTE", "El bastidor retranqueado del estante no cabe en la sección del montante.");
+        if (D - a - e - alt.B < 40) model.note("error", "GEO-ESTANTE-CORTO", `Fondo de estante ${g(D)} mm insuficiente para el montante y el bastidor (mínimo ${fx(a + e + alt.B + 40)} mm).`);
+        if (zs > zt - 100 + 1e-9) model.note("error", "GEO-ESTANTE-ALTO", `El estante superior (${g(zs)} mm) debe quedar al menos 100 mm por debajo de la cota superior de los montantes (${g(zt)} mm).`);
+        if (zs < H + 300) model.note("error", "GEO-ESTANTE-BAJO", `El estante superior (${g(zs)} mm) debe quedar al menos 300 mm por encima de la encimera (${g(H)} mm).`);
+        const xa0 = c + e + alt.B / 2, xa1 = L - c - e - alt.B / 2;
+        let n_int = ctx.get("NUMERO_TRAVESANOS_ESTANTE");
+        if (n_int === AUTO) n_int = Math.max(0, Math.ceil((xa1 - xa0) / ctx.get("SEPARACION_MAX_APOYOS")) - 1);
+        ctx.setDerived("N_TRAVESANOS_ESTANTE", n_int, "ud", "Travesaños intermedios bajo el estante", ["NUMERO_TRAVESANOS_ESTANTE", "SEPARACION_MAX_APOYOS", "LONGITUD"]);
+        const ala = ctx.get("ALA_ESTANTE");
+        const hd = flangeHoleD(v.MATERIAL_CHAPA, ts, sc);
+        const m = 40.0;
+        const ranges = { y0: [e + alt.B + m, Lx - e - alt.B - m, 2], y1: [notch + 30, Lx - notch - 30, 2],
+          x0: [e + alt.B + 30, D - notch - 20, 1], x1: [e + alt.B + 30, D - notch - 20, 1] };
+        const fix = fixLayout(model, Lx, D, 0.0, a, ts, rs + ts, ala, alt, alt, zs, e, hd, rn, ctx.get("PASO_FIJACIONES"), 1, "estante", 0.0, [c, W - c - D], ranges);
+        fix.gap = gg;
+        d.est_spec = makeSpec({ Lx, Ly: D, t: ts, r: rs, K: Ks, notch: [notch, notch], notchCorners: ["x0y1", "x1y1"],
+          flanges: EDGES.map((ed) => ({ edge: ed, height: ala, direction: "down", holes: fix.s[ed].map((s) => [s, fix.h[ed], hd]) })) });
+        Object.assign(d, { est_t: ts, est_e: e, est_D: D, est_z: zs, est_notch: notch, est_n_int: n_int, fix_est: fix, est_xa: [xa0, xa1] });
+      }
+      d.panel = !!ctx.get("PANEL_HERRAMIENTAS");
+      if (d.panel) {
+        const tp = ctx.get("ESPESOR_PANEL");
+        const z0 = H + 40.0;
+        const z1 = d.shelf_top ? ctx.get("ALTURA_ESTANTE") - d.est_t - alt.H - 30.0 : zt - alt.H - 30.0;
+        const Hp = pyRound(z1 - z0, 3);
+        if (Hp < 200) {
+          model.note("advertencia", "GEO-PANEL-SIN-HUECO", `No queda hueco para el panel portaherramientas (${fx(Hp)} mm entre encimera y estante): se omite.`);
+          d.panel = false;
+        } else {
+          const fam = C.material(v.MATERIAL_CHAPA).family;
+          const rmin = C.sheetData().press_brake.min_inner_radius_factor[fam] ?? 1.0;
+          const rp = v.RADIO_PLEGADO === AUTO ? pyRound(Math.max(tp, rmin * tp), 2) : v.RADIO_PLEGADO;
+          const Kp = v.FACTOR_K === AUTO ? pyRound(C.din6935K(rp, tp), 4) : v.FACTOR_K;
+          const Rp = rp + tp, Lp = L - 2 * c, gp = head_h;
+          const hd = flangeHoleD(v.MATERIAL_CHAPA, tp, sc);
+          const n_fix = Math.max(2, Math.ceil((Hp - 2 * Rp - 50) / ctx.get("PASO_FIJACIONES")) + 1);
+          const ys = evenPositions(Rp + 25, Hp - Rp - 25, n_fix);
+          const holes = [...ys.map((y) => ["round", a / 2, y, hd]), ...ys.map((y) => ["round", Lp - a / 2, y, hd]),
+            ...perforationGrid(a + 15, Rp + 2 * tp + 12, Lp - a - 15, Hp - Rp - 2 * tp - 12, PANEL_PITCH, PANEL_HOLE)];
+          d.panel_spec = makeSpec({ Lx: Lp, Ly: Hp, t: tp, r: rp, K: Kp, notch: [a + 3, Rp], holes,
+            flanges: [{ edge: "y0", height: 15.0, direction: "down", holes: [] }, { edge: "y1", height: 15.0, direction: "down", holes: [] }] });
+          Object.assign(d, { panel_z: [z0, z1], panel_y: W - c - a - gp - tp, panel_gap: gp, panel_t: tp, panel_fix_z: ys.map((y) => z0 + y) });
+          ctx.setDerived("ALTO_PANEL", Hp, "mm", "Altura del panel perforado", ["ALTURA", "ALTURA_ESTANTE", "ALTURA_TOTAL", "PANEL_HERRAMIENTAS"]);
+          d.leg_holes = d.panel_fix_z.map((z) => ["-y", pyRound(z - d.z_leg0, 3), 0.0, rn.hole_d]);
+        }
+      }
+    });
+    return d;
+  }
+
+  _extras(model, ctx, d, legs, corners) {
+    const V = model.params.values;
+    const mat_s = V.MATERIAL_ESTRUCTURAL, mat_c = V.MATERIAL_CHAPA, fin = V.ACABADO;
+    const { a, c, alt } = d, L = V.LONGITUD, W = V.ANCHURA;
+    const weld = makeWelder(model);
+    const yR = W - c - a / 2;
+    ctx.feature("F14", "Travesaño alto entre montantes", () => {
+      ctx.uses("PERFIL_ALTILLO", "ALTURA_TOTAL", "LONGITUD", "RETRANQUEO", "PERFIL_PATA", "MATERIAL_ESTRUCTURAL");
+      const zc = d.z_top_alt - alt.H / 2;
+      const p0 = [c + a, yR, zc], p1 = [L - c - a, yR, zc];
+      const part = profilePart("travesano_alto", `Travesaño alto ${alt.code}`, alt.code, L - 2 * c - 2 * a, mat_s, fin);
+      model.add("EST.TRV_ALTO", "Travesaño alto entre montantes", part, axisFrame(p0, p1, [0, 0, 1]), "EST", { axis: [p0, p1], up: [0, 0, 1], structural: true });
+      weld("J.EST.TRV_ALTO.0", "EST.TRV_ALTO", 0, legs.TI, alt, "Travesaño alto a montante");
+      weld("J.EST.TRV_ALTO.1", "EST.TRV_ALTO", 1, legs.TD, alt, "Travesaño alto a montante");
+    });
+    if (d.shelf_top) this._shelfTop(model, ctx, d, legs, weld, mat_s, mat_c, fin);
+    if (d.panel) this._panel(model, ctx, d, mat_c, fin);
+  }
+
+  _shelfTop(model, ctx, d, legs, weld, mat_s, mat_c, fin) {
+    const V = model.params.values;
+    const { a, c, alt } = d, L = V.LONGITUD, W = V.ANCHURA;
+    const e = d.est_e, D = d.est_D, zs = d.est_z, ts = d.est_t, fix = d.fix_est;
+    model.addSub("ALT", "Estante superior", { explode: [0, -0.6 * D, 120], step: 5 });
+    const holeRn = C.component("TUERCA_REMACHABLE_M6").hole_d;
+    const yFt = W - c - D, zTop = zs - ts, zc = zTop - alt.H / 2;
+    const hz = (edge) => fix.z_ref - fix.h[edge] - zc;
+    ctx.feature("F15", "Bastidor del estante superior", () => {
+      ctx.uses("PERFIL_ALTILLO", "ALTURA_ESTANTE", "PROFUNDIDAD_ESTANTE", "ESP_EST", "HOLGURA_EST", "N_TRAVESANOS_ESTANTE", "PASO_FIJACIONES", "ALA_ESTANTE", "MATERIAL_ESTRUCTURAL");
+      const yF = yFt + e + alt.B / 2, x0 = c + e, x1 = L - c - e;
+      let holes = fix.s.y0.map((s) => ["-x", pyRound(c + s - x0, 3), pyRound(hz("y0"), 3), holeRn]);
+      const pF = profilePart("larguero_est", `Larguero delantero de estante ${alt.code}`, alt.code, x1 - x0, mat_s, fin, holes);
+      let p0 = [x0, yF, zc], p1 = [x1, yF, zc];
+      model.add("EST.EST_LAR.D", "Larguero delantero del estante", pF, axisFrame(p0, p1, [0, 0, 1]), "EST", { axis: [p0, p1], up: [0, 0, 1], structural: true });
+      const yB = W - c - e - alt.B / 2, xb0 = L - c - a, xb1 = c + a;
+      holes = fix.s.y1.map((s) => ["-x", pyRound(xb0 - (c + s), 3), pyRound(hz("y1"), 3), holeRn]);
+      const pB = profilePart("larguero_est", `Larguero trasero de estante ${alt.code}`, alt.code, xb0 - xb1, mat_s, fin, holes);
+      p0 = [xb0, yB, zc]; p1 = [xb1, yB, zc];
+      model.add("EST.EST_LAR.T", "Larguero trasero del estante", pB, axisFrame(p0, p1, [0, 0, 1]), "EST", { axis: [p0, p1], up: [0, 0, 1], structural: true });
+      weld("J.EST.EST_LAR.T.0", "EST.EST_LAR.T", 0, legs.TD, alt, "Larguero trasero de estante a montante");
+      weld("J.EST.EST_LAR.T.1", "EST.EST_LAR.T", 1, legs.TI, alt, "Larguero trasero de estante a montante");
+      const ya0 = W - c - a, ya1 = yF + alt.B / 2;
+      const arms = [];
+      for (const [k, nm, x, face, edge, leg] of [["I", "izquierdo", c + e + alt.B / 2, "-x", "x0", "TI"], ["D", "derecho", L - c - e - alt.B / 2, "+x", "x1", "TD"]]) {
+        const hh = fix.s[edge].map((s) => [face, pyRound(ya0 - (yFt + s), 3), pyRound(hz(edge), 3), holeRn]);
+        const pA = profilePart("brazo_est", `Brazo ${nm} de estante ${alt.code}`, alt.code, ya0 - ya1, mat_s, fin, hh);
+        const iid = `EST.EST_BRZ.${k}`;
+        const q0 = [x, ya0, zc], q1 = [x, ya1, zc];
+        model.add(iid, `Brazo ${nm} del estante`, pA, axisFrame(q0, q1, [0, 0, 1]), "EST", { axis: [q0, q1], up: [0, 0, 1], structural: true });
+        weld(`J.${iid}.0`, iid, 0, legs[leg], alt, "Brazo de estante a montante");
+        weld(`J.${iid}.1`, iid, 1, "EST.EST_LAR.D", alt, "Brazo de estante a larguero delantero");
+        arms.push(iid);
+      }
+      const [xa0, xa1] = d.est_xa, n_int = d.est_n_int;
+      const xs = range(n_int).map((i) => xa0 + ((i + 1) * (xa1 - xa0)) / (n_int + 1));
+      const ints = [];
+      if (n_int) {
+        const yi0 = yF + alt.B / 2, yi1 = yB - alt.B / 2;
+        const pI = profilePart("travesano_int_est", `Travesaño intermedio de estante ${alt.code}`, alt.code, yi1 - yi0, mat_s, fin);
+        xs.forEach((x, n0) => {
+          const iid = `EST.EST_TRI.${pad2(n0 + 1)}`;
+          const q0 = [x, yi0, zc], q1 = [x, yi1, zc];
+          model.add(iid, `Travesaño intermedio del estante ${n0 + 1}`, pI, axisFrame(q0, q1, [0, 0, 1]), "EST", { axis: [q0, q1], up: [0, 0, 1], structural: true });
+          weld(`J.${iid}.0`, iid, 0, "EST.EST_LAR.D", alt, "Travesaño intermedio de estante a larguero");
+          weld(`J.${iid}.1`, iid, 1, "EST.EST_LAR.T", alt, "Travesaño intermedio de estante a larguero");
+          ints.push(iid);
+        });
+      }
+      model.structure.levels = model.structure.levels ?? {};
+      model.structure.levels.ALTO = { long: ["EST.EST_LAR.D", "EST.EST_LAR.T"], end: arms, int: ints, grid_x: [xa0, ...xs, xa1], grid_y: [yF, yB], z: zTop };
+    });
+    ctx.feature("F35", "Estante superior de chapa plegada", () => {
+      ctx.uses("LONGITUD", "PROFUNDIDAD_ESTANTE", "ALTURA_ESTANTE", "ESP_EST", "ALA_ESTANTE", "MATERIAL_CHAPA", "PERFIL_PATA", "HOLGURA_ESCOTADURA", "PERFIL_ALTILLO", "ACABADO");
+      const tray = sheetPart("estante", `Estante superior chapa ${g(ts)} mm`, d.est_spec, mat_c, fin);
+      model.add("ALT.BANDEJA", "Estante superior", tray, translation(c, yFt, zs), "ALT");
+      fasteners(model, fix, "ALT", null, "ALT.BANDEJA");
+    });
+  }
+
+  _panel(model, ctx, d, mat_c, fin) {
+    const V = model.params.values;
+    const { a, c } = d, L = V.LONGITUD, spec = d.panel_spec;
+    model.addSub("PAN", "Panel portaherramientas", { explode: [0, -220, 0], step: 6 });
+    ctx.feature("F36", "Panel perforado portaherramientas", () => {
+      ctx.uses("PANEL_HERRAMIENTAS", "ESPESOR_PANEL", "LONGITUD", "ALTURA", "ALTURA_ESTANTE", "ALTURA_TOTAL", "MATERIAL_CHAPA", "PERFIL_PATA", "ACABADO");
+      const z0 = d.panel_z[0], yF = d.panel_y;
+      const T = [[1, 0, 0, c], [0, 0, -1, yF], [0, 1, 0, z0], [0, 0, 0, 1]];
+      const part = sheetPart("panel", `Panel perforado chapa ${g(spec.t)} mm`, spec, mat_c, fin);
+      model.add("PAN.PANEL", "Panel portaherramientas", part, T, "PAN");
+      const tp = d.panel_t, gp = d.panel_gap, wall = d.leg.t;
+      const sel_rn = C.selectRivetNut(wall);
+      const [code_rn, rnd] = sel_rn ?? ["TUERCA_REMACHABLE_M6", C.component("TUERCA_REMACHABLE_M6")];
+      const sel_sc = C.selectScrew(tp + gp, tp + gp + rnd.body_l);
+      const code_sc = sel_sc ? sel_sc[0] : "TORNILLO_ISO7380_M6x12";
+      const nrm = [0, -1, 0];
+      let n = 0;
+      for (const x of [c + a / 2, L - c - a / 2]) for (const z of d.panel_fix_z) {
+        n += 1;
+        const pf = [x, yF, z], pr = sub(pf, scale(nrm, tp + gp));
+        const rid = `PAN.TREM.${pad2(n)}`, sid = `PAN.TORN.${pad2(n)}`;
+        model.add(rid, `Tuerca remachable ${n}`, standardPart("tuerca_remachable", code_rn), frameZ(pr, nrm), "PAN", { tags: { explode_extra: scale(nrm, 30) } });
+        model.add(sid, `Tornillo ${n}`, standardPart("tornillo", code_sc), frameZ(pf, nrm), "PAN", { tags: { explode_extra: scale(nrm, 80) } });
+        model.joint({ id: `J.${sid}`, kind: "atornillada", members: ["PAN.PANEL", rid], location: pf,
+          description: `Tornillo ${C.component(code_sc).thread} en tuerca remachable`, fasteners: [sid, rid],
+          data: { t_sheet: tp, gap: gp, wall, screw: code_sc, rivet: code_rn, rivet_found: sel_rn != null, screw_found: sel_sc != null } });
+      }
+      const pm = part.mass;
+      const pts = [];
+      for (const mid of ["EST.PATA.TI", "EST.PATA.TD"]) for (const z of d.panel_fix_z) pts.push([mid, z]);
+      model.structure.attached_masses = [...(model.structure.attached_masses ?? []), ...pts.map(([mid, z]) => ({ member: mid,
+        point: [model.instance(mid).axis[0][0], model.instance(mid).axis[0][1], z], mass_kg: pm / pts.length, label: "Panel portaherramientas" }))];
+    });
+  }
+
+  _structure(model, d, legs) {
+    const st = super._structure(model, d, legs);
+    if (d.shelf_top) {
+      const V = model.params.values, notch = d.est_notch;
+      st.surfaces.push({ id: "estante", label: "Estante superior", level: "ALTO", load_param: "CARGA_ESTANTE", sheet_instance: "ALT.BANDEJA",
+        area_mm2: (V.LONGITUD - 2 * d.c) * d.est_D - 2 * notch * notch, count_param: "NUMERO_TRAVESANOS_ESTANTE" });
+    }
+    st.attached_masses = model.structure.attached_masses ?? [];
+    st.product_word = "puesto";
+    st.assembly_texts = {
+      ALT: "Colocar el estante superior sobre su bastidor, con las escotaduras traseras alrededor de los montantes, y fijarlo con tornillos ISO 7380 M6 (8 N·m).",
+      PAN: "Presentar el panel perforado contra la cara delantera de los montantes y atornillarlo a las tuercas remachables M6 (8 N·m), de abajo arriba." };
+    return st;
+  }
+
+  _extraDims(model, d) {
+    const V = model.params.values;
+    const levels = [];
+    if (d.shelf) levels.push(["ALTURA_BALDA", "BAL.BANDEJA"]);
+    levels.push(["ALTURA_ENCIMERA", "ENC.BANDEJA"]);
+    if (d.shelf_top) levels.push(["ALTURA_ESTANTE", "ALT.BANDEJA"]);
+    const zOf = { ALTURA_BALDA: d.z_shelf, ALTURA_ENCIMERA: V.ALTURA, ALTURA_ESTANTE: d.est_z };
+    const zs = [0.0, ...levels.map(([n]) => zOf[n])];
+    Object.assign(model.dims, { ALTURA_ENCIMERA: V.ALTURA,
+      ALTURA_TOTAL: d.z_top_alt,
+      envelope: { ids: ["ENC.BANDEJA", "EST.PATA.TI", "EST.PATA.TD"], dx: V.LONGITUD, dy: V.ANCHURA, zmax: d.z_top_alt, names: ["LONGITUD", "ANCHURA"] },
+      levels,
+      drawing_expected: Object.fromEntries(levels.map((_, k) => [`DIST_NIVEL_${k + 1}`, zs[k + 1] - zs[k]])),
+      load_text: `Cargas de proyecto: encimera ${V.CARGA_TOTAL ? pyStr(V.CARGA_TOTAL) : "NO DEFINIDA"} kg` + (d.shelf ? `, balda ${V.CARGA_BALDA ? pyStr(V.CARGA_BALDA) : "NO DEFINIDA"} kg` : "")
+        + (d.shelf_top ? `, estante superior ${V.CARGA_ESTANTE ? pyStr(V.CARGA_ESTANTE) : "NO DEFINIDA"} kg` : ""),
+    });
+  }
+}
+
+// ============================================================================ carro de taller (port de carro_taller.py)
+class CarroTaller extends MesaIndustrial {
+  constructor(id) { super(id); Object.assign(this, { support_param: "RUEDA", support_category: "ruedas_espiga", support_group: ["RUE", "Ruedas"] }); }
+  paramForRole(role) {
+    if (role === "montante") return "PERFIL_PATA";
+    if (role === "asa") return "PERFIL_ASA";
+    return super.paramForRole(role);
+  }
+  _legUses() { return ["ALTURA_ASA"]; }
+  _legDef(corner, d, leg) { return corner === "DI" || corner === "TI" ? ["montante", "Montante del asa", d.z_asa, []] : ["pata", "Pata", d.z_tf, []]; }
+  _supportPart(corner, V) {
+    const code = V.RUEDA;
+    return corner === "DI" || corner === "TI" ? [standardPart("rueda", `${code}_FRENO`), "Rueda con freno"] : [standardPart("rueda", code), "Rueda giratoria"];
+  }
+  _topNotch(ctx, d) { const n = d.c + d.a + ctx.get("HOLGURA_ESCOTADURA"); return [[n, n], ["x0y0", "x0y1"]]; }
+  _derive(ctx, model) {
+    const d = super._derive(ctx, model);
+    ctx.feature("F06", "Asa de empuje", () => {
+      const H = ctx.get("ALTURA");
+      const asa = C.profile(ctx.get("PERFIL_ASA"));
+      const za = ctx.derive("COTA_ASA", (p) => p.get("ALTURA_ASA"), "mm", "Cota superior del asa");
+      ctx.derive("LONGITUD_MONTANTE_ASA", (p) => p.get("ALTURA_ASA") - p.get("COTA_INICIO_PATA"), "mm", "Longitud de corte de los montantes del asa");
+      Object.assign(d, { asa, z_asa: za });
+      if (za < H + 80) model.note("error", "GEO-ASA-BAJA", `El asa (${g(za)} mm) debe quedar al menos 80 mm por encima de la encimera (${g(H)} mm) para poder agarrarla.`);
+      if (asa.B > d.a) model.note("error", "DFM-ASA-ANCHO", `El perfil del asa ${asa.code} es más ancho que el montante.`);
+      ctx.setDerived("DIAMETRO_RUEDA", C.component(ctx.get("RUEDA")).wheel_d, "mm", "Diámetro de rueda", ["RUEDA"]);
+    });
+    return d;
+  }
+  _extras(model, ctx, d, legs, corners) {
+    const V = model.params.values;
+    const { asa, a, c } = d, W = V.ANCHURA;
+    const weld = makeWelder(model);
+    ctx.feature("F16", "Asa de empuje soldada", () => {
+      ctx.uses("PERFIL_ASA", "ALTURA_ASA", "ANCHURA", "RETRANQUEO", "PERFIL_PATA", "MATERIAL_ESTRUCTURAL", "ACABADO");
+      const x = c + a / 2, zc = d.z_asa - asa.H / 2;
+      const p0 = [x, c + a, zc], p1 = [x, W - c - a, zc];
+      const part = profilePart("asa", `Asa de empuje ${asa.code}`, asa.code, W - 2 * c - 2 * a, V.MATERIAL_ESTRUCTURAL, V.ACABADO);
+      model.add("EST.ASA", "Asa de empuje", part, axisFrame(p0, p1, [0, 0, 1]), "EST", { axis: [p0, p1], up: [0, 0, 1], structural: true });
+      weld("J.EST.ASA.0", "EST.ASA", 0, legs.DI, asa, "Asa a montante");
+      weld("J.EST.ASA.1", "EST.ASA", 1, legs.TI, asa, "Asa a montante");
+    });
+  }
+  _structure(model, d, legs) {
+    const st = super._structure(model, d, legs);
+    st.product_word = "carro";
+    st.assembly_texts = {
+      RUE: "Roscar las ruedas de espiga en las tuercas soldadas de las placas base hasta el tope y bloquearlas con su contratuerca. Las ruedas con freno van en el extremo del asa.",
+      BAL: "Colocar la balda sobre el bastidor inferior, con las escotaduras alrededor de las patas, y fijarla con tornillos ISO 7380 M6 (8 N·m).",
+      ENC: "Colocar la encimera sobre el bastidor superior, con las escotaduras alrededor de los montantes del asa, y fijarla con tornillos ISO 7380 M6 (8 N·m)." };
+    return st;
+  }
+  _extraDims(model, d) {
+    const V = model.params.values;
+    const levels = [...(d.shelf ? [["ALTURA_BALDA", "BAL.BANDEJA"]] : []), ["ALTURA_ENCIMERA", "ENC.BANDEJA"]];
+    const zs = [0.0, ...(d.shelf ? [d.z_shelf] : []), V.ALTURA];
+    Object.assign(model.dims, { ALTURA_ASA: d.z_asa, ALTURA_ENCIMERA: V.ALTURA,
+      envelope: { ids: ["ENC.BANDEJA", "EST.PATA.DI", "EST.PATA.TI"], dx: V.LONGITUD, dy: V.ANCHURA, zmax: d.z_asa, names: ["LONGITUD", "ANCHURA"] },
+      levels, drawing_expected: Object.fromEntries(levels.map((_, k) => [`DIST_NIVEL_${k + 1}`, zs[k + 1] - zs[k]])) });
+  }
+}
+
+export const REGISTRY = { mesa_industrial: new MesaIndustrial(), estanteria: new Estanteria(), puesto_trabajo: new PuestoTrabajo("puesto_trabajo"),
+  carro_taller: new CarroTaller("carro_taller") };
 export function family(fid) {
   const f = REGISTRY[fid];
   if (!f) {

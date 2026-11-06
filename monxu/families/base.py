@@ -52,7 +52,7 @@ class ProductFamily(ABC):
         return []
 
     def describe(self) -> dict[str, Any]:
-        return {"id": self.id, "name": self.name, "category": self.category, "description": self.description,
+        return {"id": self.id, "name": self.name, "prefix": self.prefix, "category": self.category, "description": self.description,
                 "status": self.status, "configurations": self.configurations,
                 "groups": [{"id": g, "label": lbl} for g, lbl in GROUPS],
                 "params": [s.to_dict() for s in self.param_specs()],

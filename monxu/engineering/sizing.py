@@ -62,7 +62,7 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
                 alternatives.append({"t": t, "n": n, "vano": round(a, 1), "masa_kg": round(sheet + cross, 2),
                                      "sigma": round(ru["sigma"], 1), "w": round(rs["w"], 2)})
                 break
-    label = {"encimera": "encimera", "balda": "balda inferior"}.get(surface, f"bandeja ({surface})")
+    label = {"encimera": "encimera", "balda": "balda inferior", "estante": "estante superior"}.get(surface, f"bandeja ({surface})")
     if not alternatives:
         fixed = [p for p, a in ((t_param, auto_t), (n_param, auto_n)) if not a]
         notes.append({"level": "error", "code": code,
@@ -114,10 +114,11 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
                       "message": "Sin carga vertical de trabajo definida: espesores y separación de apoyos según "
                                  "reglas constructivas; los perfiles sólo se comprueban frente al empuje horizontal. "
                                  "La resistencia a cargas verticales queda PENDIENTE de verificación."})
-    foot_auto = v.get("PIE_NIVELADOR") == AUTO
+    sp = getattr(family, "support_param", "PIE_NIVELADOR")
+    foot_auto = v.get(sp) == AUTO
     if foot_auto:
-        v["PIE_NIVELADOR"] = defaults.get("PIE_NIVELADOR", "PIE_NIV_M12_D60")
-        ps.sources["PIE_NIVELADOR"] = "regla_diseno"
+        v[sp] = defaults.get(sp, "PIE_NIV_M12_D60")
+        ps.sources[sp] = "regla_diseno"
     targets = family.plate_targets(v)
     sized = {t["t_param"] for t in targets}
     for k in list(v):     # espesores 'auto' que no se dimensionan por placa: valor constructivo
@@ -194,9 +195,9 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
             ps.values[k] = defaults[k]
     if foot_auto and have_load:
         for _ in range(3):                   # el pie cambia la longitud de pata: iterar hasta converger
-            before = ps.values["PIE_NIVELADOR"]
+            before = ps.values[sp]
             _select_feet(family, ps, notes)
-            if ps.values["PIE_NIVELADOR"] == before or not run_profiles:
+            if ps.values[sp] == before or not run_profiles:
                 break
             notes[:] = [n for n in notes if n.get("code") not in ("DIM-PERFILES", "DIM-PIES")]
             size_profiles()
@@ -211,20 +212,23 @@ def _select_feet(family, ps: ParameterSet, notes: list) -> None:
     if not rz:
         return
     need = max(rz) / G_ACC
-    feet = sorted((c for c in catalog.components().items() if c[1]["category"] == "patas"),
+    sp = getattr(family, "support_param", "PIE_NIVELADOR")
+    cat = getattr(family, "support_category", "patas")
+    word = "Rueda" if cat.startswith("ruedas") else "Pie nivelador"
+    feet = sorted((c for c in catalog.components().items() if c[1]["category"] == cat and not c[1].get("brake")),
                   key=lambda kv: kv[1]["rated_load_kg"])
     leg = catalog.profile(ps.values[family.leg_param])
     for code, c in feet:
         nut = catalog.component(f"TUERCA_SOLDAR_{c['thread']}")
         fits = nut["s"] / 0.8660254 <= leg.B - 2 * leg.t - 1
         if c["rated_load_kg"] >= need and fits:
-            ps.values["PIE_NIVELADOR"] = code
-            ps.sources["PIE_NIVELADOR"] = "calculo"
+            ps.values[sp] = code
+            ps.sources[sp] = "calculo"
             notes.append({"level": "propuesta", "code": "DIM-PIES",
-                          "message": f"Pie nivelador seleccionado por cálculo: {c['name']} (capacidad nominal de catálogo "
+                          "message": f"{word} seleccionado por cálculo: {c['name']} (capacidad nominal de catálogo "
                                      f"{c['rated_load_kg']} kg ≥ reacción de servicio {need:.0f} kg por apoyo). Capacidad "
                                      "a confirmar con la ficha del proveedor."})
             return
     notes.append({"level": "advertencia", "code": "DIM-PIES",
-                  "message": f"Ningún pie nivelador del catálogo admite {need:.0f} kg por apoyo con la pata/montante "
-                             f"{leg.code}: se mantiene {ps.values['PIE_NIVELADOR']} y la comprobación no se cumplirá."})
+                  "message": f"Ningún {word.lower()} del catálogo admite {need:.0f} kg por apoyo con la pata/montante "
+                             f"{leg.code}: se mantiene {ps.values[sp]} y la comprobación no se cumplirá."})

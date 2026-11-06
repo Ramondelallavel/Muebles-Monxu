@@ -59,7 +59,7 @@ export class StructuralModel {
       const x = d.map((v) => v / Lm);
       const set = new Set([0.0, pyRound(Lm, 3)]);
       for (const q of [p0, p1, ...extra[i.id]]) set.add(pyRound(vdot(vsub(q, p0), x), 3));
-      const pts = [...set].sort((a, b) => a - b).filter((s) => s >= -1e-6 && s <= Lm + 1e-6);
+      const pts = [...set].sort((a, b) => a - b).filter((s) => s >= -1e-3 && s <= Lm + 1e-3);   // puntos redondeados a 0,001 mm
       const fine = [];
       for (let k = 0; k < pts.length - 1; k++) {
         const a = pts[k], b = pts[k + 1];
@@ -162,7 +162,17 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   const fr = sm.frame;
   const levels = st.levels ?? {};
   const cases = [];
-  const Gm = sm.selfWeight("G");
+  let Gm = sm.selfWeight("G");
+  // masas no estructurales colgadas de barras (p. ej. un panel atornillado a los montantes)
+  for (const am of st.attached_masses ?? []) {
+    const chain = sm.chains[am.member];
+    if (!chain) continue;
+    let best = chain[0], bd = Infinity;
+    for (const c of chain) { const q = fr.nodes[c[1]], dd = Math.hypot(q[0] - am.point[0], q[1] - am.point[1], q[2] - am.point[2]); if (dd < bd) { bd = dd; best = c; } }
+    const P = am.mass_kg * G_ACC;
+    fr.addNodalLoad("G", best[1], [0, 0, -P]);
+    Gm += P;
+  }
   let gSheets = 0.0;
   const surfInfo = [];
   for (const surf of st.surfaces ?? []) {
@@ -311,14 +321,15 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   if (sups.length) {
     const comp = C.component(sups[0].component);
     const cap = comp.rated_load_kg * G_ACC;
+    const supWord = comp.category.startsWith("ruedas") ? "Ruedas" : "Pies niveladores";
     if (sls["ELS-1"]) {
       const rmax = Math.max(...reactions.filter((r) => r.combination === "ELS-1").map((r) => r.Rz_N));
-      checks.push(check("A.PIES", "apoyos", "Pies niveladores", `Reacción máxima de servicio frente a la capacidad nominal de ${comp.name}`,
+      checks.push(check("A.PIES", "apoyos", supWord, `Reacción máxima de servicio frente a la capacidad nominal de ${comp.name}`,
         "Dato de catálogo genérico — confirmar con la ficha técnica del proveedor", pyRound(rmax, 1), pyRound(cap, 1), "N", pyRound(rmax / cap, 4),
         status(rmax / cap), "ELS-1", { fuente_capacidad: comp.rated_load_source ?? null }));
       if (comp.rated_load_source === "catalogo_generico") hyp.push(`Capacidad de ${comp.name}: ${comp.rated_load_kg} kg (catálogo genérico de referencia, `
         + "debe confirmarse con la ficha técnica del proveedor).");
-    } else checks.push(check("A.PIES", "apoyos", "Pies niveladores", "Capacidad de los pies niveladores", "—", null, cap, "N", null, PENDING, "", {}));
+    } else checks.push(check("A.PIES", "apoyos", supWord, `Capacidad de los ${supWord.toLowerCase()}`, "—", null, cap, "N", null, PENDING, "", {}));
   }
   // ---------------------------------------------------------------- placas
   const dl = crit.deflection_limits.panel_span_ratio;
