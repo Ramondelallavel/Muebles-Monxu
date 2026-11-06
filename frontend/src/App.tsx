@@ -18,7 +18,7 @@ function useTheme() {
 }
 const tick = () => new Promise((r) => setTimeout(r, 30));
 import Viewer, { type ViewName } from "./Viewer";
-import { AlertsPanel, BomPanel, CalcPanel, ChatPanel, FabPanel, FeaturesPanel, ParamForm, PropsPanel, TreePanel } from "./panels";
+import { AlertsPanel, BomPanel, CalcPanel, ChatPanel, CostPanel, FabPanel, FeaturesPanel, ParamForm, PropsPanel, TreePanel } from "./panels";
 
 export default function App() {
   const [code, setCode] = useState<string | null>(() => (IS_LOCAL ? null : new URLSearchParams(location.search).get("p")));
@@ -102,7 +102,7 @@ const STEPS = [
   { id: "materiales", label: "4 · Materiales" }, { id: "construccion", label: "5 · Construcción" },
   { id: "accesorios", label: "6 · Accesorios" }, { id: "cargas", label: "7 · Cargas y uso" }, { id: "generar", label: "8 · Generación" },
 ];
-const BOTTOM = ["Alertas y validación", "Cálculo", "BOM", "Fabricación", "Operaciones", "Documentos", "Historial"];
+const BOTTOM = ["Alertas y validación", "Cálculo", "BOM", "Fabricación", "Presupuesto", "Operaciones", "Documentos", "Historial"];
 
 function Workspace({ code, onBack }: { code: string; onBack: () => void }) {
   const [project, setProject] = useState<Project | null>(null);
@@ -185,6 +185,7 @@ function Workspace({ code, onBack }: { code: string; onBack: () => void }) {
               {design && tab === "Cálculo" && <CalcPanel eng={design.engineering} />}
               {design && tab === "BOM" && <BomPanel bom={design.bom} />}
               {design && tab === "Fabricación" && <FabPanel plan={design.manufacturing} dfm={design.dfm} />}
+              {design && tab === "Presupuesto" && <CostPanel cost={design.cost} />}
               {design && tab === "Operaciones" && <FeaturesPanel design={design} />}
               {tab === "Documentos" && <DocsPanel project={project} reload={load} design={design} stale={stale} />}
               {tab === "Historial" && <HistoryPanel code={code} updated={project.updated} />}

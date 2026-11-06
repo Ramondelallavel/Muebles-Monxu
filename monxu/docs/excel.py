@@ -52,7 +52,7 @@ def _table(ws, r0: int, headers: list[str], rows: list[list[Any]], name: str, wi
 
 
 def export_excel(path: Path, info: dict[str, Any], bom: dict[str, Any], plan: dict[str, Any],
-                 eng: dict[str, Any], qa: dict[str, Any] | None = None) -> Path:
+                 eng: dict[str, Any], qa: dict[str, Any] | None = None, cost: dict[str, Any] | None = None) -> Path:
     wb = Workbook()
     # ------------------------------------------------------------------ BOM
     ws = wb.active
@@ -147,6 +147,8 @@ def export_excel(path: Path, info: dict[str, Any], bom: dict[str, Any], plan: di
     _table(wv, r0, ["Id", "Categoría", "Comprobación", "Referencia", "Comb.", "Valor", "Límite", "Unidad",
                     "Aprovechamiento", "Estado"], rows, "Verificaciones", [26, 12, 70, 34, 8, 10, 10, 8, 14, 14],
            {9: "0.000"})
+    if cost:
+        _cost_sheet(wb, info, cost)
     if qa:
         wq = wb.create_sheet("Control de calidad")
         r0 = _header(wq, info, "CONTROL DE CALIDAD PREVIO A EXPORTACIÓN")
@@ -154,6 +156,43 @@ def export_excel(path: Path, info: dict[str, Any], bom: dict[str, Any], plan: di
         _table(wq, r0, ["Nivel", "Código", "Descripción"], rows, "QA", [16, 26, 120])
     wb.save(path)
     return path
+
+
+def _cost_sheet(wb, info: dict[str, Any], cost: dict[str, Any]) -> None:
+    """Presupuesto estimado con fórmulas: importe = cantidad × precio; subtotales, gastos generales y margen."""
+    wc = wb.create_sheet("Presupuesto")
+    r0 = _header(wc, info, f"PRESUPUESTO ESTIMADO POR UNIDAD (lote de {cost['lot']} ud)")
+    wc.cell(r0 - 1, 1, "Tarifas orientativas " + cost["rates_version"] + ": " + cost["note"]).font = Font(italic=True)
+    rows = []
+    for k, ln in enumerate(cost["lines"], start=r0 + 1):
+        rows.append([ln["group"], ln["concept"], ln["qty"], ln["unit"], ln["unit_eur"], f"=C{k}*E{k}"])
+    _, last = _table(wc, r0, ["Partida", "Concepto", "Cantidad", "Unidad", "Precio unitario (€)", "Importe (€)"],
+                     rows, "Presupuesto", [16, 80, 12, 10, 18, 14], {3: "0.000", 5: "0.0000", 6: "0.00"})
+    r = last + 2
+    for g in cost["groups"]:
+        wc.cell(r, 2, g).font = Font(bold=True)
+        wc.cell(r, 6, f'=SUMIF(A{r0 + 1}:A{last},"{g}",F{r0 + 1}:F{last})').number_format = "0.00"
+        r += 1
+    first_g = last + 2
+    wc.cell(r, 2, "Coste directo").font = Font(bold=True)
+    wc.cell(r, 6, f"=SUM(F{first_g}:F{r - 1})").number_format = "0.00"
+    wc.cell(r + 1, 2, f"Gastos generales ({cost['overhead_rate'] * 100:g} %)")
+    wc.cell(r + 1, 5, cost["overhead_rate"])
+    wc.cell(r + 1, 6, f"=F{r}*E{r + 1}").number_format = "0.00"
+    wc.cell(r + 2, 2, "Coste total").font = Font(bold=True)
+    wc.cell(r + 2, 6, f"=F{r}+F{r + 1}").number_format = "0.00"
+    wc.cell(r + 3, 2, f"Margen ({cost['margin_rate'] * 100:g} %)")
+    wc.cell(r + 3, 5, cost["margin_rate"])
+    wc.cell(r + 3, 6, f"=F{r + 2}*E{r + 3}").number_format = "0.00"
+    wc.cell(r + 4, 2, "Precio de venta estimado").font = Font(bold=True)
+    wc.cell(r + 4, 6, f"=F{r + 2}+F{r + 3}").number_format = "0.00"
+    k = r + 6
+    wc.cell(k, 2, "COSTE UNITARIO SEGÚN LOTE").font = Font(bold=True)
+    for c, h in enumerate(["Lote (ud)", "Coste directo (€)", "Coste total (€)", "Precio (€)"], start=2):
+        wc.cell(k + 1, c, h).font = Font(bold=True)
+    for n, b in enumerate(cost.get("by_lot", []), start=k + 2):
+        for c, v in enumerate([b["lot"], b["direct"], b["cost"], b["price"]], start=2):
+            wc.cell(n, c, v).number_format = "0" if c == 2 else "0.00"
 
 
 def verify_excel(path: Path, bom: dict[str, Any]) -> dict[str, Any]:

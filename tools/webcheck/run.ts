@@ -15,6 +15,8 @@ for (const c of cases) {
       derived: Object.fromEntries(summary.parameters.filter((p) => p.derived).map((p) => [p.name, p.value])),
       n_instances: model.instances.length, n_parts: Object.keys(model.parts).length, mass: summary.mass_kg,
       parts: Object.fromEntries(Object.values(model.parts).map((p) => [p.ref, { key: p.key, mass: p.mass, vol_mesh: partGeometry(p).volume, vol: p.volume }])),
+      cost: { direct: summary.cost.direct, cost: summary.cost.cost, price: summary.cost.price, by_lot: summary.cost.by_lot.map((b) => [b.lot, b.price]),
+        lines: summary.cost.lines.map((l) => [l.group, l.concept, l.eur]) },
       status: e.status, fem: e.fem, checks: Object.fromEntries(e.checks.map((k) => [k.id, [k.status, k.utilization, k.value]])),
       reactions: e.reactions.filter((r) => r.combination === "ELS-1" || r.combination === "ELU-1"),
       notes: summary.design_notes.map((n) => [n.level, n.code]),

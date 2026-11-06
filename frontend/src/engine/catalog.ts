@@ -6,7 +6,10 @@ import sheetsJ from "../../../monxu/catalog/data/sheets.json";
 import componentsJ from "../../../monxu/catalog/data/components.json";
 import standardsJ from "../../../monxu/catalog/data/standards.json";
 import criteriaJ from "../../../monxu/catalog/data/criteria.json";
+import costsJ from "../../../monxu/catalog/data/costs.json";
 
+/** Tarifas orientativas del presupuesto estimado. */
+export const costRates = () => costsJ;
 export const versions = {
   materials: materialsJ._meta.version, profiles: profilesJ._meta.version, sheets: sheetsJ._meta.version,
   components: componentsJ._meta.version, standards: standardsJ._meta.version, criteria: criteriaJ._meta.version,

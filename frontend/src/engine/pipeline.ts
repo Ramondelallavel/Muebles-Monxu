@@ -6,6 +6,7 @@ import { analyze } from "./analysis";
 import { family } from "./families";
 import { instanceBBox, modelBBox, partGeometry } from "./geometry";
 import { buildBom, dfmCheck, manufacturingPlan } from "./manufacturing";
+import { quotation } from "./costing";
 import { build } from "./sizing";
 import { checkInterferences } from "./interference";
 import { f as fx } from "./util";
@@ -164,6 +165,7 @@ export function regenerate(familyId, values, sources = {}, onProgress = null) {
     interferences: interf,
     qa, status: { geometry_complete: qa.blocking === 0, technically_verified: eng.status === "CUMPLE", structural: eng.status, structural_label: eng.status_label },
     mass_kg: bom.totals.total_mass, timings: Object.fromEntries(Object.entries(t).map(([k, v]) => [k, Math.round(v * 1000) / 1000])),
+    cost: quotation(model, plan),
     catalog_versions: C.versions, engine: "navegador",
   };
   return { model, summary };

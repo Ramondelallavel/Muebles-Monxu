@@ -114,6 +114,17 @@ for J, P in zip(js, py):
                 d.append(f"pieza {ref}: JS={jp and jp['key']} PY={pp['key']}")
             elif not close(jp["mass"], pp["mass"], 2e-3):
                 d.append(f"masa {ref}: JS={jp['mass']:.5f} PY={pp['mass']:.5f}")
+        jc, pc = J.get("cost"), P.get("cost")
+        if not jc or not pc:
+            d.append("presupuesto ausente")
+        else:
+            for k in ("direct", "cost", "price"):
+                if not close(jc[k], pc[k], 2e-4, 0.02):
+                    d.append(f"presupuesto {k}: JS={jc[k]} PY={pc[k]}")
+            if [x[0] for x in jc["by_lot"]] != [x[0] for x in pc["by_lot"]] or any(not close(a[1], b[1], 2e-4, 0.02) for a, b in zip(jc["by_lot"], pc["by_lot"])):
+                d.append(f"presupuesto por lote: JS={jc['by_lot']} PY={pc['by_lot']}")
+            if [x[:2] for x in jc["lines"]] != [x[:2] for x in pc["lines"]]:
+                d.append(f"partidas del presupuesto distintas: JS={[x[1] for x in jc['lines']][:6]} PY={[x[1] for x in pc['lines']][:6]}")
         if not close(J["mass"], P["mass"], 1e-3):
             d.append(f"masa total: JS={J['mass']} PY={P['mass']}")
         for cid, (st, u, val) in P["checks"].items():

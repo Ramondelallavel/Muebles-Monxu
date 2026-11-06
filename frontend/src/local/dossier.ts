@@ -86,6 +86,15 @@ export async function buildDossier(project, rev, model, summary, onProgress = nu
     "Peso unit kg", "Peso total kg", "Proceso", "Norma"], b.rows.map((r) => [r.pos, r.ref, r.description, r.kind_label, r.material, r.finish, r.thickness, r.length, r.width,
     r.qty, r.unit_mass, r.total_mass, r.process, r.standard])));
   add("04_LISTA_MATERIALES/lista_compras.csv", csv(["Tipo", "Descripción", "Cantidad", "Unidad", "Masa kg"], b.purchases.map((p) => [p.type, p.description, p.qty, p.unit, p.mass_kg])));
+  const cost = summary.cost;
+  if (cost) {
+    add("04_LISTA_MATERIALES/presupuesto_estimado.csv", csv(["Partida", "Concepto", "Cantidad", "Unidad", "Precio unitario EUR", "Importe EUR"],
+      [...cost.lines.map((l) => [l.group, l.concept, l.qty, l.unit, l.unit_eur, l.eur]), ["", "Coste directo", "", "", "", cost.direct],
+        ["", `Gastos generales ${cost.overhead_rate * 100} %`, "", "", "", cost.overheads], ["", "Coste total", "", "", "", cost.cost],
+        ["", `Margen ${cost.margin_rate * 100} %`, "", "", "", cost.margin], ["", "Precio de venta estimado", "", "", "", cost.price],
+        ...cost.by_lot.map((x) => ["Lote", `${x.lot} ud`, "", "", "coste/precio por unidad", `${x.cost} / ${x.price}`])]));
+    add("04_LISTA_MATERIALES/presupuesto_estimado.json", JSON.stringify(cost, null, 2));
+  }
   add("04_LISTA_MATERIALES/pesos_materiales.csv", csv(["Pos", "Referencia", "Descripción", "Material", "Cantidad", "Peso unit kg", "Peso total kg"],
     b.rows.map((r) => [r.pos, r.ref, r.description, r.material, r.qty, r.unit_mass, r.total_mass])));
   // ---- 05 optimización

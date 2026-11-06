@@ -1,6 +1,6 @@
 // @ts-nocheck
 // Libro Excel (OOXML) de fabricación generado en el navegador (port de monxu/docs/excel.py):
-// BOM con fórmulas, perfiles, plan de corte, anidado, compras, verificaciones y control de calidad.
+// BOM con fórmulas, perfiles, plan de corte, anidado, compras, verificaciones, presupuesto y control de calidad.
 // Cada fórmula lleva su valor calculado en caché para que el libro se lea correctamente sin recalcular.
 import { zipAsync } from "./docs";
 
@@ -130,6 +130,34 @@ export async function workbook(info, summary) {
   wv.set(r0 - 1, 0, eng.status_label, eng.status === "CUMPLE" ? S.good : S.bad);
   table(wv, r0, ["Id", "Categoría", "Comprobación", "Referencia", "Comb.", "Valor", "Límite", "Unidad", "Aprovechamiento", "Estado"],
     eng.checks.map((c) => [c.id, c.category, c.description, c.standard, c.combination, c.value, c.limit, c.unit, c.utilization, c.status]), [26, 12, 70, 34, 8, 10, 10, 8, 14, 14], { 8: S.n3 });
+  // ---------------------------------------------------------------- presupuesto
+  const cost = summary.cost;
+  if (cost) {
+    const wk = new Sheet("Presupuesto"); sheets.push(wk);
+    r0 = header(wk, info, `PRESUPUESTO ESTIMADO POR UNIDAD (lote de ${cost.lot} ud)`);
+    wk.set(r0 - 1, 0, `Tarifas orientativas ${cost.rates_version}: ${cost.note}`, S.normal);
+    const rows = cost.lines.map((ln, i) => [ln.group, ln.concept, ln.qty, ln.unit, ln.unit_eur, { f: `C${r0 + 2 + i}*E${r0 + 2 + i}`, v: Math.round(ln.qty * ln.unit_eur * 100) / 100 }]);
+    last = table(wk, r0, ["Partida", "Concepto", "Cantidad", "Unidad", "Precio unitario (€)", "Importe (€)"], rows, [16, 80, 12, 10, 18, 14], { 2: S.n3, 4: S.n4, 5: S.n2 });
+    let r = last + 2;
+    const first = r;
+    for (const [gname, v] of Object.entries(cost.groups)) {
+      wk.set(r, 1, gname, S.bold);
+      wk.set(r, 5, { f: `SUMIF(A${r0 + 2}:A${last + 1},"${gname}",F${r0 + 2}:F${last + 1})`, v }, S.n2);
+      r++;
+    }
+    const R1 = r + 1;   // fila de Excel (1-based) del coste directo
+    wk.set(r, 1, "Coste directo", S.bold); wk.set(r, 5, { f: `SUM(F${first + 1}:F${r})`, v: cost.direct }, S.n2);
+    wk.set(r + 1, 1, `Gastos generales (${cost.overhead_rate * 100} %)`, S.normal); wk.set(r + 1, 4, cost.overhead_rate, S.normal);
+    wk.set(r + 1, 5, { f: `F${R1}*E${R1 + 1}`, v: cost.overheads }, S.n2);
+    wk.set(r + 2, 1, "Coste total", S.bold); wk.set(r + 2, 5, { f: `F${R1}+F${R1 + 1}`, v: cost.cost }, S.n2);
+    wk.set(r + 3, 1, `Margen (${cost.margin_rate * 100} %)`, S.normal); wk.set(r + 3, 4, cost.margin_rate, S.normal);
+    wk.set(r + 3, 5, { f: `F${R1 + 2}*E${R1 + 3}`, v: cost.margin }, S.n2);
+    wk.set(r + 4, 1, "Precio de venta estimado", S.bold); wk.set(r + 4, 5, { f: `F${R1 + 2}+F${R1 + 3}`, v: cost.price }, S.n2);
+    const k = r + 6;
+    wk.set(k, 1, "COSTE UNITARIO SEGÚN LOTE", S.bold);
+    ["Lote (ud)", "Coste directo (€)", "Coste total (€)", "Precio (€)"].forEach((h, c) => wk.set(k + 1, 1 + c, h, S.bold));
+    cost.by_lot.forEach((b, n) => [b.lot, b.direct, b.cost, b.price].forEach((v, c) => wk.set(k + 2 + n, 1 + c, v, c ? S.n2 : S.cell)));
+  }
   // ---------------------------------------------------------------- control de calidad
   const wq = new Sheet("Control de calidad"); sheets.push(wq);
   r0 = header(wq, info, "CONTROL DE CALIDAD PREVIO A EXPORTACIÓN");

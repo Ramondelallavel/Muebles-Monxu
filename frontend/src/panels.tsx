@@ -250,6 +250,32 @@ export function BomPanel({ bom }: { bom: Dict }) {
   );
 }
 
+/** Presupuesto estimado: partidas del lote unitario y coste por unidad según el tamaño de lote. */
+export function CostPanel({ cost }: { cost: Dict }) {
+  if (!cost) return <p className="muted">Presupuesto no disponible.</p>;
+  const eur = (v: number) => `${fmt(v, 2)} €`;
+  return (
+    <div>
+      <p className="muted">Tarifas orientativas {cost.rates_version} · material imputado {cost.material_basis === "consumo" ? "por consumo (el sobrante vuelve a almacén)" : "por compra de barras y chapas completas"}.
+        {" "}{cost.note}</p>
+      <div className="cols">
+        <div><h4>Lote de 1 unidad</h4><ul>{Object.entries(cost.groups).map(([k, v]) => <li key={k}>{k}: {eur(v as number)}</li>)}
+          <li><b>Coste directo: {eur(cost.direct)}</b></li><li>Gastos generales ({fmt(cost.overhead_rate * 100, 0)} %): {eur(cost.overheads)}</li>
+          <li><b>Coste total: {eur(cost.cost)}</b> ({fmt(cost.eur_per_kg, 2)} €/kg)</li><li>Margen ({fmt(cost.margin_rate * 100, 0)} %): {eur(cost.margin)}</li>
+          <li><b>Precio de venta estimado: {eur(cost.price)}</b></li></ul></div>
+        <div><h4>Coste por unidad según lote</h4>
+          <table className="grid"><thead><tr><th>Lote</th><th>Coste directo</th><th>Coste total</th><th>Precio</th></tr></thead>
+            <tbody>{cost.by_lot.map((b: Dict) => <tr key={b.lot}><td>{b.lot} ud</td><td>{eur(b.direct)}</td><td>{eur(b.cost)}</td><td>{eur(b.price)}</td></tr>)}</tbody></table>
+          <p className="muted">Horas: soldadura {fmt(cost.hours.soldadura, 2)} h · montaje {fmt(cost.hours.montaje, 2)} h por unidad.</p></div>
+      </div>
+      <div className="scroll-x"><table className="grid"><thead><tr><th>Partida</th><th>Concepto</th><th>Cantidad</th><th>Unidad</th><th>Precio unit.</th><th>Importe</th></tr></thead>
+        <tbody>{cost.lines.map((l: Dict, i: number) => <tr key={i}><td>{l.group}</td><td>{l.concept}</td><td>{fmt(l.qty, 3)}</td><td>{l.unit}</td><td>{fmt(l.unit_eur, 2)}</td><td>{eur(l.eur)}</td></tr>)}
+          <tr className="total"><td colSpan={5}>Coste directo (lote de 1)</td><td>{eur(cost.direct)}</td></tr></tbody></table></div>
+      {cost.unpriced?.length ? <p className="muted">Sin precio de catálogo (se aplica el valor por defecto): {cost.unpriced.join(", ")}</p> : null}
+    </div>
+  );
+}
+
 export function FabPanel({ plan, dfm }: { plan: Dict; dfm: Dict[] }) {
   return (
     <div>

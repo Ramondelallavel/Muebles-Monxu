@@ -2,6 +2,7 @@
 import json
 import sys
 
+from monxu.manufacturing.costing import quotation
 from monxu.engineering.analysis import analyze
 from monxu.families import family
 from monxu.manufacturing.plan import dfm_check, manufacturing_plan
@@ -24,6 +25,9 @@ def run(c):
             "derived": {r["name"]: r["value"] for r in rows if r["derived"]},
             "n_instances": len(m.instances), "n_parts": len(m.parts), "mass": bom["totals"]["total_mass"],
             "parts": {p.ref: {"key": p.key, "mass": p.mass, "vol": p.volume} for p in m.parts.values()},
+            "cost": (lambda q: {"direct": q["direct"], "cost": q["cost"], "price": q["price"],
+                                "by_lot": [[b["lot"], b["price"]] for b in q["by_lot"]],
+                                "lines": [[ln["group"], ln["concept"], ln["eur"]] for ln in q["lines"]]})(quotation(m, plan)),
             "status": eng["status"], "fem": eng["fem"],
             "checks": {k["id"]: [k["status"], k["utilization"], k["value"]] for k in eng["checks"]},
             "reactions": [r for r in eng["reactions"] if r["combination"] in ("ELS-1", "ELU-1")],

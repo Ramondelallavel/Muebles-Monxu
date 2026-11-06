@@ -23,6 +23,7 @@ from .docs import dxf, excel, plans, report
 from .docs.bom import build_bom
 from .engineering.analysis import analyze
 from .families import family
+from .manufacturing.costing import quotation
 from .manufacturing.plan import dfm_check, manufacturing_plan
 from .validation import qa as QA
 
@@ -46,6 +47,7 @@ class Design:
     interferences: dict[str, Any]
     qa: QA.QA
     timings: dict[str, float] = field(default_factory=dict)
+    cost: dict[str, Any] = field(default_factory=dict)
 
     @property
     def geometry_complete(self) -> bool:
@@ -66,7 +68,7 @@ class Design:
             "interferences": self.interferences, "qa": self.qa.result(),
             "status": {"geometry_complete": self.geometry_complete, "technically_verified": self.technically_verified,
                        "structural": self.eng["status"], "structural_label": self.eng["status_label"]},
-            "mass_kg": self.bom["totals"]["total_mass"], "timings": self.timings,
+            "mass_kg": self.bom["totals"]["total_mass"], "timings": self.timings, "cost": self.cost,
             "catalog_versions": catalog.catalog_versions(),
         }
 
@@ -99,8 +101,9 @@ def regenerate(family_id: str, values: dict[str, Any], sources: dict[str, str] |
     interf = check_interferences(model)
     t["interferencias"] = time.perf_counter() - t1
     q = QA.model_checks(model, interf, eng, dfm, bom)
+    cost = quotation(model, plan)
     t["total"] = time.perf_counter() - t0
-    return Design(family_id, model, eng, plan, bom, dfm, interf, q, {k: round(v, 3) for k, v in t.items()})
+    return Design(family_id, model, eng, plan, bom, dfm, interf, q, {k: round(v, 3) for k, v in t.items()}, cost)
 
 
 def _sha(p: Path) -> str:
@@ -197,10 +200,22 @@ def generate_dossier(design: Design, project: dict[str, Any], dest_root: Path,
         q = QA.QA()
         q.items = list(design.qa.items)
         xl = excel.export_excel(dirs["04_LISTA_MATERIALES"] / f"{code}_BOM.xlsx", info, design.bom, design.plan,
-                                design.eng, design.qa.result())
+                                design.eng, design.qa.result(), design.cost)
         files["excel"] = excel.verify_excel(xl, design.bom)
         _csv(dirs["04_LISTA_MATERIALES"] / "lista_compras.csv", ["Tipo", "Descripción", "Cantidad", "Unidad", "Masa kg"],
              [[p["type"], p["description"], p["qty"], p["unit"], p["mass_kg"]] for p in design.bom["purchases"]])
+        c = design.cost
+        if c:
+            _csv(dirs["04_LISTA_MATERIALES"] / "presupuesto_estimado.csv",
+                 ["Partida", "Concepto", "Cantidad", "Unidad", "Precio unitario EUR", "Importe EUR"],
+                 [[ln["group"], ln["concept"], ln["qty"], ln["unit"], ln["unit_eur"], ln["eur"]] for ln in c["lines"]]
+                 + [["", "Coste directo", "", "", "", c["direct"]],
+                    ["", f"Gastos generales {c['overhead_rate'] * 100:g} %", "", "", "", c["overheads"]],
+                    ["", "Coste total", "", "", "", c["cost"]], ["", f"Margen {c['margin_rate'] * 100:g} %", "", "", "", c["margin"]],
+                    ["", "Precio de venta estimado", "", "", "", c["price"]]]
+                 + [["Lote", f"{x['lot']} ud", "", "", "coste/precio por unidad", f"{x['cost']} / {x['price']}"] for x in c["by_lot"]])
+            (dirs["04_LISTA_MATERIALES"] / "presupuesto_estimado.json").write_text(
+                json.dumps(c, indent=2, ensure_ascii=False), encoding="utf-8")
         _csv(dirs["04_LISTA_MATERIALES"] / "pesos_materiales.csv",
              ["Pos", "Referencia", "Descripción", "Material", "Cantidad", "Peso unit kg", "Peso total kg"],
              [[r["pos"], r["ref"], r["description"], r["material"], r["qty"], r["unit_mass"], r["total_mass"]]
