@@ -58,6 +58,7 @@ const serverApi = {
   projects: () => req<Project[]>("GET", "/api/projects"),
   project: (code: string) => req<Project & { assistant_state: Dict }>("GET", `/api/projects/${code}`),
   createProject: (b: Dict) => req<Project>("POST", "/api/projects", b),
+  deleteProject: (code: string) => req<Dict>("DELETE", `/api/projects/${code}`),
   setParams: (code: string, values: Dict, sources?: Dict, replace = false) =>
     req<{ changes: Dict; project: Project }>("PUT", `/api/projects/${code}/params`, { values, sources, replace }),
   design: (code: string) => req<{ design: Dict; viewer: ViewerPayload }>("POST", `/api/projects/${code}/design`),

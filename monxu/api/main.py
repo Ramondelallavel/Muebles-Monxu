@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -34,10 +34,24 @@ _cache_lock = threading.Lock()
 JOBS: dict[str, dict[str, Any]] = {}
 
 
+@app.exception_handler(KeyError)
+async def _not_found(request: Request, exc: KeyError):
+    """Proyecto, revisión, plantilla o familia inexistente: 404 con el motivo (no un error 500)."""
+    msg = exc.args[0] if exc.args else "No encontrado"
+    return JSONResponse(status_code=404, content={"detail": str(msg)})
+
+
+_store_lock = threading.Lock()
+
+
 def store() -> Store:
+    """Almacén único, creado una sola vez aunque lleguen varias peticiones a la vez (antes, dos peticiones
+    simultáneas con la base de datos vacía creaban las tablas dos veces: «table already exists», error 500)."""
     global STORE
     if STORE is None:
-        STORE = Store()
+        with _store_lock:
+            if STORE is None:
+                STORE = Store()
     return STORE
 
 
@@ -218,6 +232,14 @@ def get_project(code: str):
     d["changes"] = [{"timestamp": c.timestamp.isoformat(), "kind": c.kind, "author": c.author, "detail": c.detail}
                     for c in p.changes]
     return d
+
+
+@app.delete("/api/projects/{code}")
+def delete_project(code: str):
+    """Borra el proyecto, sus revisiones, su historial y sus expedientes (irreversible)."""
+    if any(j.get("project") == code and j.get("status") == "running" for j in JOBS.values()):
+        raise HTTPException(409, "Se está generando un expediente de este proyecto: espere a que termine para borrarlo.")
+    return store().delete_project(code)
 
 
 @app.patch("/api/projects/{code}")

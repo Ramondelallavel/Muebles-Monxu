@@ -37,7 +37,25 @@ function Home({ onOpen }: { onOpen: (c: string) => void }) {
   const [client, setClient] = useState("");
   const [err, setErr] = useState("");
   const [store, setStore] = useState("");
-  useEffect(() => { api.library().then(setLib); api.projects().then(setProjects); if (IS_LOCAL) storageLabel().then(setStore); }, []);
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  const [delMsg, setDelMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.library().then(setLib).catch((e) => setErr((e as Error).message));
+    api.projects().then(setProjects).catch((e) => setErr((e as Error).message));
+    if (IS_LOCAL) storageLabel().then(setStore);
+  }, []);
+  const famName: Dict = Object.fromEntries((lib?.families ?? []).map((f) => [f.id, f.name]));
+  async function remove(p: Project) {
+    setBusy(true);
+    try {
+      await api.deleteProject(p.code);
+      setProjects(await api.projects());
+      setDelMsg({ ok: true, text: `Proyecto ${p.code} «${p.name}» borrado.` });
+      setConfirmDel(null);
+    } catch (e) { setDelMsg({ ok: false, text: (e as Error).message }); }
+    finally { setBusy(false); }
+  }
   async function create(family: string, template_id?: string) {
     try {
       const p = await api.createProject({ name: name || "Nuevo proyecto", client, family, template_id, designer: "Ingeniería" });
@@ -77,10 +95,29 @@ function Home({ onOpen }: { onOpen: (c: string) => void }) {
         <section>
           <h2>Proyectos</h2>
           {IS_LOCAL && store && <p className="home-note">Almacenamiento: {store}.</p>}
-          <div className="scroll-x"><table className="grid"><thead><tr><th>Código</th><th>Nombre</th><th>Cliente</th><th>Familia</th><th>Revisión</th><th>Estado</th><th>Actualizado</th></tr></thead>
-            <tbody>{projects.map((p) => (
-              <tr key={p.code} className="link" onClick={() => onOpen(p.code)}><td>{p.code}</td><td>{p.name}</td><td>{p.client}</td><td>{p.family}</td>
-                <td>{p.revisions.at(-1)?.rev ?? "—"}</td><td><span className="chip">{p.status_label}</span></td><td>{p.updated.replace("T", " ")}</td></tr>))}
+          {delMsg && <p className={delMsg.ok ? "good" : "bad"} role="status">{delMsg.text}</p>}
+          <div className="scroll-x"><table className="grid"><thead><tr><th>Código</th><th>Nombre / cliente</th><th>Familia</th><th>Rev.</th><th>Estado</th><th>Actualizado</th><th></th></tr></thead>
+            <tbody>{projects.flatMap((p) => {
+              const nRev = p.revisions.length, nDos = p.revisions.filter((r) => r.dossier).length;
+              const official = ["validado", "preparado_fabricacion", "fabricado"].includes(p.status);
+              const row = (
+                <tr key={p.code} className="link" onClick={() => onOpen(p.code)}><td className="nowrap">{p.code}</td>
+                  <td>{p.name}{p.client && <div className="muted small">{p.client}</div>}</td><td>{famName[p.family] ?? p.family}</td>
+                  <td>{p.revisions.at(-1)?.rev ?? "—"}</td><td><span className="chip">{p.status_label}</span></td>
+                  <td className="nowrap" title={p.updated.replace("T", " ")}>{p.updated.slice(0, 10)}</td>
+                  <td><button className="mini danger" aria-label={`Borrar el proyecto ${p.code}`} disabled={busy}
+                    onClick={(e) => { e.stopPropagation(); setDelMsg(null); setConfirmDel(confirmDel === p.code ? null : p.code); }}>Borrar</button></td></tr>);
+              if (confirmDel !== p.code) return [row];
+              return [row, (
+                <tr key={p.code + "-confirm"} className="confirm-row"><td colSpan={7}>
+                  <b>¿Borrar definitivamente {p.code} «{p.name}»?</b> Se eliminan {nRev ? `sus ${nRev} revisiones` : "sus parámetros"}
+                  {nDos ? (IS_LOCAL ? ", el registro de sus expedientes (los ZIP ya descargados no se tocan)" : ` y sus ${nDos} expedientes guardados en el servidor`) : ""} y el historial de cambios. No se puede deshacer.
+                  {official && <> <b className="bad">El proyecto está {p.status_label.toLowerCase()}: se perderá su registro técnico de validación.</b></>}
+                  <div className="actions">
+                    <button className="danger solid" disabled={busy} onClick={() => remove(p)}>{busy ? "Borrando…" : "Borrar definitivamente"}</button>
+                    <button disabled={busy} onClick={() => setConfirmDel(null)}>Cancelar</button>
+                  </div></td></tr>)];
+            })}
               {projects.length === 0 && <tr><td colSpan={7} className="muted">Sin proyectos todavía. Abra una plantilla o pulse «Nuevo diseño».</td></tr>}
             </tbody></table></div>
         </section>

@@ -23,23 +23,39 @@ function getStore() {
     const [db, user] = await Promise.all([cap("db"), cap("user")]);
     let uid = null;
     try { uid = user ? await user.id() : null; } catch { uid = null; }
-    if (!db || !uid) return { kind: "memoria", list: async () => [...mem.values()], put: async (p) => { mem.set(p.code, p); }, label: "Memoria del navegador (se pierde al cerrar)" };
+    const memSeq = {};
+    if (!db || !uid) return { kind: "memoria", list: async () => [...mem.values()], put: async (p) => { mem.set(p.code, p); }, del: async (code) => { mem.delete(code); },
+      seq: async (year) => memSeq[year] ?? 0, setSeq: async (year, n) => { memSeq[year] = Math.max(memSeq[year] ?? 0, n); }, label: "Memoria del navegador (se pierde al cerrar)" };
     const col = db.collection("data/users/" + uid);
     const cache = new Map();
-    let loaded = false;
+    let loaded = false, seq = {};
     const load = async () => {
       if (loaded) return;
       const t = new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 10000));
       const snap = await Promise.race([col.get(), t]);
-      snap.docs.forEach((d) => { const v = d.data(); if (v?.code) cache.set(v.code, v); });
+      snap.docs.forEach((d) => { const v = d.data(); if (d.id === SEQ_DOC) seq = v?.por_anio ?? {}; else if (v?.code) cache.set(v.code, v); });
       loaded = true;
     };
     return { kind: "db", label: "Base de datos privada del artefacto (sólo usted)", list: async () => { try { await load(); } catch { /* sin conexión: caché */ } return [...cache.values()]; },
-      put: async (p) => { cache.set(p.code, p); await col.doc(p.code).set(JSON.parse(JSON.stringify(p))); } };
+      put: async (p) => { cache.set(p.code, p); await col.doc(p.code).set(JSON.parse(JSON.stringify(p))); },
+      del: async (code) => { await col.doc(code).delete(); cache.delete(code); },
+      // claves «a2026»: nombres de campo no numéricos
+      seq: async (year) => { try { await load(); } catch { /* caché */ } return Number(seq[`a${year}`]) || 0; },
+      setSeq: async (year, n) => { seq = { ...seq, [`a${year}`]: Math.max(Number(seq[`a${year}`]) || 0, n) }; await col.doc(SEQ_DOC).set({ por_anio: seq }); } };
   })();
   return storeP;
 }
 export const storageLabel = async () => (await getStore()).label;
+const SEQ_DOC = "contador";            // último número de proyecto emitido: los códigos no se reutilizan al borrar
+const CODE_RX = /^P-(\d{4})-(\d{4,})$/;
+/** Siguiente código del año: mayor que cualquiera emitido (existente o borrado). */
+async function nextCode() {
+  const st = await getStore(), year = new Date().getFullYear();
+  const used = (await all()).map((p) => CODE_RX.exec(p.code)).filter((m) => m && +m[1] === year).map((m) => +m[2]);
+  const n = Math.max(await st.seq(year), ...used) + 1;
+  await st.setSeq(year, n);
+  return `P-${year}-${String(n).padStart(4, "0")}`;
+}
 
 async function all() { return (await (await getStore()).list()).sort((a, b) => (a.code < b.code ? 1 : -1)); }
 async function get(code) { const p = (await all()).find((x) => x.code === code); if (!p) throw new Error(`Proyecto no encontrado: ${code}`); return JSON.parse(JSON.stringify(p)); }
@@ -90,14 +106,20 @@ export const localApi = {
       sources = Object.fromEntries(Object.keys(t.values).map((k) => [k, "plantilla"]));
     }
     for (const k of Object.keys(b.values ?? {})) sources[k] = "usuario";
-    const year = new Date().getFullYear();
-    const n = (await all()).filter((p) => p.code.startsWith(`P-${year}-`)).length + 1;
-    const p = { code: `P-${year}-${String(n).padStart(4, "0")}`, name: b.name || "Nuevo proyecto", client: b.client ?? "", description: b.description ?? "", family: b.family,
+    const p = { code: await nextCode(), name: b.name || "Nuevo proyecto", client: b.client ?? "", description: b.description ?? "", family: b.family,
       designer: b.designer ?? "", status: "en_configuracion", created: now(), updated: now(), validated_by: null, working_params: values, working_sources: sources,
       assistant_state: {}, revisions: [], changes: [] };
     log(p, "creacion", { values }, b.designer ?? "");
     await put(p);
     return projectDict(p);
+  },
+  /** Borra el proyecto con sus revisiones e historial (irreversible). Los expedientes ya descargados no se tocan. */
+  deleteProject: async (code) => {
+    const p = await get(code);
+    try { await (await getStore()).del(code); }
+    catch (e) { throw new Error(`No se ha podido borrar el proyecto (${e?.code ?? e?.message ?? "error de almacenamiento"}). Vuelva a intentarlo.`); }
+    return { code: p.code, name: p.name, status: p.status, revisions: (p.revisions ?? []).map((r) => r.rev),
+      dossiers: (p.revisions ?? []).filter((r) => r.dossier).length, files_removed: false };
   },
   setParams: async (code, values, sources = null, replace = false, author = "") => {
     const p = await get(code);

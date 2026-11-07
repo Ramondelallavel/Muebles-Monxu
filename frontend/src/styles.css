@@ -52,6 +52,11 @@ button.primary { background: var(--primary); color: var(--primary-ink); border-c
 button.big { padding: 8px 16px; letter-spacing: .03em; }
 button.on { background: var(--brand2); color: var(--primary-ink); border-color: var(--brand2); }
 button.mini { padding: 1px 6px; font-size: 11px; }
+button.danger { color: var(--bad); border-color: var(--bad); }
+button.danger.solid { background: var(--bad); color: #fff; font-weight: 600; }
+td.nowrap { white-space: nowrap; }
+tr.confirm-row td { background: var(--chip-bad); color: var(--ink); }
+tr.confirm-row .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 input, select, textarea { font: inherit; border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; background: var(--field); color: var(--ink); }
 a { color: var(--brand2); cursor: pointer; }
 h2 { font-size: 16px; margin: 0 0 12px; color: var(--brand); text-wrap: balance; }

@@ -69,3 +69,16 @@ def test_control_de_calidad_igual_en_ambos_motores(tmp_path):
         r = regenerate(c["family"], c["values"])
         py = sorted((i["level"], i["code"]) for i in r.qa.result()["items"])
         assert py == sorted(tuple(x) for x in js[c["id"]]["qa"]), c["id"]
+
+
+@pytest.mark.skipif(not shutil.which("node") or not ESBUILD.exists(), reason="requiere node y las dependencias del frontend")
+def test_borrado_de_proyectos_en_el_navegador(tmp_path):
+    """API local: borrar un proyecto lo elimina y el código no se reutiliza (antes: número de proyectos + 1)."""
+    bundle = tmp_path / "projects.mjs"
+    subprocess.run([str(ESBUILD), str(ROOT / "tools/webcheck/projects.ts"), "--bundle", "--platform=node", "--format=esm",
+                    f"--outfile={bundle}", "--log-level=warning"], cwd=ROOT / "frontend", check=True)
+    r = json.loads(subprocess.run(["node", str(bundle)], capture_output=True, text=True, check=True).stdout)
+    a, b, c = r["created"]
+    assert r["deleted"]["code"] == b and sorted(r["after"]) == [a, c]
+    assert r["next"][-4:] == "0004" and r["next2"][-4:] == "0005"
+    assert "no encontrado" in r["get_deleted"] and "no encontrado" in r["delete_again"]

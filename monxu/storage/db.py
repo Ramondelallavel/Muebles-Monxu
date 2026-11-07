@@ -8,11 +8,13 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
+import shutil
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, selectinload, sessionmaker
 
 STATUSES = ["en_configuracion", "en_diseno", "pendiente_validacion", "validado", "preparado_fabricacion", "fabricado",
             "archivado"]
@@ -108,6 +110,16 @@ class Template(Base):
     builtin: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class Counter(Base):
+    """Contadores persistentes: el número de proyecto no se reutiliza aunque se borren proyectos."""
+    __tablename__ = "counters"
+    name: Mapped[str] = mapped_column(String(40), primary_key=True)
+    value: Mapped[int] = mapped_column(Integer, default=0)
+
+
+CODE_RX = re.compile(r"^P-(\d{4})-(\d{4,})$")
+
+
 class CatalogItem(Base):
     __tablename__ = "catalog_items"
     code: Mapped[str] = mapped_column(String(80), primary_key=True)
@@ -149,9 +161,22 @@ class Store:
 
     # ------------------------------------------------------------------ proyectos
     def next_code(self, s: Session) -> str:
+        """Siguiente código del año: mayor que cualquier código emitido (existente o borrado), nunca repetido."""
         year = now().year
-        n = len(s.scalars(select(Project).where(Project.code.like(f"P-{year}-%"))).all()) + 1
+        used = [int(m.group(2)) for c in s.scalars(select(Project.code).where(Project.code.like(f"P-{year}-%")))
+                if (m := CODE_RX.match(c))]
+        ctr = s.get(Counter, f"P-{year}") or Counter(name=f"P-{year}", value=0)
+        n = max([ctr.value, *used]) + 1
+        ctr.value = n
+        s.merge(ctr)
         return f"P-{year}-{n:04d}"
+
+    @staticmethod
+    def _project(s: Session, code: str) -> Project:
+        p = s.scalars(select(Project).where(Project.code == code)).first()
+        if not p:
+            raise KeyError(f"Proyecto no encontrado: {code}")
+        return p
 
     def create_project(self, name: str, family: str, client: str = "", description: str = "", designer: str = "",
                        values: dict | None = None, sources: dict | None = None) -> Project:
@@ -166,19 +191,45 @@ class Store:
 
     def get(self, code: str) -> Project:
         with self.Session() as s:
-            p = s.scalars(select(Project).where(Project.code == code)).first()
-            if not p:
-                raise KeyError(f"Proyecto no encontrado: {code}")
+            p = self._project(s, code)
             p.revisions, p.changes  # carga
             return p
 
+    def delete_project(self, code: str) -> dict[str, Any]:
+        """Borra el proyecto con sus revisiones, documentos, historial y carpeta de expedientes.
+
+        El código no se reutiliza (contador persistente). Sólo se borra la carpeta ``expedientes/<código>``."""
+        if not CODE_RX.match(code):
+            raise KeyError(f"Proyecto no encontrado: {code}")
+        with self.Session() as s:
+            p = self._project(s, code)
+            revs = list(p.revisions)
+            info = {"code": p.code, "name": p.name, "status": p.status, "revisions": [r.rev for r in revs],
+                    "dossiers": sum(1 for r in revs if r.dossier_path)}
+            for r in revs:
+                for doc in list(r.documents):
+                    s.delete(doc)
+                s.delete(r)
+            for c in list(p.changes):
+                s.delete(c)
+            s.delete(p)
+            s.commit()
+        root = self.dossiers.resolve()
+        folder = (root / code).resolve()
+        info["files_removed"] = False
+        if folder.parent == root and folder.name == code and folder.is_dir():
+            shutil.rmtree(folder)
+            info["files_removed"] = True
+        return info
+
     def list_projects(self) -> list[Project]:
         with self.Session() as s:
-            return list(s.scalars(select(Project).order_by(Project.id.desc())))
+            # las revisiones se cargan dentro de la sesión: la lista las necesita (antes: DetachedInstanceError → 500)
+            return list(s.scalars(select(Project).options(selectinload(Project.revisions)).order_by(Project.id.desc())))
 
     def update_project(self, code: str, **fields) -> Project:
         with self.Session() as s:
-            p = s.scalars(select(Project).where(Project.code == code)).one()
+            p = self._project(s, code)
             for k, v in fields.items():
                 if k in ("name", "client", "description", "designer"):
                     setattr(p, k, v)
@@ -188,7 +239,7 @@ class Store:
     def set_params(self, code: str, values: dict, sources: dict | None = None, author: str = "",
                    replace: bool = False) -> dict[str, tuple]:
         with self.Session() as s:
-            p = s.scalars(select(Project).where(Project.code == code)).one()
+            p = self._project(s, code)
             old = dict(p.working_params or {})
             new = dict(values) if replace else {**old, **values}
             changes = {k: (old.get(k), new.get(k)) for k in set(old) | set(new) if old.get(k) != new.get(k)}
@@ -204,13 +255,13 @@ class Store:
 
     def set_assistant_state(self, code: str, state: dict):
         with self.Session() as s:
-            p = s.scalars(select(Project).where(Project.code == code)).one()
+            p = self._project(s, code)
             p.assistant_state = json.loads(json.dumps(state, default=str))
             s.commit()
 
     def log(self, code: str, kind: str, detail: dict, author: str = ""):
         with self.Session() as s:
-            p = s.scalars(select(Project).where(Project.code == code)).one()
+            p = self._project(s, code)
             s.add(ChangeLog(project_id=p.id, author=author, kind=kind, detail=json.loads(json.dumps(detail, default=str))))
             s.commit()
 
@@ -218,7 +269,7 @@ class Store:
     def freeze_revision(self, code: str, comment: str, author: str, resolved: dict, sources: dict, product_code: str,
                         mass: float, structural: str, qa: dict) -> Revision:
         with self.Session() as s:
-            p = s.scalars(select(Project).where(Project.code == code)).one()
+            p = self._project(s, code)
             prev = p.revisions[-1] if p.revisions else None
             letter = chr(ord(prev.rev) + 1) if prev else "A"
             diff = {k: [prev.params.get(k), v] for k, v in resolved.items() if prev and prev.params.get(k) != v} if prev else {}
@@ -233,7 +284,7 @@ class Store:
 
     def revision(self, code: str, rev: str) -> Revision:
         with self.Session() as s:
-            p = s.scalars(select(Project).where(Project.code == code)).one()
+            p = self._project(s, code)
             r = next((r for r in p.revisions if r.rev == rev), None)
             if not r:
                 raise KeyError(f"Revisión {rev} no encontrada")
@@ -242,7 +293,7 @@ class Store:
 
     def attach_dossier(self, code: str, rev: str, result: dict) -> None:
         with self.Session() as s:
-            p = s.scalars(select(Project).where(Project.code == code)).one()
+            p = self._project(s, code)
             r = next(r for r in p.revisions if r.rev == rev)
             if r.dossier_path:
                 raise ValueError("La revisión ya tiene expediente: no se sobrescribe")
@@ -266,7 +317,7 @@ class Store:
         if status not in STATUSES:
             raise ValueError(f"Estado no válido: {status}")
         with self.Session() as s:
-            p = s.scalars(select(Project).where(Project.code == code)).one()
+            p = self._project(s, code)
             last = p.revisions[-1] if p.revisions else None
             if status in ("validado", "preparado_fabricacion", "fabricado"):
                 if not last or not last.dossier_path:
@@ -297,7 +348,7 @@ class Store:
         with self.Session() as s:
             t = s.get(Template, tid)
             if not t:
-                raise KeyError(tid)
+                raise KeyError(f"Plantilla no encontrada: {tid}")
             return t
 
     def save_template(self, tid: str, family: str, name: str, values: dict) -> Template:
