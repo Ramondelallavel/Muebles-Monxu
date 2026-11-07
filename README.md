@@ -5,8 +5,9 @@ geométrica, mecánica y constructivamente: modelo B-rep real, cálculo, planos,
 BOM, optimización de corte y expediente de fabricación, todo derivado de una única fuente de
 parámetros.
 
-> **Estado:** núcleo funcional con siete familias completas (**mesa industrial**, **mesa de soldadura**,
-> **estantería industrial**, **estantería en batería**, **puesto de trabajo**, **carro de taller** y **carro estantería**) y el caso de aceptación §23 superado por
+> **Estado:** núcleo funcional con ocho familias completas (**mesa industrial**, **mesa de soldadura**,
+> **estantería industrial**, **estantería en batería**, **puesto de trabajo**, **carro de taller**, **carro estantería** y
+> **tarima / plataforma de trabajo**) y el caso de aceptación §23 superado por
 > pruebas automáticas. Los armarios (puertas, cajones) están previstos en la arquitectura pero
 > **no implementados**.
 
@@ -47,8 +48,8 @@ python -m pytest -q
 | 4. Documentación | ✔ | 12 hojas de planos (conjunto, estructura, perfiles, chapa, desarrollos, pletinas, soldaduras con detalles, explosionado, montaje, despiece), STEP de conjunto y de cada pieza, STL, BREP, GLB, DXF, Excel con fórmulas, informe PDF |
 | 5. Fabricación | ✔ | Desarrollos con BA = π/2·(Ri+K·t), DFM (láser, plegadora, perfiles, soldadura, montaje), corte de barras hasta la cota inferior, anidado de chapa |
 | 6. Asistente IA | ✔ | Interpretación en español con evidencia, preguntas de datos faltantes, propuesta preliminar diferenciada de lo verificado |
-| 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) **carro de taller** (ruedas de espiga con freno; asa en uno, dos o ningún extremo) **carro estantería** (N niveles sobre ruedas, asa opcional), **mesa de soldadura** (placa perforada de 10–20 mm) y **estantería en batería** (N módulos con montantes compartidos). Peto trasero opcional en mesa, puesto y carro. Armarios: sólo se identifican en el asistente |
-| 8. Validación | ✔ | 107 pruebas: unidades frente a soluciones analíticas y tablas, las siete familias, QA, API, aceptación §23, validación cruzada navegador ↔ servidor, expediente del navegador y legibilidad de planos |
+| 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) **carro de taller** (ruedas de espiga con freno; asa en uno, dos o ningún extremo) **carro estantería** (N niveles sobre ruedas, asa opcional), **mesa de soldadura** (placa perforada de 10–20 mm), **estantería en batería** (N módulos con montantes compartidos) y **tarima** (plataforma baja con cargas de EN ISO 14122-2). Peto trasero opcional en mesa, puesto y carro. Armarios: sólo se identifican en el asistente |
+| 8. Validación | ✔ | 125 pruebas: unidades frente a soluciones analíticas y tablas, las ocho familias, QA, API, aceptación §23, validación cruzada navegador ↔ servidor, expediente del navegador y legibilidad de planos |
 
 ### Verificaciones de la cadena (no simuladas)
 
@@ -221,6 +222,42 @@ entre ejes de montantes, y la anchura total es `ANCHURA_TOTAL` = N · módulo + 
 Plantillas: 3 × 1.000 mm con cinco niveles, pesada de 4 × 1.200 mm y archivo de 2 × 900 mm con seis
 niveles.
 
+## Tarima / plataforma de trabajo
+
+`tarima` (`TA`) es una plataforma baja para elevar al operario frente a una máquina o una línea, o
+para pasar sobre conducciones. Es una chapa de acero de 3 a 10 mm soldada con cordones
+discontinuos sobre un bastidor de tubo, con patas cortas, placas base y pies niveladores.
+
+- **Cargas de EN ISO 14122-2:** carga repartida no menor que 2 kN/m² y 1,5 kN (153 kg)
+  concentrada sobre 200 × 200 mm. La huella de la carga concentrada es propia de la superficie (en
+  las mesas sigue siendo de 100 × 100 mm). La flecha admisible es L/200. Si la carga indicada es
+  menor que la de la norma, se advierte con el valor mínimo en kg.
+- **Límites:** altura de la superficie hasta 500 mm, porque por encima EN ISO 14122-3 exige
+  barandilla (no incluida). El fondo llega a 1800 mm, para que la chapa entera quepa en el formato
+  de 4000 × 2000 con los márgenes de corte. La estructura es de acero al carbono porque la chapa va
+  soldada. Si los pies y el bastidor no caben en la altura pedida, el error da la altura mínima.
+- **Lo que no se modela:** la superficie antideslizante (chapa lagrimada o recubrimiento). Queda
+  como advertencia en todos los diseños. Por encima de 250 mm se sugiere valorar un peldaño de
+  acceso, que tampoco se incluye.
+- **Asistente:** reconoce «tarima», «plataforma de trabajo / baja / para el operario» y «podio».
+  Convierte cargas en kN/m² o kg/m² a carga total y propone la carga mínima de la norma.
+
+Plantillas: tarima de operario de 1.200 × 800 × 200 mm, plataforma frente a máquina de 2.000 × 1.000
+× 300 mm y podio de taller de 3.000 × 1.200 × 450 mm.
+
+## Borrar proyectos
+
+En la lista de proyectos, cada fila tiene un botón **Borrar**. Pide confirmación dentro de la propia
+página y avisa si el proyecto está validado o tiene expedientes.
+
+- **En el servidor:** `DELETE /api/projects/{código}` elimina revisiones, documentos, historial y la
+  carpeta `expedientes/<código>`. No se permite mientras se genera un expediente de ese proyecto.
+- **En el navegador:** borra el proyecto de la base de datos privada del artefacto. Los ZIP ya
+  descargados no se tocan.
+- **Códigos:** no se reutilizan. Antes el siguiente código era «número de proyectos + 1» y, tras
+  borrar uno, el proyecto nuevo repetía un código existente. Ahora hay un contador persistente y se
+  usa siempre un número mayor que cualquiera emitido.
+
 ## Presupuesto estimado
 
 Cada diseño lleva un presupuesto unitario calculado desde el modelo y el plan de fabricación con
@@ -379,6 +416,47 @@ La comparación destapó dos fallos del motor de referencia, ya corregidos en am
 - **Plantillas de mesa:** las de uso general y trabajo pesado se proponen ancladas al suelo. Con el
   empuje de 300 N, una mesa vacía de 45 kg vuelca de verdad. Quedan pendientes solo de verificar el
   taco. Ninguna plantilla del catálogo sale NO_CUMPLE.
+
+### Barrido realista: fallos de creación corregidos
+
+`tools/webcheck/realistic.py` genera casos con solo los datos que daría un cliente (medidas, cargas,
+niveles, material, opciones) y deja el resto por defecto o en `auto`. En esos casos, un error
+bloqueante es un fallo del generador. Se corrigió en los dos motores:
+
+- **Carga puntual sin carga repartida:** la encimera no se dimensionaba y no cumplía.
+- **Regla de diseño para valores por defecto incompatibles.** Si un valor que el usuario no ha
+  fijado choca con otro, se corrige, se vuelve a dimensionar y se anota (`REGLA-*`). Un valor del
+  usuario nunca se toca: se informa del error con el valor que funcionaría. Se aplica a:
+  - la balda frente al reposapiés (con los valores por defecto chocaban siempre);
+  - la balda o el primer nivel frente a la placa base y los apoyos;
+  - el asa del carro estantería frente a los niveles.
+- **Desplome:** solo se aumentaba la pata. Con travesaños débiles, una mesa de aluminio agotaba la
+  serie hasta SHS 120x120x5 sin cumplir. Ahora se aumenta el elemento más flexible del pórtico en la
+  dirección que falla (pata, EI/h, o viga, EI/L). La misma mesa cumple con SHS 50x50x2 y
+  travesaños RHS 60x30x2.
+- **Bastidor retranqueado:** tenía que caber en la pata contando el retranqueo para la pestaña de la
+  chapa, no solo su ancho (`DFM-BASTIDOR-INF`, `DFM-BASTIDOR`).
+- **Series de candidatos ampliadas:** SHS 100x100x5, 120x120x4 y 120x120x5; reposapiés RHS 80x40 y
+  100x40.
+- **Tuercas de soldar:** la DIN 929 de acero se soldaba a placas base de aluminio, que no es
+  soldable, y de inoxidable, que crea un punto de corrosión. Ahora es del mismo material que la
+  estructura. Una regla de fabricación nueva detecta uniones soldadas entre aluminio y acero
+  (error) o entre acero e inoxidable (advertencia).
+- **Presupuesto:** fallaba con piezas que no caben en ningún formato de chapa.
+- **Asistente:** no entendía medidas de planta sueltas («2000 x 1000», «1500 por 800»).
+- **Mensajes:** ahora dicen qué carga no se verifica y qué comprobación agota los perfiles.
+
+Lo que sigue saliendo NO_CUMPLE o bloqueante en el barrido es física o un valor imposible fijado
+por el usuario: vuelco de muebles sin anclar con el empuje por defecto, chapa DC01 (máximo 3 mm)
+con cargas puntuales, taladro de Ø16 en placa de 20 mm, o un asa fijada contra un nivel.
+
+## Servidor: errores corregidos
+
+- `/api/projects` devolvía 500 en cuanto había algún proyecto, porque las revisiones se leían fuera
+  de la sesión de base de datos. El interfaz mostraba la lista vacía.
+- Con la base de datos vacía, dos peticiones simultáneas creaban las tablas a la vez («table
+  already exists», 500).
+- Un proyecto, revisión o plantilla inexistente devuelve 404 con el motivo, no 500.
 
 ## Errores encontrados por los barridos y corregidos
 
