@@ -43,7 +43,7 @@ class CarroTaller(MesaIndustrial):
     verification_inputs = ["CARGA_TOTAL"]
     candidates = CANDIDATES
     constructive_defaults = CONSTRUCTIVE_DEFAULTS
-    frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR", "PERFIL_ASA")
+    frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR", "PERFIL_REPOSAPIES", "PERFIL_ASA")
     support_param = "RUEDA"
     support_category = "ruedas_espiga"
     support_group = ("RUE", "Ruedas")

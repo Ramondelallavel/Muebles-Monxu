@@ -184,6 +184,13 @@ export function parse(text, pending = null) {
         it.notes.push("Peto trasero sin altura indicada: se adoptan 50 mm sobre la encimera.");
       }
     }
+    const FOOT = "reposapies|apoyapies|apoya ?pies|barra (?:para|de) (?:los )?pies";
+    if (R(`sin (${FOOT})`).test(t)) it.set("REPOSAPIES", 0, "sin reposapiés");
+    else if (R(FOOT).test(t)) {
+      it.set("REPOSAPIES", 1, "reposapiés");
+      const mm = t.match(R(String.raw`(?:${FOOT})\s*(?:a|de|:|=)?\s*${NUM}\s*${UNIT}?`));
+      if (mm) it.set("ALTURA_REPOSAPIES", toMm(toNumber(mm[1]), mm[2]), mm[0]);
+    }
   }
   for (const [key, rx, label] of UNSUPPORTED) {
     if (`${it.family}|${key}` in SUPPORTED_BY) {

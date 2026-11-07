@@ -42,9 +42,13 @@ CANDIDATES = {
                         "RHS 80x40x3", "RHS 100x50x3", "RHS 100x50x4", "RHS 120x60x4"],
     "PERFIL_TRAVESANO": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2", "RHS 80x40x2"],
     "PERFIL_BASTIDOR": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2"],
+    "PERFIL_REPOSAPIES": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2"],
 }
+FOOTREST_LOAD_N = 1000.0     # apoyo del pie en el centro del reposapiés (criterio de ensayo habitual de 1 kN)
+FOOT_CLEARANCE = 100.0       # hueco libre mínimo sobre el reposapiés para apoyar el pie
 CONSTRUCTIVE_DEFAULTS = {"PERFIL_PATA": "SHS 40x40x2", "PERFIL_LARGUERO": "RHS 60x40x2",
                          "PERFIL_TRAVESANO": "RHS 40x20x2", "PERFIL_BASTIDOR": "RHS 40x20x2",
+                         "PERFIL_REPOSAPIES": "RHS 40x20x2",
                          "ESPESOR_CHAPA": 2.0, "ESPESOR_BALDA": 1.5, "PIE_NIVELADOR": "PIE_NIV_M12_D60"}
 
 
@@ -87,7 +91,7 @@ class MesaIndustrial(ProductFamily):
     candidates = CANDIDATES
     constructive_defaults = CONSTRUCTIVE_DEFAULTS
     leg_param = "PERFIL_PATA"
-    frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR")
+    frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR", "PERFIL_REPOSAPIES")
     auto_in_construct = ("RADIO_PLEGADO", "FACTOR_K", "NUMERO_TRAVESANOS", "NUMERO_TRAVESANOS_BALDA", "HOLGURA_ENCIMERA")
     #: parámetro que elige el componente de apoyo (pie nivelador o rueda de espiga roscada)
     support_param = "PIE_NIVELADOR"
@@ -97,7 +101,8 @@ class MesaIndustrial(ProductFamily):
     def param_for_role(self, role: str) -> str | None:
         return {"pata": "PERFIL_PATA", "larguero_sup": "PERFIL_LARGUERO", "travesano_ext_sup": "PERFIL_TRAVESANO",
                 "travesano_int_sup": "PERFIL_TRAVESANO", "larguero_inf": "PERFIL_BASTIDOR",
-                "travesano_ext_inf": "PERFIL_BASTIDOR", "travesano_int_inf": "PERFIL_BASTIDOR"}.get(role)
+                "travesano_ext_inf": "PERFIL_BASTIDOR", "travesano_int_inf": "PERFIL_BASTIDOR",
+                "reposapies": "PERFIL_REPOSAPIES"}.get(role)
 
     def vertical_load_present(self, v) -> bool:
         return bool(v.get("CARGA_TOTAL"))
@@ -146,6 +151,8 @@ class MesaIndustrial(ProductFamily):
               choices=ALLP, allow_auto=True),
             P("PERFIL_BASTIDOR", "Perfil del bastidor inferior", "choice", AUTO, None, "construccion",
               choices=ALLP, allow_auto=True),
+            P("PERFIL_REPOSAPIES", "Perfil del reposapiés", "choice", AUTO, None, "construccion", choices=ALLP,
+              allow_auto=True),
             P("NUMERO_TRAVESANOS", "Travesaños intermedios bajo encimera", "int", AUTO, "ud", "construccion", 0, 20,
               allow_auto=True, help="'auto': mínimo número que verifica la chapa (o la separación máxima si no "
                                     "hay carga definida)."),
@@ -177,6 +184,10 @@ class MesaIndustrial(ProductFamily):
               help="Borde trasero de la encimera plegado hacia arriba como tope de piezas y herramientas. "
                    "0 = sin peto. Ese borde queda sin fijaciones: la encimera se atornilla por delante y por los "
                    "extremos."),
+            P("REPOSAPIES", "Reposapiés delantero", "int", 0, "ud", "accesorios", 0, 1,
+              help="Barra soldada entre las patas delanteras para apoyar los pies (trabajo sentado o en taburete). "
+                   "Se verifica con 1 kN en el centro."),
+            P("ALTURA_REPOSAPIES", "Altura del reposapiés (cara superior)", "float", 250.0, "mm", "accesorios", 100, 450),
             P("NUMERO_BALDAS", "Balda inferior", "int", 1, "ud", "accesorios", 0, 1),
             P("ALTURA_BALDA", "Altura de la balda (cara superior)", "float", 200.0, "mm", "accesorios", 100, 600),
             P("TOLERANCIAS", "Tolerancias generales", "choice", "ISO 2768-mK", None, "construccion",
@@ -200,7 +211,7 @@ class MesaIndustrial(ProductFamily):
         ]
 
     def templates(self):
-        base = {"CARGA_TOTAL": 300.0, "NUMERO_BALDAS": 1}
+        base = {"CARGA_TOTAL": 300.0, "NUMERO_BALDAS": 1, "ANCLAJE": "al_suelo"}     # 300 N de empuje: anclada
         return [
             {"id": "MI-1200", "name": "Mesa industrial de 1.200 mm", "family": self.id,
              "values": {**base, "LONGITUD": 1200.0, "ANCHURA": 700.0, "ALTURA": 900.0, "CARGA_TOTAL": 200.0}},
@@ -224,14 +235,16 @@ class MesaIndustrial(ProductFamily):
                         "ESPESOR_CHAPA": AUTO, "ESPESOR_BALDA": AUTO, "PERFIL_PATA": AUTO, "PERFIL_LARGUERO": AUTO,
                         "PERFIL_TRAVESANO": AUTO, "PERFIL_BASTIDOR": AUTO, "ACABADO": "RAL7016_POLVO",
                         "ANCLAJE": "al_suelo"}},
-            {"id": "PT-1200-ERG", "name": "Puesto de montaje ligero 1.200 mm (galvanizado + polvo)", "family": self.id,
+            {"id": "PT-1200-ERG", "name": "Puesto de montaje ligero 1.200 mm con reposapiés (galvanizado + polvo)",
+             "family": self.id,
              "values": {"LONGITUD": 1200.0, "ANCHURA": 750.0, "ALTURA": 850.0, "CARGA_TOTAL": 100.0,
-                        "NUMERO_BALDAS": 0, "USO": "montaje_ligero", "MATERIAL_CHAPA": "S250GD+Z",
-                        "ACABADO": "RAL5015_POLVO", "CARGA_HORIZONTAL": 100.0}},
+                        "NUMERO_BALDAS": 0, "REPOSAPIES": 1, "ALTURA_REPOSAPIES": 250.0, "USO": "montaje_ligero",
+                        "MATERIAL_CHAPA": "S250GD+Z",
+                        "ACABADO": "RAL5015_POLVO", "CARGA_HORIZONTAL": 100.0, "ANCLAJE": "al_suelo"}},
             {"id": "BM-1500", "name": "Banco de montaje 1.500 mm (trabajo pesado)", "family": self.id,
              "values": {"LONGITUD": 1500.0, "ANCHURA": 750.0, "ALTURA": 850.0, "CARGA_TOTAL": 500.0,
                         "CARGA_PUNTUAL": 100.0, "ESPESOR_CHAPA": 3.0, "USO": "trabajo_pesado",
-                        "NUMERO_BALDAS": 1, "CARGA_BALDA": 150.0}},
+                        "NUMERO_BALDAS": 1, "CARGA_BALDA": 150.0, "ANCLAJE": "al_suelo"}},
         ]
 
     # ------------------------------------------------------------------ construcción
@@ -346,6 +359,18 @@ class MesaIndustrial(ProductFamily):
                 model.add("BAL.BANDEJA", "Balda inferior", tray, G.translation(c, c, d["z_shelf"]), "BAL")
                 self._fasteners(model, d["fix_shelf"], "BAL", rn, sc, ctx)
 
+        if d["footrest"]:
+            with ctx.feature("F17", "Reposapiés soldado"):
+                ctx.uses("REPOSAPIES", "ALTURA_REPOSAPIES", "PERFIL_REPOSAPIES", "LONGITUD", "RETRANQUEO", "PERFIL_PATA",
+                         "MATERIAL_ESTRUCTURAL", "ACABADO")
+                fp, zr = d["footrest"]["prof"], d["footrest"]["z"]
+                y, zc = c + a / 2, zr - fp.H / 2
+                p0, p1 = np.array([c + a, y, zc]), np.array([L - c - a, y, zc])
+                part = ProfilePart("reposapies", f"Reposapiés {fp.code}", fp.code, L - 2 * c - 2 * a, mat_s, fin)
+                model.add("EST.REPOSAPIES", "Reposapiés delantero", part, G.axis_frame(p0, p1, (0, 0, 1)), "EST",
+                          axis=(p0, p1), up=np.array([0, 0, 1.0]), structural=True)
+                weld("J.EST.REPOSAPIES.0", "EST.REPOSAPIES", 0, legs["DI"], fp, "Reposapiés a pata")
+                weld("J.EST.REPOSAPIES.1", "EST.REPOSAPIES", 1, legs["DD"], fp, "Reposapiés a pata")
         self._extras(model, ctx, d, legs, corners)
 
         # ---------------------------------------------------------------- datos estructurales
@@ -551,6 +576,26 @@ class MesaIndustrial(ProductFamily):
                     model.note("advertencia", "ERG-BALDA-ALTA", "Hueco libre entre balda y encimera inferior a 150 mm.")
             if H - ctx["ALA_ENCIMERA"] < 600:
                 model.note("advertencia", "ERG-ALTURA", "Altura libre bajo encimera inferior a 600 mm.")
+            d["footrest"] = None
+            if v.get("REPOSAPIES"):
+                fp = catalog.profile(ctx["PERFIL_REPOSAPIES"])
+                zr = ctx.derive("COTA_REPOSAPIES", lambda p: p["ALTURA_REPOSAPIES"], "mm", "Cota superior del reposapiés")
+                d["footrest"] = {"prof": fp, "z": zr}
+                if fp.B > a:
+                    model.note("error", "DFM-REPOSAPIES-ANCHO", f"El perfil del reposapiés {fp.code} es más ancho que "
+                               "la pata.")
+                if zr - fp.H < z_leg0 + 20:
+                    model.note("error", "GEO-REPOSAPIES-BAJO", f"El reposapiés ({zr:g} mm) queda demasiado bajo para "
+                               "soldarse a las patas por encima de la placa base.")
+                if shelf:
+                    lo_s = d["z_shelf"] - max(ctx["ALA_BALDA"], d["z_shelf"] - d["z_lf"] + bas.H)
+                    above = zr - fp.H >= d["z_shelf"] + 40
+                    below = zr + FOOT_CLEARANCE <= lo_s
+                    if not (above or below):
+                        model.note("error", "GEO-REPOSAPIES-BALDA",
+                                   f"El reposapiés ({zr - fp.H:g}–{zr:g} mm) choca con la balda inferior o no deja "
+                                   f"{FOOT_CLEARANCE:g} mm para el pie bajo ella ({lo_s:g}–{d['z_shelf']:g} mm): cambie "
+                                   "ALTURA_REPOSAPIES o ALTURA_BALDA.")
         return d
 
     def _fix_layout(self, model, ctx, Lx, Ly, c, a, t, R, ala, prof_long, prof_end, z_ref, inset, hole_d, rn,
@@ -728,7 +773,13 @@ class MesaIndustrial(ProductFamily):
                              "count_param": "NUMERO_TRAVESANOS_BALDA"})
         feet = [{"instance": f"{self.support_group[0]}.PIE.{k}", "leg": legs[k], "point": tuple(model.instance(legs[k]).axis[0]),
                  "component": model.instance(f"{self.support_group[0]}.PIE.{k}").part.code} for k in ("DI", "DD", "TI", "TD")]
-        return {"levels": lv, "surfaces": surfaces, "supports": feet,
+        point_loads = []
+        if d.get("footrest"):
+            point_loads.append({"id": "F", "member": "EST.REPOSAPIES", "load_N": FOOTREST_LOAD_N,
+                                "label": "Apoyo del pie en el centro del reposapiés",
+                                "hypothesis": f"Reposapiés: {FOOTREST_LOAD_N:g} N verticales en el centro de la barra "
+                                              "(apoyo de una persona), como acción variable."})
+        return {"levels": lv, "surfaces": surfaces, "supports": feet, "point_loads": point_loads,
                 "horizontal_points": [legs["DI"], legs["DD"]], "worktop_height": ps["ALTURA"],
                 "leg_ids": list(legs.values()), "member_roles": {
                     i.id: i.role for i in model.instances if i.structural}}

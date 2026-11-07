@@ -265,6 +265,16 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         fr.add_nodal_load("P", n_mid, (0, 0, -P_kg * G_ACC))
         cases.append({"id": "P", "label": "Carga puntual en centro de vano del larguero delantero",
                       "value": f"{P_kg:g} kg", "total_N": round(P_kg * G_ACC, 1)})
+    # cargas puntuales de accesorios (p. ej. apoyo del pie en el reposapiés) en el centro de su barra
+    for pl in st.get("point_loads", []):
+        if pl["member"] not in sm.chains:
+            continue
+        chain = sm.chains[pl["member"]]
+        smid = (chain[0][0] + chain[-1][0]) / 2
+        n_mid = min(chain, key=lambda c: abs(c[0] - smid))[1]
+        fr.add_nodal_load(pl["id"], n_mid, (0, 0, -pl["load_N"]))
+        cases.append({"id": pl["id"], "label": pl["label"], "value": f"{pl['load_N']:g} N", "total_N": pl["load_N"]})
+        hyp.append(pl["hypothesis"])
     H_N = ps.get("CARGA_HORIZONTAL") or 0.0
     top_nodes = []
     if H_N and top_lvl:
@@ -294,6 +304,10 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
     combos_sls = {"ELS-1": {"G": 1.0, "Q": 1.0}} if has_Q else {}
     if "P" in fr.loads:
         combos_sls["ELS-2"] = {"G": 1.0, "P": 1.0}
+    for pl in st.get("point_loads", []):
+        if pl["id"] in fr.loads:
+            combos_uls[f"ELU-{pl['id']}"] = {"G": gG, pl["id"]: gQ}
+            combos_sls[f"ELS-{pl['id']}"] = {"G": 1.0, pl["id"]: 1.0}
     if "HX" in fr.loads:
         combos_sls["ELS-3"] = {"HX": 1.0}
         combos_sls["ELS-4"] = {"HY": 1.0}
@@ -364,7 +378,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         if not is_leg and combos_sls:
             dmax, cmax = 0.0, ""
             for cname in combos_sls:
-                if cname in ("ELS-1", "ELS-2"):
+                if cname in ("ELS-1", "ELS-2") or cname.startswith("ELS-F"):
                     dv = sm.member_deflection(mid, U[cname])
                     if dv > dmax:
                         dmax, cmax = dv, cname

@@ -175,3 +175,39 @@ def test_shelving_cart_dossier(tmp_path):
     assert res["qa"]["blocking"] == 0
     assert any(i["code"] == "EXP-STEP" and i["level"] == "ok" for i in res["qa"]["items"])
     assert any(i["code"] == "PLANO-GEOMETRIA" and i["level"] == "ok" for i in res["qa"]["items"])
+
+
+def _tpl(fid, tid):
+    from monxu.families import REGISTRY
+    return next(t["values"] for t in REGISTRY[fid].templates() if t["id"] == tid)
+
+
+def test_footrest_is_verified():
+    r = regenerate("mesa_industrial", _tpl("mesa_industrial", "PT-1200-ERG"))
+    m = r.model
+    bar = m.instance("EST.REPOSAPIES")
+    assert bar.role == "reposapies" and bar.axis[0][2] == pytest.approx(250 - bar.part.profile.H / 2)
+    assert {j.id for j in m.joints} >= {"J.EST.REPOSAPIES.0", "J.EST.REPOSAPIES.1"}
+    assert any(c["id"] == "F" for c in r.eng["load_cases"])
+    chk = {c["id"]: c for c in r.eng["checks"]}
+    assert chk["B.EST.REPOSAPIES"]["combination"] == "ELU-F" and chk["B.EST.REPOSAPIES"]["status"] == "CUMPLE"
+    assert chk["D.EST.REPOSAPIES"]["combination"] == "ELS-F" and chk["D.EST.REPOSAPIES"]["status"] == "CUMPLE"
+    assert r.interferences["interferences"] == [] and r.qa.result()["blocking"] == 0
+    # con la balda a la misma altura, el reposapiés se señala como error de geometría
+    r2 = regenerate("mesa_industrial", {"LONGITUD": 1500, "ANCHURA": 750, "ALTURA": 900, "CARGA_TOTAL": 150,
+                                        "NUMERO_BALDAS": 1, "CARGA_BALDA": 50, "REPOSAPIES": 1, "ALTURA_REPOSAPIES": 250})
+    assert any(n["code"] == "GEO-REPOSAPIES-BALDA" for n in r2.model.design_notes)
+
+
+@pytest.mark.parametrize("tid", ["MI-1500-INOX", "MI-2400-PESADA"])
+def test_plate_sizing_matches_final_check(tid):
+    """El dimensionado de chapas usa el mismo peso propio y la misma carga puntual que la verificación final."""
+    r = regenerate("mesa_industrial", _tpl("mesa_industrial", tid))
+    bad = [c["id"] for c in r.eng["checks"] if c["id"].startswith("PL.") and c["status"] == "NO_CUMPLE"]
+    assert bad == [] and r.eng["status"] != "NO_CUMPLE"
+
+
+def test_assistant_footrest():
+    r = assistant.handle(assistant.new_state(), "Puesto de trabajo 1200x700x850 con reposapiés a 220 mm, 100 kg")
+    v = r["state"]["values"]
+    assert v["REPOSAPIES"] == 1 and v["ALTURA_REPOSAPIES"] == 220

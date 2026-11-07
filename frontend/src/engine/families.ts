@@ -24,6 +24,8 @@ const weldA = (tmin) => (tmin >= 3 ? 3.0 : +tmin);
 const pt = (p) => p.map(Number);
 
 // ============================================================================ base común (mesa)
+const FOOTREST_LOAD_N = 1000.0;     // apoyo del pie en el centro del reposapiés (criterio de ensayo habitual de 1 kN)
+const FOOT_CLEARANCE = 100.0;       // hueco libre mínimo sobre el reposapiés para apoyar el pie
 class MesaIndustrial {
   constructor(id = "mesa_industrial") {
     const d = FAM.families[id];
@@ -40,7 +42,7 @@ class MesaIndustrial {
   paramForRole(role) {
     return { pata: "PERFIL_PATA", larguero_sup: "PERFIL_LARGUERO", travesano_ext_sup: "PERFIL_TRAVESANO",
       travesano_int_sup: "PERFIL_TRAVESANO", larguero_inf: "PERFIL_BASTIDOR", travesano_ext_inf: "PERFIL_BASTIDOR",
-      travesano_int_inf: "PERFIL_BASTIDOR" }[role] ?? null;
+      travesano_int_inf: "PERFIL_BASTIDOR", reposapies: "PERFIL_REPOSAPIES" }[role] ?? null;
   }
   verticalLoadPresent(v) { return !!v.CARGA_TOTAL; }
   plateTargets(v) {
@@ -104,6 +106,16 @@ class MesaIndustrial {
           "PERFIL_PATA", "PASO_FIJACIONES", "ALA_BALDA", "MATERIAL_ESTRUCTURAL");
         frameLevel(model, d, "INF", d.z_lf, bas, bas, d.e_shelf, d.n_shelf, legs, d.fix_shelf, weld, mat_s, fin);
       });
+    });
+    if (d.footrest) ctx.feature("F17", "Reposapiés soldado", () => {
+      ctx.uses("REPOSAPIES", "ALTURA_REPOSAPIES", "PERFIL_REPOSAPIES", "LONGITUD", "RETRANQUEO", "PERFIL_PATA", "MATERIAL_ESTRUCTURAL", "ACABADO");
+      const { prof: fp, z: zr } = d.footrest;
+      const y = c + a / 2, zc = zr - fp.H / 2;
+      const p0 = [c + a, y, zc], p1 = [L - c - a, y, zc];
+      const part = profilePart("reposapies", `Reposapiés ${fp.code}`, fp.code, L - 2 * c - 2 * a, mat_s, fin);
+      model.add("EST.REPOSAPIES", "Reposapiés delantero", part, axisFrame(p0, p1, [0, 0, 1]), "EST", { axis: [p0, p1], up: [0, 0, 1], structural: true });
+      weld("J.EST.REPOSAPIES.0", "EST.REPOSAPIES", 0, legs.DI, fp, "Reposapiés a pata");
+      weld("J.EST.REPOSAPIES.1", "EST.REPOSAPIES", 1, legs.DD, fp, "Reposapiés a pata");
     });
     ctx.feature("F40", this.support_group[1], () => {
       ctx.uses(this.support_param, "LONGITUD", "ANCHURA", "RETRANQUEO", "PERFIL_PATA");
@@ -251,6 +263,20 @@ class MesaIndustrial {
         if (z_s > d.z_tf - ctx.get("ALA_ENCIMERA") - 150) model.note("advertencia", "ERG-BALDA-ALTA", "Hueco libre entre balda y encimera inferior a 150 mm.");
       }
       if (H - ctx.get("ALA_ENCIMERA") < 600) model.note("advertencia", "ERG-ALTURA", "Altura libre bajo encimera inferior a 600 mm.");
+      d.footrest = null;
+      if (v.REPOSAPIES) {
+        const fp = C.profile(ctx.get("PERFIL_REPOSAPIES"));
+        const zr = ctx.derive("COTA_REPOSAPIES", (p) => p.get("ALTURA_REPOSAPIES"), "mm", "Cota superior del reposapiés");
+        d.footrest = { prof: fp, z: zr };
+        if (fp.B > a) model.note("error", "DFM-REPOSAPIES-ANCHO", `El perfil del reposapiés ${fp.code} es más ancho que la pata.`);
+        if (zr - fp.H < z_leg0 + 20) model.note("error", "GEO-REPOSAPIES-BAJO", `El reposapiés (${g(zr)} mm) queda demasiado bajo para soldarse a las patas por encima de la placa base.`);
+        if (shelf) {
+          const lo_s = d.z_shelf - Math.max(ctx.get("ALA_BALDA"), d.z_shelf - d.z_lf + bas.H);
+          const above = zr - fp.H >= d.z_shelf + 40, below = zr + FOOT_CLEARANCE <= lo_s;
+          if (!(above || below)) model.note("error", "GEO-REPOSAPIES-BALDA", `El reposapiés (${g(zr - fp.H)}–${g(zr)} mm) choca con la balda inferior o no deja `
+            + `${g(FOOT_CLEARANCE)} mm para el pie bajo ella (${g(lo_s)}–${g(d.z_shelf)} mm): cambie ALTURA_REPOSAPIES o ALTURA_BALDA.`);
+        }
+      }
     });
     return d;
   }
@@ -261,7 +287,9 @@ class MesaIndustrial {
       area_mm2: ps.LONGITUD * ps.ANCHURA, count_param: "NUMERO_TRAVESANOS" }];
     if (d.shelf) surfaces.push({ id: "balda", label: "Balda inferior", level: "INF", load_param: "CARGA_BALDA", sheet_instance: "BAL.BANDEJA",
       area_mm2: (ps.LONGITUD - 2 * d.c) * (ps.ANCHURA - 2 * d.c), count_param: "NUMERO_TRAVESANOS_BALDA" });
-    return { levels: model.structure.levels ?? {}, surfaces, supports: supportsOf(model, legs, this.support_group[0]), horizontal_points: [legs.DI, legs.DD],
+    const point_loads = d.footrest ? [{ id: "F", member: "EST.REPOSAPIES", load_N: FOOTREST_LOAD_N, label: "Apoyo del pie en el centro del reposapiés",
+      hypothesis: `Reposapiés: ${g(FOOTREST_LOAD_N)} N verticales en el centro de la barra (apoyo de una persona), como acción variable.` }] : [];
+    return { levels: model.structure.levels ?? {}, surfaces, supports: supportsOf(model, legs, this.support_group[0]), point_loads, horizontal_points: [legs.DI, legs.DD],
       worktop_height: ps.ALTURA, leg_ids: Object.values(legs), member_roles: memberRoles(model) };
   }
 }

@@ -208,6 +208,17 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     fr.addNodalLoad("P", best[1], [0, 0, -P_kg * G_ACC]);
     cases.push({ id: "P", label: "Carga puntual en centro de vano del larguero delantero", value: `${g(P_kg)} kg`, total_N: pyRound(P_kg * G_ACC, 1) });
   }
+  // cargas puntuales de accesorios (p. ej. apoyo del pie en el reposapiés) en el centro de su barra
+  for (const pl of st.point_loads ?? []) {
+    if (!(pl.member in sm.chains)) continue;
+    const chain = sm.chains[pl.member];
+    const smid = (chain[0][0] + chain.at(-1)[0]) / 2;
+    let best = chain[0];
+    for (const c of chain) if (Math.abs(c[0] - smid) < Math.abs(best[0] - smid)) best = c;
+    fr.addNodalLoad(pl.id, best[1], [0, 0, -pl.load_N]);
+    cases.push({ id: pl.id, label: pl.label, value: `${g(pl.load_N)} N`, total_N: pl.load_N });
+    hyp.push(pl.hypothesis);
+  }
   const H_N = ps.CARGA_HORIZONTAL || 0.0;
   const topNodes = [];
   if (H_N && top) {
@@ -233,6 +244,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   if ("P" in fr.loads) uls["ELU-5"] = { G: gG, P: gQ };
   const sls = hasQ ? { "ELS-1": { G: 1.0, Q: 1.0 } } : {};
   if ("P" in fr.loads) sls["ELS-2"] = { G: 1.0, P: 1.0 };
+  for (const pl of st.point_loads ?? []) if (pl.id in fr.loads) { uls[`ELU-${pl.id}`] = { G: gG, [pl.id]: gQ }; sls[`ELS-${pl.id}`] = { G: 1.0, [pl.id]: 1.0 }; }
   if ("HX" in fr.loads) { sls["ELS-3"] = { HX: 1.0 }; sls["ELS-4"] = { HY: 1.0 }; }
   const all = { ...uls, ...sls };
   const res = fr.solve();
@@ -285,7 +297,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     memberResults[mid] = best.u;
     if (!isLeg && Object.keys(sls).length) {
       let dmax = 0.0, cmax = "";
-      for (const cname of Object.keys(sls)) if (cname === "ELS-1" || cname === "ELS-2") {
+      for (const cname of Object.keys(sls)) if (cname === "ELS-1" || cname === "ELS-2" || cname.startsWith("ELS-F")) {
         const dv = sm.memberDeflection(mid, U[cname]);
         if (dv > dmax) { dmax = dv; cmax = cname; }
       }

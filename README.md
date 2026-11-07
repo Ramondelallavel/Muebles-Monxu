@@ -48,7 +48,7 @@ python -m pytest -q
 | 5. Fabricación | ✔ | Desarrollos con BA = π/2·(Ri+K·t), DFM (láser, plegadora, perfiles, soldadura, montaje), corte de barras hasta la cota inferior, anidado de chapa |
 | 6. Asistente IA | ✔ | Interpretación en español con evidencia, preguntas de datos faltantes, propuesta preliminar diferenciada de lo verificado |
 | 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) **carro de taller** (ruedas de espiga con freno; asa en uno, dos o ningún extremo) y **carro estantería** (N niveles sobre ruedas, asa opcional). Peto trasero opcional en mesa, puesto y carro. Armarios: sólo se identifican en el asistente |
-| 8. Validación | ✔ | 64 pruebas: unidades frente a soluciones analíticas y tablas, las cuatro familias, QA, API, aceptación §23, validación cruzada navegador ↔ servidor, expediente del navegador y legibilidad de planos |
+| 8. Validación | ✔ | 83 pruebas: unidades frente a soluciones analíticas y tablas, las cinco familias, QA, API, aceptación §23, validación cruzada navegador ↔ servidor, expediente del navegador y legibilidad de planos |
 
 ### Verificaciones de la cadena (no simuladas)
 
@@ -125,10 +125,19 @@ comprueba como cualquier otra en el DFM de plegado (ala mínima según la matriz
 la altura de trabajo y la del peto por separado. El plano de la chapa también separa la pestaña y
 el peto, e indica qué bordes se pliegan hacia arriba.
 
-El asistente reconoce «con peto (de N mm)», «sin peto», «tope trasero», «dos asas», «sin asa», y
-convierte «mesa con ruedas» o «mesa móvil» en un carro sin asa.
+### Reposapiés (mesa, puesto y carro)
 
-Plantillas: 4 de puesto de trabajo (montaje, inspección, embalaje con peto, taller pesado), 5 de
+`REPOSAPIES` añade una barra soldada entre las patas delanteras, a `ALTURA_REPOSAPIES`, para
+trabajar sentado o en taburete. Su perfil (`PERFIL_REPOSAPIES`) se dimensiona por cálculo, porque el
+apoyo del pie entra en el modelo como una hipótesis de carga propia: 1 kN vertical en el centro
+(combinaciones ELU-F y ELS-F). Así quedan verificadas la barra, sus soldaduras, las patas y la
+flecha. Si coincide con la balda inferior o no deja 100 mm para el pie bajo ella, se informa
+`GEO-REPOSAPIES-BALDA`.
+
+El asistente reconoce «con peto (de N mm)», «sin peto», «tope trasero», «dos asas», «sin asa»,
+«reposapiés (a N mm)» y «apoyapiés». Convierte «mesa con ruedas» o «mesa móvil» en un carro sin asa.
+
+Plantillas: 4 de puesto de trabajo (montaje, inspección con reposapiés, embalaje con peto, taller pesado), 5 de
 carro (dos niveles, transporte, dos asas, mesa móvil con peto, inoxidable alimentario) y la mesa de
 laboratorio inoxidable con peto de 100 mm.
 
@@ -294,6 +303,18 @@ La comparación destapó dos fallos del motor de referencia, ya corregidos en am
   y, si el redondeo de la longitud la superaba, se descartaba el extremo final y la barra quedaba
   suelta (matriz singular). Aparecía con los brazos del estante del puesto de trabajo; ahora la
   tolerancia es coherente con el redondeo.
+
+## Correcciones de dimensionado
+
+- **Chapas:** el dimensionado de encimeras, baldas y bandejas usaba el peso propio de la superficie
+  plana. La verificación final usa la chapa real, con pestañas. Con flechas al límite, la
+  verificación podía no cumplir (balda de la mesa inoxidable de 1500 mm: 100,4 %). Ahora los dos
+  pasos usan la misma carga.
+- **Carga puntual:** el espesor de encimera también se elige para que cumpla la carga puntual
+  (`CARGA_PUNTUAL`). La mesa pesada de 2400 mm con 150 kg pasa de 146 % a 93 % con 4 mm de chapa.
+- **Plantillas de mesa:** las de uso general y trabajo pesado se proponen ancladas al suelo. Con el
+  empuje de 300 N, una mesa vacía de 45 kg vuelca de verdad. Quedan pendientes solo de verificar el
+  taco. Ninguna plantilla del catálogo sale NO_CUMPLE.
 
 ## Datos que quedan como hipótesis o pendientes
 

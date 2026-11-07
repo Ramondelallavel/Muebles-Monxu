@@ -48,7 +48,7 @@ class PuestoTrabajo(MesaIndustrial):
     verification_inputs = ["CARGA_TOTAL"]
     candidates = CANDIDATES
     constructive_defaults = CONSTRUCTIVE_DEFAULTS
-    frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR", "PERFIL_ALTILLO")
+    frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR", "PERFIL_REPOSAPIES", "PERFIL_ALTILLO")
     auto_in_construct = MesaIndustrial.auto_in_construct + ("NUMERO_TRAVESANOS_ESTANTE",)
 
     def param_for_role(self, role):
@@ -110,10 +110,11 @@ class PuestoTrabajo(MesaIndustrial):
              "values": {"LONGITUD": 1500.0, "ANCHURA": 750.0, "ALTURA": 900.0, "ALTURA_TOTAL": 1800.0,
                         "CARGA_TOTAL": 200.0, "NUMERO_BALDAS": 1, "CARGA_BALDA": 80.0, "CARGA_ESTANTE": 40.0,
                         "USO": "montaje", "ACABADO": "RAL7035_POLVO", "ANCLAJE": "al_suelo"}},
-            {"id": "PT-1200-INSPECCION", "name": "Puesto de inspección 1.200 mm con panel portaherramientas",
+            {"id": "PT-1200-INSPECCION", "name": "Puesto de inspección 1.200 mm con panel portaherramientas y reposapiés",
              "family": self.id,
              "values": {"LONGITUD": 1200.0, "ANCHURA": 700.0, "ALTURA": 850.0, "ALTURA_TOTAL": 1700.0,
                         "CARGA_TOTAL": 100.0, "NUMERO_BALDAS": 0, "ESTANTE_SUPERIOR": 0, "USO": "inspeccion",
+                        "REPOSAPIES": 1, "ALTURA_REPOSAPIES": 220.0,
                         "CARGA_HORIZONTAL": 150.0, "ACABADO": "RAL5015_POLVO", "ANCLAJE": "al_suelo"}},
             {"id": "PT-1800-EMBALAJE", "name": "Puesto de embalaje 1.800 mm con estante superior y peto trasero",
              "family": self.id,

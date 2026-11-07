@@ -272,6 +272,14 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
             elif re.search(PETO, t):
                 it.set("PETO_TRASERO", 50.0, "peto trasero")
                 it.notes.append("Peto trasero sin altura indicada: se adoptan 50 mm sobre la encimera.")
+        FOOT = r"reposapies|apoyapies|apoya ?pies|barra (?:para|de) (?:los )?pies"
+        if re.search(rf"sin ({FOOT})", t):
+            it.set("REPOSAPIES", 0, "sin reposapiés")
+        elif re.search(FOOT, t):
+            it.set("REPOSAPIES", 1, "reposapiés")
+            mm = re.search(rf"(?:{FOOT})\s*(?:a|de|:|=)?\s*{NUM}\s*{UNIT}?", t)
+            if mm:
+                it.set("ALTURA_REPOSAPIES", to_mm(to_number(mm.group(1)), mm.group(2)), mm.group(0))
     for key, rx, label in UNSUPPORTED_ACCESSORIES:
         if (it.family, key) in SUPPORTED_BY:
             sup = SUPPORTED_BY[(it.family, key)]

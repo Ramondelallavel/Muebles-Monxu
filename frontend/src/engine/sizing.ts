@@ -33,7 +33,11 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
     const gx = lvl.grid_x, [yf, yb] = lvl.grid_y;
     const span = gx.at(-1) - gx[0], b = yb - yf;
     const q = (load * G_ACC) / surf.area_mm2;
-    const qg = mat.density * t * 1e-9 * G_ACC;
+    // peso propio igual que en la verificación: chapa real (con pestañas y escotaduras) repartida en la superficie
+    const sheetPart = m.instance(surf.sheet_instance).part;
+    const qg = (sheetPart.flat.netArea * t * 1e-9 * mat.density * G_ACC) / surf.area_mm2;
+    const P_kg = surface === "encimera" ? ps.values.CARGA_PUNTUAL : null;
+    const fyd = mat.fy / mat.gamma_M0;
     const prof = C.profile(trial.values[tgt.trv_param]);
     const crossLen = yb - yf - prof.B;
     const rhoS = C.material(trial.values.MATERIAL_ESTRUCTURAL).density;
@@ -42,7 +46,12 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
       if (a < minBay) break;
       const ru = navier(a, b, t, mat.E, mat.nu, gG * qg + gQ * q);
       const rs = navier(a, b, t, mat.E, mat.nu, qg + q);
-      if (ru.sigma <= mat.fy / mat.gamma_M0 && rs.w <= Math.min(a, b) / dl) {
+      let okP = true;
+      if (P_kg) {          // carga puntual sobre la encimera: misma comprobación que la verificación final
+        const size = crit.point_load_patch_mm;
+        okP = navier(a, b, t, mat.E, mat.nu, gG * qg, [gQ * P_kg * G_ACC, size, size, a / 2, b / 2], null, 121).sigma <= fyd;
+      }
+      if (ru.sigma <= fyd && rs.w <= Math.min(a, b) / dl && okP) {
         const sheet = surf.area_mm2 * t * 1e-9 * mat.density;
         const cross = n * crossLen * 1e-3 * prof.massPerM(rhoS);
         alternatives.push({ t, n, vano: pyRound(a, 1), masa_kg: pyRound(sheet + cross, 2), sigma: pyRound(ru.sigma, 1), w: pyRound(rs.w, 2) });

@@ -46,7 +46,11 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
         gx, (yf, yb) = lvl["grid_x"], lvl["grid_y"]
         span, b = gx[-1] - gx[0], yb - yf
         q = load * G_ACC / surf["area_mm2"]
-        qg = mat.density * t * 1e-9 * G_ACC
+        # peso propio igual que en la verificación: chapa real (con pestañas y escotaduras) repartida en la superficie
+        sheet_part = m.instance(surf["sheet_instance"]).part
+        qg = sheet_part.flat.net_area() * t * 1e-9 * mat.density * G_ACC / surf["area_mm2"]
+        P_kg = ps.values.get("CARGA_PUNTUAL") if surface == "encimera" else None
+        fyd = mat.fy / mat.gamma_M0
         prof = catalog.profile(trial.values[tgt["trv_param"]])
         cross_len = yb - yf - prof.B
         rho_s = catalog.material(trial.values["MATERIAL_ESTRUCTURAL"]).density
@@ -56,7 +60,13 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
                 break
             ru = navier(a, b, t, mat.E, mat.nu, q=gG * qg + gQ * q)
             rs = navier(a, b, t, mat.E, mat.nu, q=qg + q)
-            if ru["sigma"] <= mat.fy / mat.gamma_M0 and rs["w"] <= min(a, b) / dl:
+            ok_p = True
+            if P_kg:          # carga puntual sobre la encimera: misma comprobación que la verificación final
+                size = crit["point_load_patch_mm"]
+                rp = navier(a, b, t, mat.E, mat.nu, q=gG * qg, patch=(gQ * P_kg * G_ACC, size, size, a / 2, b / 2),
+                            terms=121)
+                ok_p = rp["sigma"] <= fyd
+            if ru["sigma"] <= fyd and rs["w"] <= min(a, b) / dl and ok_p:
                 sheet = surf["area_mm2"] * t * 1e-9 * mat.density
                 cross = n * cross_len * 1e-3 * prof.mass_per_m(rho_s)
                 alternatives.append({"t": t, "n": n, "vano": round(a, 1), "masa_kg": round(sheet + cross, 2),
