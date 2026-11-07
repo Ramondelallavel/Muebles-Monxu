@@ -54,6 +54,14 @@ for k in range(n_rand):
              "NUMERO_BALDAS": rng.choice([0, 1]), "CARGA_BALDA": rng.choice([None, 50, 100]),
              "CARGA_HORIZONTAL": rng.choice([100, 200, 300]), "ANCLAJE": rng.choice(["ninguno", "al_suelo"]),
              "PETO_TRASERO": rng.choice([0, 0, 60]), "REPOSAPIES": rng.choice([0, 1])}
+    elif u < 0.08:
+        fid = "mesa_soldadura"
+        v = {"LONGITUD": rng.choice(range(800, 3001, 100)), "ANCHURA": rng.choice(range(600, 1501, 100)),
+             "ALTURA": rng.choice(range(750, 951, 50)), "CARGA_TOTAL": rng.choice([None, 300, 600, 1200]),
+             "CARGA_PUNTUAL": rng.choice([None, 100, 300]), "SISTEMA_TALADROS": rng.choice(["D16_P50", "D28_P100", "ninguno"]),
+             "ESPESOR_PLACA": rng.choice(["auto", "auto", 12.0, 15.0, 20.0]), "VUELO": rng.choice([40, 60, 100]),
+             "NUMERO_BALDAS": rng.choice([0, 1]), "CARGA_BALDA": rng.choice([None, 100]),
+             "CARGA_HORIZONTAL": rng.choice([200, 300, 500]), "ANCLAJE": rng.choice(["ninguno", "al_suelo"])}
     elif u < 0.4:
         fid = "mesa_industrial"
         v = {"LONGITUD": rng.choice(range(800, 3001, 100)), "ANCHURA": rng.choice(range(500, 1201, 50)),

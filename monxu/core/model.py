@@ -147,6 +147,12 @@ class PlatePart(PartDef):
     def build_shape(self):
         return G.plate_solid(self.w, self.h, self.t, self.corner_r, self.holes)
 
+    @property
+    def analytic_volume(self) -> float:
+        """Volumen de la definición (contorno con radios menos taladros): igual que el motor del navegador."""
+        area = self.w * self.h - (4 - math.pi) * self.corner_r ** 2 - sum(math.pi * d * d / 4 for _, _, d in self.holes)
+        return area * self.t
+
     def outline_2d(self):
         from shapely.geometry import box as sbox
         poly = sbox(0, 0, self.w, self.h)

@@ -1,7 +1,7 @@
 // @ts-nocheck
 // Resolución de parámetros 'auto' por reglas y cálculo (port de monxu/engineering/sizing.py).
 import * as C from "./catalog";
-import { analyze } from "./analysis";
+import { analyze, surfaceSheet } from "./analysis";
 import { navier } from "./fem";
 import { AUTO, copyParams } from "./model";
 import { g, pyRound } from "./util";
@@ -13,11 +13,11 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
   const gG = crit.partial_factors.gamma_G, gQ = crit.partial_factors.gamma_Q;
   const dl = crit.deflection_limits.panel_span_ratio;
   const { surface, t_param, n_param } = tgt;
-  const mat = C.material(ps.values.MATERIAL_CHAPA);
+  const mat = C.material(ps.values[tgt.mat_param ?? "MATERIAL_CHAPA"]);
   const load = ps.values[tgt.load_param];
   const tMin = tgt.min_t_by_use ? crit.min_sheet_thickness_by_use_mm[ps.values.USO ?? "montaje"] ?? 1.5 : 1.0;
   const tMax = 6.0;
-  const tOpts = autoT ? C.sheetThicknesses(mat.code).filter((t) => tMin <= t && t <= tMax) : [ps.values[t_param]];
+  const tOpts = autoT ? (tgt.t_options ?? C.sheetThicknesses(mat.code)).filter((t) => tMin <= t && t <= (tgt.t_max ?? tMax)) : [ps.values[t_param]];
   const minBay = crit.min_support_spacing_mm;
   const code = `DIM-${surface.toUpperCase()}`;
   for (let k = notes.length - 1; k >= 0; k--) if (notes[k].code === code) notes.splice(k, 1);
@@ -34,8 +34,8 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
     const span = gx.at(-1) - gx[0], b = yb - yf;
     const q = (load * G_ACC) / surf.area_mm2;
     // peso propio igual que en la verificación: chapa real (con pestañas y escotaduras) repartida en la superficie
-    const sheetPart = m.instance(surf.sheet_instance).part;
-    const qg = (sheetPart.flat.netArea * t * 1e-9 * mat.density * G_ACC) / surf.area_mm2;
+    const qg = (surfaceSheet(m.instance(surf.sheet_instance).part)[0] * G_ACC) / surf.area_mm2;
+    const eta = surf.ligament_efficiency ?? 1.0;
     const P_kg = surface === "encimera" ? ps.values.CARGA_PUNTUAL : null;
     const fyd = mat.fy / mat.gamma_M0;
     const prof = C.profile(trial.values[tgt.trv_param]);
@@ -44,12 +44,12 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
     for (const n of autoN ? Array.from({ length: 25 }, (_, i) => i) : [ps.values[n_param]]) {
       const a = span / (n + 1);
       if (a < minBay) break;
-      const ru = navier(a, b, t, mat.E, mat.nu, gG * qg + gQ * q);
-      const rs = navier(a, b, t, mat.E, mat.nu, qg + q);
+      const ru = { sigma: navier(a, b, t, mat.E, mat.nu, gG * qg + gQ * q).sigma / eta };
+      const rs = { w: navier(a, b, t, mat.E, mat.nu, qg + q).w / eta };
       let okP = true;
       if (P_kg) {          // carga puntual sobre la encimera: misma comprobación que la verificación final
         const size = crit.point_load_patch_mm;
-        okP = navier(a, b, t, mat.E, mat.nu, gG * qg, [gQ * P_kg * G_ACC, size, size, a / 2, b / 2], null, 121).sigma <= fyd;
+        okP = navier(a, b, t, mat.E, mat.nu, gG * qg, [gQ * P_kg * G_ACC, size, size, a / 2, b / 2], null, 121).sigma / eta <= fyd;
       }
       if (ru.sigma <= fyd && rs.w <= Math.min(a, b) / dl && okP) {
         const sheet = surf.area_mm2 * t * 1e-9 * mat.density;

@@ -220,3 +220,53 @@ def test_flange_lower_than_bend_is_reported_not_crashing():
                                        "ALA_ENCIMERA": 22.0})
     codes = {i["code"] for i in r.qa.result()["items"] if i["level"] == "bloqueante"}
     assert "PLG-ALA-MIN" in codes
+
+
+def test_welding_table():
+    r = regenerate("mesa_soldadura", _tpl("mesa_soldadura", "MS-2000-28"))
+    m, v = r.model, r.model.params.values
+    plate = m.instance("ENC.PLACA")
+    assert plate.part.kind == "pletina" and len(plate.part.holes) == 200 and plate.part.holes[0][2] == 28
+    assert plate.part.finish is None                                       # la placa no se pinta
+    assert 15 <= v["ESPESOR_PLACA"] <= 20                                  # mínimo constructivo D28 y láser d ≥ t
+    assert plate.bbox[1][2] == pytest.approx(850, abs=1e-3)
+    assert next(rw["value"] for rw in m.parameter_table() if rw["name"] == "EFICIENCIA_LIGAMENTO") == pytest.approx(0.72)
+    chk = {c["id"]: c for c in r.eng["checks"]}
+    assert "placa perforada" in chk["PL.encimera.S"]["description"] and chk["PL.encimera.P"]["status"] == "CUMPLE"
+    welds = [j for j in m.joints if j.id.startswith("J.PLACA_SOLD.")]
+    assert len(welds) == 4 and all(not j.weld["all_around"] for j in welds)
+    assert not [i for i in m.instances if i.group == "ENC" and i.part.role in ("tornillo", "tuerca_remachable")]
+    assert not m.instance("EST.LAR_SUP.D").part.holes                      # bastidor sin taladros de fijación
+    assert r.eng["status"] == "CUMPLE" and r.interferences["interferences"] == [] and r.qa.result()["blocking"] == 0
+
+
+def test_welding_plate_ligament_efficiency():
+    """La retícula reduce rigidez y resistencia de la placa en (p − d)/p frente a una placa lisa."""
+    base = {**_tpl("mesa_soldadura", "MS-1200-16"), "ESPESOR_PLACA": 15.0, "NUMERO_TRAVESANOS": 1}
+    rs = {}
+    for system in ("D16_P50", "ninguno"):
+        r = regenerate("mesa_soldadura", {**base, "SISTEMA_TALADROS": system})
+        rs[system] = {c["id"]: c["value"] for c in r.eng["checks"]}
+    ratio = rs["D16_P50"]["PL.encimera.D"] / rs["ninguno"]["PL.encimera.D"]
+    assert ratio > 1 / 0.68 * 0.9 and ratio < 1 / 0.68 * 1.1      # mismo panel, peso propio algo menor con taladros
+
+
+def test_assistant_welding_table():
+    r = assistant.handle(assistant.new_state(), "Mesa de soldadura 2000x1000x850 sistema 28, placa de 20 mm, 1000 kg")
+    st = r["state"]
+    assert st["family"] == "mesa_soldadura" and st["values"]["SISTEMA_TALADROS"] == "D28_P100"
+    assert st["values"]["ESPESOR_PLACA"] == 20 and "ESPESOR_CHAPA" not in st["values"] and "PETO_TRASERO" not in st["values"]
+
+
+def test_point_load_parsing_is_local():
+    from monxu.ai.interpreter import parse
+    p = parse("Mesa 1200x800x900, 500 kg y 150 kg puntual")
+    assert p.values["CARGA_TOTAL"] == 500 and p.values["CARGA_PUNTUAL"] == 150
+
+
+@pytest.mark.slow
+def test_welding_table_dossier(tmp_path):
+    r = regenerate("mesa_soldadura", _tpl("mesa_soldadura", "MS-1200-16"))
+    res = generate_dossier(r, {"code": "P-MS", "revision": "A"}, tmp_path / "exp")
+    assert res["qa"]["blocking"] == 0
+    assert any(i["code"] == "EXP-STEP" and i["level"] == "ok" for i in res["qa"]["items"])

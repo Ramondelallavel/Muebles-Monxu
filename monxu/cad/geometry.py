@@ -181,6 +181,15 @@ def profile_solid(p: Profile, length: float,
 
 def plate_solid(w: float, h: float, t: float, corner_r: float = 0.0,
                 holes: Iterable[tuple[float, float, float]] = ()) -> cq.Shape:
+    holes = list(holes)
+    if len(holes) > 24:
+        # placa perforada (mesa de soldadura): cara con los taladros como contornos interiores y una sola extrusión,
+        # sin una booleana por taladro (cientos de ellos)
+        outer = cq.Workplane("XY").rect(w, h, centered=False).val()
+        if corner_r > 0:
+            outer = outer.fillet2D(corner_r, outer.Vertices())
+        inners = [cq.Wire.makeCircle(d / 2, cq.Vector(x, y, 0), cq.Vector(0, 0, 1)) for x, y, d in holes]
+        return cq.Solid.extrudeLinear(outer, inners, cq.Vector(0, 0, t))
     wp = cq.Workplane("XY").rect(w, h, centered=False).extrude(t)
     if corner_r > 0:
         wp = wp.edges("|Z").fillet(corner_r)

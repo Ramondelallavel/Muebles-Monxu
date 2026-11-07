@@ -7,7 +7,7 @@ import { QA } from "../engine/pipeline";
 import { family } from "../engine/families";
 import { csv, flatSvg, nestingDxf, nestingSvg, partDxf, reportHtml, sha256, stlBinary, zipAsync } from "../engine/docs";
 import { assemblyStep, partStep } from "../engine/step";
-import { assemblyInstructions, drawingConsistency, drawingSet } from "../engine/drawings";
+import { assemblyInstructions, drawingConsistency, drawingSet, isPerforatedPlate } from "../engine/drawings";
 import { workbook } from "../engine/xlsx";
 import { partGeometry } from "../engine/geometry";
 
@@ -54,7 +54,9 @@ export async function buildDossier(project, rev, model, summary, onProgress = nu
   const dr = await drawingSet(model, summary, info, onProgress);
   add(`02_PLANOS/${code}_planos.pdf`, dr.pdf);
   const cons = drawingConsistency(model, dr.sheets);
-  const expected = 3 + 2 * Object.values(model.parts).filter((p) => p.kind === "chapa").length + (Object.values(model.parts).some((p) => p.kind === "pletina") ? 1 : 0) + 4;
+  const parts = Object.values(model.parts);
+  const expected = 3 + 2 * parts.filter((p) => p.kind === "chapa").length + (parts.some((p) => p.kind === "pletina" && !isPerforatedPlate(p)) ? 1 : 0)
+    + parts.filter(isPerforatedPlate).length + 4;
   q.add(dr.total === expected ? "ok" : "bloqueante", "EXP-PDF", `Planos PDF: ${dr.total} hojas A3 (esperadas ${expected}): conjunto, estructura, perfiles, piezas de chapa, desarrollos, `
     + "pletinas, soldaduras, explosionado, montaje y despiece.");
   q.add(cons.mismatches.length ? "bloqueante" : "ok", "PLANO-GEOMETRIA", cons.mismatches.length ? `Cotas de plano no coincidentes con la geometría: ${JSON.stringify(cons.mismatches)}`

@@ -5,8 +5,8 @@ geométrica, mecánica y constructivamente: modelo B-rep real, cálculo, planos,
 BOM, optimización de corte y expediente de fabricación, todo derivado de una única fuente de
 parámetros.
 
-> **Estado:** núcleo funcional con cinco familias completas (**mesa industrial**, **estantería
-> industrial**, **puesto de trabajo**, **carro de taller** y **carro estantería**) y el caso de aceptación §23 superado por
+> **Estado:** núcleo funcional con seis familias completas (**mesa industrial**, **mesa de soldadura**,
+> **estantería industrial**, **puesto de trabajo**, **carro de taller** y **carro estantería**) y el caso de aceptación §23 superado por
 > pruebas automáticas. Los armarios (puertas, cajones) están previstos en la arquitectura pero
 > **no implementados**.
 
@@ -159,6 +159,39 @@ tuercas soldadas de las placas base, con freno en el extremo izquierdo, y se eli
 
 Plantillas: tres niveles de 1.000 mm, picking de cuatro niveles de 1.200 mm con asa en los dos
 extremos, y bandejas inoxidable de cinco niveles de 800 mm.
+
+## Mesa de soldadura
+
+`mesa_soldadura` (`MS`) monta sobre la estructura de la mesa industrial una **placa de acero de 10 a
+20 mm sin pintar**, perforada para el sistema de amarre:
+
+- `SISTEMA_TALADROS`: Ø16 a paso 50 mm, Ø28 a paso 100 mm o placa lisa, en retícula centrada.
+- `VUELO`: la estructura se retranquea respecto a los cantos de la placa para dejar sitio a mordazas
+  y sargentos.
+- Soldadura: la placa se suelda al bastidor superior con cordones discontinuos de 50 mm cada 250 mm.
+  No lleva fijaciones atornilladas.
+
+**Cálculo de la placa:** Navier sobre cada panel entre travesaños, para la carga uniforme y para la
+carga puntual de pieza pesada. La rigidez y la resistencia se reducen por la eficiencia de ligamento
+(p − d)/p: 0,68 en el sistema 16 y 0,72 en el 28.
+
+**Espesor:** el dimensionado elige el menor espesor que verifica, con dos límites:
+- un mínimo constructivo por planitud y deformación al soldar sobre la placa: 12 mm en el sistema 16
+  y 15 mm en el 28;
+- el máximo que permite el corte láser de los taladros (diámetro ≥ espesor).
+
+La separación de travesaños y los perfiles salen también del cálculo.
+
+**Planos y fabricación:** la placa tiene un plano propio. La retícula se acota como patrón
+(«19×100 = 1900» y primer taladro a los cantos) en lugar de rotular cientos de taladros. En el
+servidor, el sólido se construye como una cara con los taladros de contorno interior: 600 taladros en
+0,2 s, con volumen exacto. Presupuesto con láser hasta 20 mm.
+
+El asistente reconoce «mesa de soldadura / para soldar / de calderería», «sistema 16 / 28»,
+«taladros de 16», «placa lisa», «placa de N mm» y «vuelo de N mm».
+
+Plantillas: 1.200 × 800 sistema 16, 2.000 × 1.000 sistema 28 con 1.000 kg y 1.500 × 1.000 de
+calderería con balda inferior.
 
 ## Presupuesto estimado
 

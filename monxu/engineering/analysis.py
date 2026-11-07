@@ -40,6 +40,14 @@ class Check:
     details: dict[str, Any] = field(default_factory=dict)
 
 
+
+def surface_sheet(part) -> tuple[float, float]:
+    """(masa en kg, espesor en mm) de la chapa plegada o placa de una superficie de carga."""
+    from ..core.model import SheetPart
+    if isinstance(part, SheetPart):
+        return part.flat.net_area() * part.spec.t * 1e-9 * part.density, part.spec.t
+    return part.analytic_volume * 1e-9 * part.density, part.t
+
 def _status(u: float | None) -> str:
     if u is None:
         return PENDING
@@ -232,7 +240,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         lvl = levels[surf["level"]]
         inst = model.instance(surf["sheet_instance"])
         part = inst.part
-        sheet_mass = part.flat.net_area() * part.spec.t * 1e-9 * part.density
+        sheet_mass, _t = surface_sheet(part)
         area = surf["area_mm2"]
         gx, gy = lvl["grid_x"], lvl["grid_y"]
         grid_area = (gx[-1] - gx[0]) * (gy[1] - gy[0])
@@ -435,7 +443,10 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
     for info in surfaces_info:
         surf, lvl, part = info["surface"], info["level"], info["part"]
         mat = catalog.material(part.material)
-        t = part.spec.t
+        _m, t = surface_sheet(part)
+        # placa perforada: rigidez y resistencia reducidas por la eficiencia de ligamento (p − d)/p
+        eta = surf.get("ligament_efficiency", 1.0)
+        perf = f" (placa perforada, η = {eta:.2f})" if eta < 1 else ""
         gx, (yf, yb) = lvl["grid_x"], lvl["grid_y"]
         a = max(gx[k + 1] - gx[k] for k in range(len(gx) - 1))
         b = yb - yf
@@ -452,9 +463,11 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             q_sls = info["q_g"] + info["q"]
             r_u = navier(a, b, t, mat.E, mat.nu, q=q_uls)
             r_s = navier(a, b, t, mat.E, mat.nu, q=q_sls)
+            r_u = {**r_u, "sigma": r_u["sigma"] / eta}
+            r_s = {**r_s, "w": r_s["w"] / eta}
             fyd = mat.fy / mat.gamma_M0
             checks.append(Check(f"PL.{sid}.S", "placa", surf["label"], f"{surf['label']}: tensión de flexión en "
-                                f"panel {a:.0f}×{b:.0f} mm, t = {t:g} mm (carga uniforme)",
+                                f"panel {a:.0f}×{b:.0f} mm, t = {t:g} mm (carga uniforme){perf}",
                                 "Teoría de placas (Navier) + EN 1993-1-1 §6.2.1", round(r_u["sigma"], 2),
                                 round(fyd, 1), "MPa", round(r_u["sigma"] / fyd, 4), _status(r_u["sigma"] / fyd),
                                 "ELU-1", {"a": a, "b": b, "q_MPa": q_uls}))
@@ -473,6 +486,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             size = crit["point_load_patch_mm"]
             r_p = navier(a, b, t, mat.E, mat.nu, q=gG * info["q_g"], patch=(gQ * P_kg * G_ACC, size, size, a / 2, b / 2),
                          terms=121)
+            r_p = {**r_p, "sigma": r_p["sigma"] / eta}
             fyd = mat.fy / mat.gamma_M0
             checks.append(Check(f"PL.{sid}.P", "placa", surf["label"], f"{surf['label']}: carga puntual de {P_kg:g} kg "
                                 f"sobre huella {size}×{size} mm en el centro del panel", "Navier + EN 1993-1-1 §6.2.1",

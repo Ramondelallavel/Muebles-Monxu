@@ -831,8 +831,44 @@ function planFlat(d, X, part, number) {
   ...(grid ? [grid] : []), ...more], [[32, 268, 370], [32, 280, 370]], 2.6, 370);
 }
 
+/** Pletina con retícula de taladros (placa de mesa de soldadura): plano propio acotado como patrón. */
+export const isPerforatedPlate = (p) => p.kind === "pletina" && p.holes.length > 12;
+
+function planPerforatedPlate(d, X, p, number) {
+  const region = [48, 100, 396, 262];
+  const sc = [...SCALES].find(([a, b]) => (p.w * a) / b <= region[2] - region[0] - 28 && (p.h * a) / b <= region[3] - region[1] - 30) ?? SCALES.at(-1);
+  const k = sc[0] / sc[1];
+  const x = region[0] + 14, y = region[1] + 14;
+  d.newSheet(number, "Placa perforada: retícula de amarre", scaleLabel(sc), p.material);
+  const r = p.corner_r, pts = [];
+  for (const [cx, cy, a0] of [[p.w - r, r, -90], [p.w - r, p.h - r, 0], [r, p.h - r, 90], [r, r, 180]])
+    for (let j = 0; j <= 8; j++) { const an = ((a0 + (90 * j) / 8) * Math.PI) / 180; pts.push([x + (cx + r * Math.cos(an)) * k, y + (cy + r * Math.sin(an)) * k]); }
+  d.group("geom", () => {
+    d.polyline(pts, LW_THICK, null, BLACK, true);
+    for (const [hx, hy, hd] of p.holes) d.circle(x + hx * k, y + hy * k, (hd / 2) * k);
+  });
+  const xs = [...new Set(p.holes.map((h) => h[0]))].sort((a, b) => a - b), ys = [...new Set(p.holes.map((h) => h[1]))].sort((a, b) => a - b);
+  const dh = p.holes[0][2], pitch = xs.length > 1 ? xs[1] - xs[0] : ys[1] - ys[0];
+  // cotas de la placa y del patrón: primer taladro desde el canto y n×paso hasta el último
+  d.dimH(x, x + p.w * k, y, y, y - 9, p.w, `${p.ref}_W`, "geometria_pieza");
+  d.dimV(y, y + p.h * k, x, x, x - 9, p.h, `${p.ref}_H`, "geometria_pieza");
+  const yt = y + p.h * k, xr = x + p.w * k;
+  d.dimH(x, x + xs[0] * k, yt, yt, yt + 8, xs[0], `${p.ref}_RETICULA_X0`, "geometria_pieza");
+  if (xs.length > 1) d.dimH(x + xs[0] * k, x + xs.at(-1) * k, yt, yt, yt + 8, xs.at(-1) - xs[0], null, "geometria_pieza", `${xs.length - 1}×${fmt(pitch)} = `);
+  d.dimV(y, y + ys[0] * k, xr, xr, xr + 8, ys[0], `${p.ref}_RETICULA_Y0`, "geometria_pieza");
+  if (ys.length > 1) d.dimV(y + ys[0] * k, y + ys.at(-1) * k, xr, xr, xr + 8, ys.at(-1) - ys[0], null, "geometria_pieza", `${ys.length - 1}×${fmt(pitch)} = `);
+  d.flushLabels();
+  d.placeNotes([`Pos. ${p.pos} — ${p.ref}: ${p.name}`, `Material ${C.material(p.material).name}, espesor ${fmt(p.t)} mm, radio de esquina R${fmt(p.corner_r)}.`,
+    `Taladros: ${p.holes.length} × Ø${fmt(dh)} pasantes en retícula ${xs.length} × ${ys.length} a paso ${fmt(pitch)} mm, centrada en la placa `
+      + `(primer taladro a ${fmt(xs[0])} / ${fmt(ys[0])} mm de los cantos).`,
+    "Corte por láser del contorno y de los taladros (diámetro no menor que el espesor). Posición de taladros y planitud tras soldar: según especificación del cliente "
+      + "(no verificadas por el cálculo).",
+    `Masa (desde la definición): ${p.mass.toFixed(2)} kg. Sin pintura: se entrega aceitada.`],
+  Array.from({ length: 10 }, (_, i) => [48, 92 - i * 3, 172]), 2.6, 172);
+}
+
 function planPlates(d, X, number) {
-  const plates = Object.values(X.m.parts).filter((p) => p.kind === "pletina").sort((a, b) => a.pos - b.pos);
+  const plates = Object.values(X.m.parts).filter((p) => p.kind === "pletina" && !isPerforatedPlate(p)).sort((a, b) => a.pos - b.pos);
   if (!plates.length) return;
   // escala y disposición en filas: la mayor escala normalizada con la que caben todas (con hueco para cotas y rótulos)
   const region = [44, 92, 400, 266];
@@ -1081,8 +1117,9 @@ function layoutReport(d) {
 export async function drawingSet(model, summary, info, onProgress = null) {
   const X = new Ctx(model, summary, info, onProgress);
   const sheets = Object.values(model.parts).filter((p) => p.kind === "chapa").sort((a, b) => a.pos - b.pos);
-  const plates = Object.values(model.parts).filter((p) => p.kind === "pletina");
-  const total = 3 + sheets.length * 2 + (plates.length ? 1 : 0) + 4;
+  const plates = Object.values(model.parts).filter((p) => p.kind === "pletina" && !isPerforatedPlate(p));
+  const perf = Object.values(model.parts).filter(isPerforatedPlate).sort((a, b) => a.pos - b.pos);
+  const total = 3 + sheets.length * 2 + (plates.length ? 1 : 0) + perf.length + 4;
   const d = new Drawing({ ...info, total_sheets: total, title: `Planos ${model.product_code}`, assembly_ref: model.product_code });
   planGeneral(d, X);
   planStructure(d, X);
@@ -1090,6 +1127,7 @@ export async function drawingSet(model, summary, info, onProgress = null) {
   sheets.forEach((p, n) => planSheetPart(d, X, p, `03.${n + 1}`));
   sheets.forEach((p, n) => planFlat(d, X, p, `04.${n + 1}`));
   if (plates.length) planPlates(d, X, `04.${sheets.length + 1}`);
+  perf.forEach((p, n) => planPerforatedPlate(d, X, p, `04.${sheets.length + (plates.length ? 1 : 0) + n + 1}`));
   planWelds(d, X);
   planExploded(d, X);
   planAssembly(d, X);

@@ -145,6 +145,12 @@ export class StructuralModel {
 }
 
 // ============================================================================ análisis
+/** [masa en kg, espesor en mm] de la chapa plegada o placa de una superficie de carga. */
+export function surfaceSheet(part) {
+  if (part.kind === "chapa") return [part.flat.netArea * part.spec.t * 1e-9 * C.material(part.material).density, part.spec.t];
+  return [part.volume * 1e-9 * C.material(part.material).density, part.t];
+}
+
 export function analyze(model, includeStability = true, includeWelds = true) {
   const crit = C.criteria();
   const pf = crit.partial_factors;
@@ -178,7 +184,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   for (const surf of st.surfaces ?? []) {
     const lvl = levels[surf.level];
     const part = model.instance(surf.sheet_instance).part;
-    const sheetMass = part.flat.netArea * part.spec.t * 1e-9 * C.material(part.material).density;
+    const [sheetMass] = surfaceSheet(part);
     const area = surf.area_mm2;
     const gx = lvl.grid_x, gy = lvl.grid_y;
     const scale = area / ((gx.at(-1) - gx[0]) * (gy[1] - gy[0]));
@@ -348,7 +354,10 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   for (const info of surfInfo) {
     const { surface: surf, level: lvl, part } = info;
     const mat = C.material(part.material);
-    const t = part.spec.t;
+    const t = surfaceSheet(part)[1];
+    // placa perforada: rigidez y resistencia reducidas por la eficiencia de ligamento (p − d)/p
+    const eta = surf.ligament_efficiency ?? 1.0;
+    const perf = eta < 1 ? ` (placa perforada, η = ${eta.toFixed(2)})` : "";
     const gx = lvl.grid_x, [yf, yb] = lvl.grid_y;
     let a = 0;
     for (let k = 0; k < gx.length - 1; k++) a = Math.max(a, gx[k + 1] - gx[k]);
@@ -361,9 +370,10 @@ export function analyze(model, includeStability = true, includeWelds = true) {
       + "(confirmar con certificado 3.1).");
     if (info.load_kg) {
       const qu = gG * info.q_g + gQ * info.q, qs = info.q_g + info.q;
-      const ru = navier(a, b, t, mat.E, mat.nu, qu), rs = navier(a, b, t, mat.E, mat.nu, qs);
+      const ru0 = navier(a, b, t, mat.E, mat.nu, qu), rs0 = navier(a, b, t, mat.E, mat.nu, qs);
+      const ru = { ...ru0, sigma: ru0.sigma / eta }, rs = { ...rs0, w: rs0.w / eta };
       const fyd = mat.fy / mat.gamma_M0;
-      checks.push(check(`PL.${sid}.S`, "placa", surf.label, `${surf.label}: tensión de flexión en panel ${fx(a)}×${fx(b)} mm, t = ${g(t)} mm (carga uniforme)`,
+      checks.push(check(`PL.${sid}.S`, "placa", surf.label, `${surf.label}: tensión de flexión en panel ${fx(a)}×${fx(b)} mm, t = ${g(t)} mm (carga uniforme)${perf}`,
         "Teoría de placas (Navier) + EN 1993-1-1 §6.2.1", pyRound(ru.sigma, 2), pyRound(fyd, 1), "MPa", pyRound(ru.sigma / fyd, 4), status(ru.sigma / fyd),
         "ELU-1", { a, b, q_MPa: qu }));
       const lim = Math.min(a, b) / dl;
@@ -375,7 +385,8 @@ export function analyze(model, includeStability = true, includeWelds = true) {
       { motivo: `${surf.load_param} sin definir` }));
     if (sid === "encimera" && P_kg) {
       const size = crit.point_load_patch_mm;
-      const rp = navier(a, b, t, mat.E, mat.nu, gG * info.q_g, [gQ * P_kg * G_ACC, size, size, a / 2, b / 2], null, 121);
+      const rp0 = navier(a, b, t, mat.E, mat.nu, gG * info.q_g, [gQ * P_kg * G_ACC, size, size, a / 2, b / 2], null, 121);
+      const rp = { ...rp0, sigma: rp0.sigma / eta };
       const fyd = mat.fy / mat.gamma_M0;
       checks.push(check(`PL.${sid}.P`, "placa", surf.label, `${surf.label}: carga puntual de ${g(P_kg)} kg sobre huella ${size}×${size} mm en el centro del panel`,
         "Navier + EN 1993-1-1 §6.2.1", pyRound(rp.sigma, 2), pyRound(fyd, 1), "MPa", pyRound(rp.sigma / fyd, 4), status(rp.sigma / fyd), "ELU-5"));

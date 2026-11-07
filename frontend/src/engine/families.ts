@@ -32,7 +32,8 @@ class MesaIndustrial {
     Object.assign(this, { id, name: d.name, category: d.category, description: d.description, def: d,
       candidates: d.candidates, constructive_defaults: d.constructive_defaults, leg_param: d.leg_param,
       frame_params: d.frame_params, auto_in_construct: d.auto_in_construct, verification_inputs: d.verification_inputs,
-      support_param: "PIE_NIVELADOR", support_category: "patas", support_group: ["APO", "Apoyos niveladores"] });
+      support_param: "PIE_NIVELADOR", support_category: "patas", support_group: ["APO", "Apoyos niveladores"],
+      top_iid: "ENC.BANDEJA", top_label: "Encimera" });
   }
   specs() { return this.def.params; }
   templates() { return this.def.templates; }
@@ -77,7 +78,7 @@ class MesaIndustrial {
     model.addSub("EST", "Estructura soldada", { welded: true, step: 1 });
     model.addSub(this.support_group[0], this.support_group[1], { explode: [0, 0, -160], step: 2 });
     if (d.shelf) model.addSub("BAL", "Balda inferior", { explode: [0, 0, 90], step: 3 });
-    model.addSub("ENC", "Encimera", { explode: [0, 0, 380], step: 4 });
+    model.addSub("ENC", this.top_label, { explode: [0, 0, 380], step: 4 });
     const { leg, rail, trv, bas, c, a } = d;
     const legs = {};
     const corners = { DI: [c + a / 2, c + a / 2], DD: [L - c - a / 2, c + a / 2], TI: [c + a / 2, W - c - a / 2], TD: [L - c - a / 2, W - c - a / 2] };
@@ -98,7 +99,7 @@ class MesaIndustrial {
       });
       ctx.feature("F12", "Bastidor superior", () => {
         ctx.uses("LONGITUD_LARGUERO", "LONGITUD_TRAVESANO_EXT", "LONGITUD_TRAVESANO_INT", "N_TRAVESANOS_INT", "PERFIL_LARGUERO",
-          "PERFIL_TRAVESANO", "COTA_BASTIDOR_SUP", "PASO_FIJACIONES", "ALA_ENCIMERA", "MATERIAL_ESTRUCTURAL", "ACABADO");
+          "PERFIL_TRAVESANO", "COTA_BASTIDOR_SUP", ...this._topFrameUses(), "MATERIAL_ESTRUCTURAL", "ACABADO");
         frameLevel(model, d, "SUP", d.z_tf, rail, trv, 0.0, d.n_top, legs, d.fix_top, weld, mat_s, fin);
       });
       if (d.shelf) ctx.feature("F13", "Bastidor inferior", () => {
@@ -121,13 +122,7 @@ class MesaIndustrial {
       ctx.uses(this.support_param, "LONGITUD", "ANCHURA", "RETRANQUEO", "PERFIL_PATA");
       feet(model, d, corners, cname, V[this.support_param], foot, this.support_group[0], (k) => this._supportPart(k, V));
     });
-    ctx.feature("F20", "Encimera de chapa plegada", () => {
-      ctx.uses("LONGITUD", "ANCHURA", "ALTURA", "ESP_ENC", "RADIO_ENC", "K_ENC", "ALA_ENCIMERA", "MATERIAL_CHAPA",
-        "PASO_FIJACIONES", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ACABADO", "PETO_TRASERO");
-      const spec = d.top_spec;
-      model.add("ENC.BANDEJA", "Encimera", sheetPart("encimera", `Encimera chapa ${g(spec.t)} mm`, spec, mat_c, fin), translation(0, 0, H), "ENC");
-      fasteners(model, d.fix_top, "ENC");
-    });
+    this._buildTop(model, ctx, d, H, mat_c, fin);
     if (d.shelf) ctx.feature("F30", "Balda inferior de chapa plegada", () => {
       ctx.uses("LONGITUD", "ANCHURA", "COTA_BALDA", "ESP_BAL", "ALA_BALDA", "MATERIAL_CHAPA", "PERFIL_PATA",
         "HOLGURA_ESCOTADURA", "PERFIL_BASTIDOR", "ACABADO");
@@ -139,11 +134,11 @@ class MesaIndustrial {
     model.structure = this._structure(model, d, legs);
     const peto = d.peto;
     const levels = d.shelf ? [["ALTURA_BALDA", "BAL.BANDEJA"]] : [];
-    if (peto > 0) levels.push(["ALTURA_ENCIMERA", "ENC.BANDEJA", H], ...this._petoLevel(d, H));     // altura de trabajo y peto en la cadena
+    if (peto > 0) levels.push(["ALTURA_ENCIMERA", this.top_iid, H], ...this._petoLevel(d, H));     // altura de trabajo y peto en la cadena
     model.dims = { LONGITUD: L, ANCHURA: W, ALTURA: H, ALTURA_BALDA: d.shelf ? d.z_shelf : null, LONGITUD_PATA: d.leg_len,
-      envelope: { ids: ["ENC.BANDEJA"], dx: L, dy: W, zmax: H + peto, names: ["LONGITUD", "ANCHURA"] },
+      envelope: { ids: [this.top_iid], dx: L, dy: W, zmax: H + peto, names: ["LONGITUD", "ANCHURA"] },
       levels,
-      load_text: `Carga distribuida de proyecto sobre encimera: ${V.CARGA_TOTAL ? pyStr(V.CARGA_TOTAL) + " kg" : "NO DEFINIDA"}` };
+      load_text: `Carga distribuida de proyecto sobre ${this.top_label.toLowerCase()}: ${V.CARGA_TOTAL ? pyStr(V.CARGA_TOTAL) + " kg" : "NO DEFINIDA"}` };
     if (peto > 0) {
       const zs = [0.0, ...(d.shelf ? [d.z_shelf] : []), H, H + peto];
       model.dims.ALTURA_ENCIMERA = H;
@@ -159,6 +154,18 @@ class MesaIndustrial {
   /** [rol, nombre, cota superior, taladros] de la pata de cada esquina. */
   _legDef(corner, d, leg) { return ["pata", "Pata", d.z_tf, []]; }
   _supportPart(corner, V) { return [standardPart("pie_nivelador", V[this.support_param]), "Pie nivelador"]; }
+  /** Parámetros de la superficie de trabajo que intervienen en el bastidor superior. */
+  _topFrameUses() { return ["PASO_FIJACIONES", "ALA_ENCIMERA"]; }
+  /** Superficie de trabajo: encimera de chapa plegada atornillada al bastidor superior. */
+  _buildTop(model, ctx, d, H, mat_c, fin) {
+    ctx.feature("F20", "Encimera de chapa plegada", () => {
+      ctx.uses("LONGITUD", "ANCHURA", "ALTURA", "ESP_ENC", "RADIO_ENC", "K_ENC", "ALA_ENCIMERA", "MATERIAL_CHAPA",
+        "PASO_FIJACIONES", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ACABADO", "PETO_TRASERO");
+      const spec = d.top_spec;
+      model.add("ENC.BANDEJA", "Encimera", sheetPart("encimera", `Encimera chapa ${g(spec.t)} mm`, spec, mat_c, fin), translation(0, 0, H), "ENC");
+      fasteners(model, d.fix_top, "ENC");
+    });
+  }
   /** Escotaduras de la encimera: [[nx, ny], esquinas] o null. */
   _topNotch(ctx, d) { return null; }
   _extras(model, ctx, d, legs, corners) {}
@@ -237,54 +244,73 @@ class MesaIndustrial {
         : { edge: e, height: ala, direction: "down", holes: fix_top.s[e].map((s) => [s, fix_top.h[e], hd]) })),
       ...(tn ? { notch: tn[0], notchCorners: tn[1] } : {}) });
       d.fix_top = fix_top;
-      if (shelf) {
-        const ts = ctx.derive("ESP_BAL", (p) => p.get("ESPESOR_BALDA"), "mm", "Espesor balda");
-        const rs = radius(ts), Ks = kf(rs, ts);
-        const z_s = ctx.derive("COTA_BALDA", (p) => p.get("ALTURA_BALDA"), "mm", "Cota cara superior de balda");
-        const g_s = ctx.derive("HOLGURA_BAL", (p) => (p.get("HOLGURA_ENCIMERA") === AUTO ? Math.max(rs, head_h) : p.get("HOLGURA_ENCIMERA")),
-          "mm", "Holgura bastidor–pestaña (balda)");
-        if (g_s < rs - 1e-9) model.note("error", "GEO-HOLGURA-RADIO-BAL", "Holgura menor que el radio de plegado de la balda.");
-        const e_sh = ts + g_s, z_lf = z_s - ts;
-        const notch = a + ctx.get("HOLGURA_ESCOTADURA");
-        const xb0 = c + e_sh + bas.B / 2, xb1 = L - c - e_sh - bas.B / 2;
-        let n_sh = ctx.get("NUMERO_TRAVESANOS_BALDA");
-        if (n_sh === AUTO) n_sh = Math.max(0, Math.ceil((xb1 - xb0) / ctx.get("SEPARACION_MAX_APOYOS")) - 1);
-        ctx.setDerived("N_TRAVESANOS_BALDA", n_sh, "ud", "Travesaños bajo balda", ["NUMERO_TRAVESANOS_BALDA", "LONGITUD"]);
-        if (e_sh + bas.B > a) model.note("error", "DFM-BASTIDOR-INF", "El bastidor inferior retranqueado no cabe en la sección de la pata.");
-        if (z_lf - bas.H < z_leg0 + 20) model.note("error", "GEO-BALDA-BAJA", "La balda está demasiado baja para el bastidor inferior.");
-        const ala_b = ctx.get("ALA_BALDA");
-        const hds = flangeHoleD(v.MATERIAL_CHAPA, ts, sc);
-        const fix_sh = fixLayout(model, L - 2 * c, W - 2 * c, 0.0, a, ts, rs + ts, ala_b, bas, bas, z_s, e_sh, hds, rn, pitch * 1.5, 1,
-          "balda", notch, c);
-        fix_sh.gap = g_s;
-        d.shelf_spec = makeSpec({ Lx: L - 2 * c, Ly: W - 2 * c, t: ts, r: rs, K: Ks, notch: [notch, notch],
-          flanges: EDGES.map((e) => ({ edge: e, height: ala_b, direction: "down", holes: fix_sh.s[e].map((s) => [s, fix_sh.h[e], hds]) })) });
-        Object.assign(d, { z_shelf: z_s, z_lf, e_shelf: e_sh, n_shelf: n_sh, xb: [xb0, xb1], fix_shelf: fix_sh });
-        if (z_s > d.z_tf - ctx.get("ALA_ENCIMERA") - 150) model.note("advertencia", "ERG-BALDA-ALTA", "Hueco libre entre balda y encimera inferior a 150 mm.");
-      }
+      d.skirt = ctx.get("ALA_ENCIMERA");
+      if (shelf) this._deriveShelf(ctx, model, d);
       if (H - ctx.get("ALA_ENCIMERA") < 600) model.note("advertencia", "ERG-ALTURA", "Altura libre bajo encimera inferior a 600 mm.");
-      d.footrest = null;
-      if (v.REPOSAPIES) {
-        const fp = C.profile(ctx.get("PERFIL_REPOSAPIES"));
-        const zr = ctx.derive("COTA_REPOSAPIES", (p) => p.get("ALTURA_REPOSAPIES"), "mm", "Cota superior del reposapiés");
-        d.footrest = { prof: fp, z: zr };
-        if (fp.B > a) model.note("error", "DFM-REPOSAPIES-ANCHO", `El perfil del reposapiés ${fp.code} es más ancho que la pata.`);
-        if (zr - fp.H < z_leg0 + 20) model.note("error", "GEO-REPOSAPIES-BAJO", `El reposapiés (${g(zr)} mm) queda demasiado bajo para soldarse a las patas por encima de la placa base.`);
-        if (shelf) {
-          const lo_s = d.z_shelf - Math.max(ctx.get("ALA_BALDA"), d.z_shelf - d.z_lf + bas.H);
-          const above = zr - fp.H >= d.z_shelf + 40, below = zr + FOOT_CLEARANCE <= lo_s;
-          if (!(above || below)) model.note("error", "GEO-REPOSAPIES-BALDA", `El reposapiés (${g(zr - fp.H)}–${g(zr)} mm) choca con la balda inferior o no deja `
-            + `${g(FOOT_CLEARANCE)} mm para el pie bajo ella (${g(lo_s)}–${g(d.z_shelf)} mm): cambie ALTURA_REPOSAPIES o ALTURA_BALDA.`);
-        }
-      }
+      this._deriveFootrest(ctx, model, d);
     });
     return d;
   }
 
+  /** Balda inferior de chapa plegada sobre su bastidor (dentro de la operación F00). */
+  _deriveShelf(ctx, model, d) {
+    const v = ctx.params.values;
+    const L = d.Lx, W = d.Ly, { c, a, bas, z_leg0 } = d;
+    const fam = C.material(v.MATERIAL_CHAPA).family;
+    const rmin = C.sheetData().press_brake.min_inner_radius_factor[fam] ?? 1.0;
+    const radius = (t) => (v.RADIO_PLEGADO !== AUTO ? v.RADIO_PLEGADO : pyRound(Math.max(t, rmin * t), 2));
+    const kf = (r, t) => (v.FACTOR_K !== AUTO ? v.FACTOR_K : pyRound(C.din6935K(r, t), 4));
+    const head_h = +C.component("TUERCA_REMACHABLE_M6").head_h;
+    const rn = C.component("TUERCA_REMACHABLE_M6"), sc = C.component("TORNILLO_ISO7380_M6x12");
+    const pitch = ctx.get("PASO_FIJACIONES");
+    const ts = ctx.derive("ESP_BAL", (p) => p.get("ESPESOR_BALDA"), "mm", "Espesor balda");
+    const rs = radius(ts), Ks = kf(rs, ts);
+    const z_s = ctx.derive("COTA_BALDA", (p) => p.get("ALTURA_BALDA"), "mm", "Cota cara superior de balda");
+    const g_s = ctx.derive("HOLGURA_BAL", (p) => (p.get("HOLGURA_ENCIMERA") === AUTO ? Math.max(rs, head_h) : p.get("HOLGURA_ENCIMERA")),
+      "mm", "Holgura bastidor–pestaña (balda)");
+    if (g_s < rs - 1e-9) model.note("error", "GEO-HOLGURA-RADIO-BAL", "Holgura menor que el radio de plegado de la balda.");
+    const e_sh = ts + g_s, z_lf = z_s - ts;
+    const notch = a + ctx.get("HOLGURA_ESCOTADURA");
+    const xb0 = c + e_sh + bas.B / 2, xb1 = L - c - e_sh - bas.B / 2;
+    let n_sh = ctx.get("NUMERO_TRAVESANOS_BALDA");
+    if (n_sh === AUTO) n_sh = Math.max(0, Math.ceil((xb1 - xb0) / ctx.get("SEPARACION_MAX_APOYOS")) - 1);
+    ctx.setDerived("N_TRAVESANOS_BALDA", n_sh, "ud", "Travesaños bajo balda", ["NUMERO_TRAVESANOS_BALDA", "LONGITUD"]);
+    if (e_sh + bas.B > a) model.note("error", "DFM-BASTIDOR-INF", "El bastidor inferior retranqueado no cabe en la sección de la pata.");
+    if (z_lf - bas.H < z_leg0 + 20) model.note("error", "GEO-BALDA-BAJA", "La balda está demasiado baja para el bastidor inferior.");
+    const ala_b = ctx.get("ALA_BALDA");
+    const hds = flangeHoleD(v.MATERIAL_CHAPA, ts, sc);
+    const fix_sh = fixLayout(model, L - 2 * c, W - 2 * c, 0.0, a, ts, rs + ts, ala_b, bas, bas, z_s, e_sh, hds, rn, pitch * 1.5, 1,
+      "balda", notch, c);
+    fix_sh.gap = g_s;
+    d.shelf_spec = makeSpec({ Lx: L - 2 * c, Ly: W - 2 * c, t: ts, r: rs, K: Ks, notch: [notch, notch],
+      flanges: EDGES.map((e) => ({ edge: e, height: ala_b, direction: "down", holes: fix_sh.s[e].map((s) => [s, fix_sh.h[e], hds]) })) });
+    Object.assign(d, { z_shelf: z_s, z_lf, e_shelf: e_sh, n_shelf: n_sh, xb: [xb0, xb1], fix_shelf: fix_sh });
+    if (z_s > d.z_tf - d.skirt - 150) model.note("advertencia", "ERG-BALDA-ALTA", "Hueco libre entre balda y encimera inferior a 150 mm.");
+  }
+  /** Reposapiés delantero entre patas (dentro de la operación F00). */
+  _deriveFootrest(ctx, model, d) {
+    const v = ctx.params.values;
+    const { a, z_leg0, shelf, bas } = d;
+    d.footrest = null;
+    if (v.REPOSAPIES) {
+      const fp = C.profile(ctx.get("PERFIL_REPOSAPIES"));
+      const zr = ctx.derive("COTA_REPOSAPIES", (p) => p.get("ALTURA_REPOSAPIES"), "mm", "Cota superior del reposapiés");
+      d.footrest = { prof: fp, z: zr };
+      if (fp.B > a) model.note("error", "DFM-REPOSAPIES-ANCHO", `El perfil del reposapiés ${fp.code} es más ancho que la pata.`);
+      if (zr - fp.H < z_leg0 + 20) model.note("error", "GEO-REPOSAPIES-BAJO", `El reposapiés (${g(zr)} mm) queda demasiado bajo para soldarse a las patas por encima de la placa base.`);
+      if (shelf) {
+        const lo_s = d.z_shelf - Math.max(ctx.get("ALA_BALDA"), d.z_shelf - d.z_lf + bas.H);
+        const above = zr - fp.H >= d.z_shelf + 40, below = zr + FOOT_CLEARANCE <= lo_s;
+        if (!(above || below)) model.note("error", "GEO-REPOSAPIES-BALDA", `El reposapiés (${g(zr - fp.H)}–${g(zr)} mm) choca con la balda inferior o no deja `
+          + `${g(FOOT_CLEARANCE)} mm para el pie bajo ella (${g(lo_s)}–${g(d.z_shelf)} mm): cambie ALTURA_REPOSAPIES o ALTURA_BALDA.`);
+      }
+    }
+  }
+
   _structure(model, d, legs) {
     const ps = model.params.values;
-    const surfaces = [{ id: "encimera", label: "Encimera", level: "SUP", load_param: "CARGA_TOTAL", sheet_instance: "ENC.BANDEJA",
-      area_mm2: ps.LONGITUD * ps.ANCHURA, count_param: "NUMERO_TRAVESANOS" }];
+    const surfaces = [{ id: "encimera", label: this.top_label, level: "SUP", load_param: "CARGA_TOTAL", sheet_instance: this.top_iid,
+      area_mm2: ps.LONGITUD * ps.ANCHURA, ...(d.top_surface ?? {}), count_param: "NUMERO_TRAVESANOS" }];
     if (d.shelf) surfaces.push({ id: "balda", label: "Balda inferior", level: "INF", load_param: "CARGA_BALDA", sheet_instance: "BAL.BANDEJA",
       area_mm2: (ps.LONGITUD - 2 * d.c) * (ps.ANCHURA - 2 * d.c), count_param: "NUMERO_TRAVESANOS_BALDA" });
     const point_loads = d.footrest ? [{ id: "F", member: "EST.REPOSAPIES", load_N: FOOTREST_LOAD_N, label: "Apoyo del pie en el centro del reposapiés",
@@ -1062,8 +1088,140 @@ class CarroEstanteria extends Estanteria {
   _extraDims(model, d) { if (d.z_asa != null) model.dims.ALTURA_ASA = d.z_asa; }
 }
 
+// ============================================================================ mesa de soldadura (port de mesa_soldadura.py)
+const HOLE_SYSTEMS = { D16_P50: [16.0, 50.0], D28_P100: [28.0, 100.0], ninguno: null };
+const MIN_PLATE_T = { D16_P50: 12.0, D28_P100: 15.0, ninguno: 10.0 };
+const PLATE_THICKNESSES = [10.0, 12.0, 15.0, 20.0];
+const PLATE_CORNER_R = 5.0, STITCH_L = 50.0, STITCH_PITCH = 250.0;
+/** Retícula centrada en la placa, con al menos medio paso de borde. */
+export function holeGrid(L, W, system) {
+  const sd = HOLE_SYSTEMS[system];
+  if (!sd) return [];
+  const [dh, p] = sd;
+  const nx = Math.floor((L - p) / p) + 1, ny = Math.floor((W - p) / p) + 1;
+  if (nx < 1 || ny < 1) return [];
+  const x0 = (L - (nx - 1) * p) / 2, y0 = (W - (ny - 1) * p) / 2;
+  const out = [];
+  for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) out.push([pyRound(x0 + i * p, 3), pyRound(y0 + j * p, 3), dh]);
+  return out;
+}
+class MesaSoldadura extends MesaIndustrial {
+  constructor() {
+    super("mesa_soldadura");
+    Object.assign(this, { top_iid: "ENC.PLACA", top_label: "Placa de soldadura" });
+  }
+  plateTargets(v) {
+    const out = [];
+    if (v.CARGA_TOTAL) {
+      const sd = HOLE_SYSTEMS[v.SISTEMA_TALADROS];
+      const avail = new Set(C.sheetThicknesses(v.MATERIAL_PLACA));
+      out.push({ surface: "encimera", t_param: "ESPESOR_PLACA", n_param: "NUMERO_TRAVESANOS", load_param: "CARGA_TOTAL", trv_param: "PERFIL_TRAVESANO",
+        min_t_by_use: false, mat_param: "MATERIAL_PLACA",
+        t_options: PLATE_THICKNESSES.filter((t) => avail.has(t) && t >= (MIN_PLATE_T[v.SISTEMA_TALADROS] ?? 10.0)),
+        t_max: sd ? Math.min(PLATE_THICKNESSES.at(-1), sd[0]) : PLATE_THICKNESSES.at(-1) });
+    }
+    if (v.CARGA_BALDA && (v.NUMERO_BALDAS ?? 0) >= 1) out.push({ surface: "balda", t_param: "ESPESOR_BALDA", n_param: "NUMERO_TRAVESANOS_BALDA",
+      load_param: "CARGA_BALDA", trv_param: "PERFIL_BASTIDOR", min_t_by_use: false });
+    return out;
+  }
+  sheetDefaultsWithoutLoad(v) {
+    const out = {};
+    if (!v.CARGA_TOTAL) out.ESPESOR_PLACA = Math.max(this.constructive_defaults.ESPESOR_PLACA, MIN_PLATE_T[v.SISTEMA_TALADROS] ?? 10.0);
+    if (!(v.CARGA_BALDA && (v.NUMERO_BALDAS ?? 0) >= 1)) out.ESPESOR_BALDA = this.constructive_defaults.ESPESOR_BALDA;
+    return out;
+  }
+  _derive(ctx, model) {
+    const v = ctx.params.values;
+    const d = {};
+    ctx.feature("F00", "Parámetros derivados y reglas constructivas", () => {
+      const t = ctx.derive("ESP_PLACA", (p) => p.get("ESPESOR_PLACA"), "mm", "Espesor de la placa");
+      const c = ctx.derive("RETRANQUEO", (p) => p.get("VUELO"), "mm", "Retranqueo de la estructura respecto al canto de la placa (vuelo)");
+      const leg = C.profile(ctx.get("PERFIL_PATA")), rail = C.profile(ctx.get("PERFIL_LARGUERO"));
+      const trv = C.profile(ctx.get("PERFIL_TRAVESANO")), bas = C.profile(ctx.get("PERFIL_BASTIDOR"));
+      if (leg.B !== leg.H) throw new Error("Las patas deben ser de tubo cuadrado");
+      const a = leg.B;
+      ctx.setDerived("SECCION_PATA", `${g(leg.B)}x${g(leg.H)}`, "mm", "Sección de pata", ["PERFIL_PATA"]);
+      ctx.setDerived("ESPESOR_PERFIL_PATA", leg.t, "mm", "Espesor de pata", ["PERFIL_PATA"]);
+      const foot = C.component(ctx.get(this.support_param));
+      const hn = +foot.nominal_height, tp = ctx.get("ESPESOR_PLACA_BASE");
+      const z_tf = ctx.derive("COTA_BASTIDOR_SUP", (p) => p.get("ALTURA") - p.get("ESP_PLACA"), "mm", "Cota cara superior del bastidor (apoyo de la placa)");
+      const sp = this.support_param;
+      const z_leg0 = ctx.derive("COTA_INICIO_PATA", (p) => +C.component(p.get(sp)).nominal_height + p.get("ESPESOR_PLACA_BASE"), "mm", "Cota inicio de pata");
+      const leg_len = ctx.derive("LONGITUD_PATA", (p) => p.get("COTA_BASTIDOR_SUP") - p.get("COTA_INICIO_PATA"), "mm", "Longitud de corte de pata");
+      const L = ctx.get("LONGITUD"), W = ctx.get("ANCHURA"), H = ctx.get("ALTURA");
+      ctx.derive("LONGITUD_LARGUERO", (p) => p.get("LONGITUD") - 2 * p.get("RETRANQUEO") - 2 * C.profile(p.get("PERFIL_PATA")).B, "mm", "Longitud de largueros");
+      ctx.derive("LONGITUD_TRAVESANO_EXT", (p) => p.get("ANCHURA") - 2 * p.get("RETRANQUEO") - 2 * C.profile(p.get("PERFIL_PATA")).B, "mm",
+        "Longitud de travesaños extremos");
+      ctx.derive("LONGITUD_TRAVESANO_INT", (p) => p.get("ANCHURA") - 2 * p.get("RETRANQUEO") - 2 * C.profile(p.get("PERFIL_LARGUERO")).B, "mm",
+        "Longitud de travesaños intermedios");
+      if (rail.B > a || trv.B > a) model.note("error", "DFM-ANCHO-BASTIDOR", "El ancho de largueros/travesaños supera el de la pata: "
+        + "no pueden enrasarse con la cara exterior.");
+      const xe0 = c + trv.B / 2, xe1 = L - c - trv.B / 2;
+      let n_top = ctx.get("NUMERO_TRAVESANOS");
+      if (n_top === AUTO) n_top = Math.max(0, Math.ceil((xe1 - xe0) / ctx.get("SEPARACION_MAX_APOYOS")) - 1);
+      ctx.setDerived("N_TRAVESANOS_INT", n_top, "ud", "Travesaños intermedios", ["NUMERO_TRAVESANOS", "SEPARACION_MAX_APOYOS", "LONGITUD"]);
+      ctx.setDerived("VANO_ENCIMERA", pyRound((xe1 - xe0) / (n_top + 1), 2), "mm", "Vano entre apoyos de la placa",
+        ["LONGITUD", "NUMERO_TRAVESANOS", "PERFIL_TRAVESANO", "RETRANQUEO"]);
+      const shelf = ctx.get("NUMERO_BALDAS") >= 1;
+      Object.assign(d, { Lx: L, Ly: W, leg, rail, trv, bas, a, c, t, hn, tp, z_tf, z_leg0, leg_len, n_top, xe: [xe0, xe1], shelf, peto: 0.0 });
+      // ---- placa y retícula de amarre
+      const system = v.SISTEMA_TALADROS;
+      const holes = holeGrid(L, W, system);
+      const sd = HOLE_SYSTEMS[system];
+      const eta = sd && holes.length ? (sd[1] - sd[0]) / sd[1] : 1.0;
+      ctx.setDerived("N_TALADROS_PLACA", holes.length, "ud", "Taladros de la retícula de amarre", ["SISTEMA_TALADROS", "LONGITUD", "ANCHURA"]);
+      ctx.setDerived("EFICIENCIA_LIGAMENTO", pyRound(eta, 4), null, "Eficiencia de ligamento de la placa (p − d)/p", ["SISTEMA_TALADROS"]);
+      d.plate = { holes, eta };
+      d.top_surface = eta < 1 ? { ligament_efficiency: eta } : {};
+      const t_min = MIN_PLATE_T[system];
+      if (t < t_min) model.note("advertencia", "DFM-PLACA-DELGADA", `Placa de ${g(t)} mm por debajo del mínimo constructivo de ${g(t_min)} mm para el sistema `
+        + `${system}: riesgo de deformación al soldar sobre ella.`);
+      if (c < 30) model.note("advertencia", "ERG-VUELO", "Vuelo de la placa inferior a 30 mm: poco espacio para mordazas.");
+      // sin fijaciones atornilladas: la placa se suelda al bastidor
+      d.fix_top = { s: Object.fromEntries(EDGES.map((e) => [e, []])), h: Object.fromEntries(EDGES.map((e) => [e, 0.0])), z_ref: H, t, inset: 0.0, offset: 0.0,
+        Lx: L, Ly: W, c, wall: Object.fromEntries(EDGES.map((e) => [e, (e === "y0" || e === "y1" ? rail : trv).t])), gap: 0.0 };
+      d.skirt = rail.H;
+      if (shelf) this._deriveShelf(ctx, model, d);
+      this._deriveFootrest(ctx, model, d);
+    });
+    return d;
+  }
+  _topFrameUses() { return ["ESPESOR_PLACA", "VUELO"]; }
+  _buildTop(model, ctx, d, H, mat_c, fin) {
+    const V = model.params.values, L = V.LONGITUD, W = V.ANCHURA, t = d.t;
+    ctx.feature("F20", "Placa de soldadura perforada", () => {
+      ctx.uses("LONGITUD", "ANCHURA", "ALTURA", "ESP_PLACA", "SISTEMA_TALADROS", "MATERIAL_PLACA", "VUELO");
+      const holes = d.plate.holes;
+      const desc = holes.length ? `, ${holes.length} taladros Ø${g(holes[0][2])}` : "";
+      const part = platePart("placa_soldadura", `Placa de soldadura ${g(t)} mm${desc}`, L, W, t, V.MATERIAL_PLACA, null, PLATE_CORNER_R, holes);
+      model.add(this.top_iid, "Placa de soldadura", part, translation(0, 0, H - t), "ENC");
+      // cordones discontinuos placa–bastidor en largueros y travesaños extremos
+      const lv = model.structure.levels.SUP;
+      for (const mid of [...lv.long, ...lv.end]) {
+        const inst = model.instance(mid);
+        const [p0, p1] = inst.axis;
+        const Lm = Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]);
+        const n = Math.max(2, Math.ceil(Lm / STITCH_PITCH));
+        const loc = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2 + inst.part.profile.H / 2];
+        const tmin = Math.min(t, inst.part.profile.t);
+        model.joint({ id: `J.PLACA_SOLD.${mid.split(".").slice(1).join(".")}`, kind: "soldadura", members: [this.top_iid, mid], location: loc,
+          description: "Placa de soldadura a bastidor", weld: { type: "fillet", a: weldA(tmin), all_around: false, process: "135 (MAG)",
+            length: pyRound(n * STITCH_L, 1), note: `${n} cordones de ${g(STITCH_L)} mm cada ${g(STITCH_PITCH)} mm, alternos` } });
+      }
+    });
+  }
+  _structure(model, d, legs) {
+    const st = super._structure(model, d, legs);
+    st.assembly_texts = {
+      ENC: `Colocar la placa sobre el bastidor superior con el vuelo indicado y soldarla con cordones discontinuos a${g(weldA(Math.min(d.t, d.rail.t)))} de `
+        + `${g(STITCH_L)} mm cada ${g(STITCH_PITCH)} mm, alternos para limitar la deformación. Proteger los taladros de las proyecciones. La placa no se `
+        + "pinta: se entrega aceitada." };
+    return st;
+  }
+}
+
 export const REGISTRY = { mesa_industrial: new MesaIndustrial(), estanteria: new Estanteria(), puesto_trabajo: new PuestoTrabajo("puesto_trabajo"),
-  carro_taller: new CarroTaller("carro_taller"), carro_estanteria: new CarroEstanteria() };
+  carro_taller: new CarroTaller("carro_taller"), carro_estanteria: new CarroEstanteria(), mesa_soldadura: new MesaSoldadura() };
 export function family(fid) {
   const f = REGISTRY[fid];
   if (!f) {

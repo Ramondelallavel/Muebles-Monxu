@@ -258,7 +258,8 @@ def plan_structure(d: Drawing, X: _Ctx):
     d.dim_h(x0, x1, yz, yz, yz + 9, hi[0] - lo[0], "EST_LONGITUD")
     _, yb = _P(a, "alzado", (0, 0, lo[2]))
     d.dim_v(yb, yz, a.ox, a.ox, a.ox - 9, hi[2] - lo[2], "EST_ALTURA")
-    lower = sorted((X.inst(lv[k]["long"][0]).bbox[1][2], k) for k in lv if k != "SUP")
+    # niveles inferiores del primer módulo (en batería, los demás módulos repiten las cotas: claves "_M<j>")
+    lower = sorted((X.inst(lv[k]["long"][0]).bbox[1][2], k) for k in lv if k != "SUP" and "_M" not in k)
     if len(lower) == 1:
         z, k = lower[0]
         _, yr = _P(a, "alzado", (0, 0, z))
@@ -495,8 +496,48 @@ def plan_flat(d: Drawing, X: _Ctx, part: SheetPart, number: str):
     ], width=370)
 
 
+def is_perforated_plate(p) -> bool:
+    """Pletina con retícula de taladros (placa de mesa de soldadura): plano propio acotado como patrón."""
+    return isinstance(p, PlatePart) and len(p.holes) > 12
+
+
+def plan_perforated_plate(d: Drawing, X: _Ctx, p: PlatePart, number: str):
+    region = (48, 100, 396, 262)
+    sc = next(((a, b) for a, b in SCALES if p.w * a / b <= region[2] - region[0] - 28
+               and p.h * a / b <= region[3] - region[1] - 30), SCALES[-1])
+    k = sc[0] / sc[1]
+    x, y = region[0] + 14, region[1] + 14
+    d.new_sheet(number, "Placa perforada: retícula de amarre", scale_label(sc), p.material)
+    poly = p.outline_2d()
+    d.polyline([(x + q[0] * k, y + q[1] * k) for q in poly.exterior.coords], LW_THICK)
+    d.c.setLineWidth(LW_THIN)
+    for hx, hy, hd in p.holes:
+        d.c.circle(x + hx * k, y + hy * k, hd / 2 * k)
+    xs, ys = sorted({h[0] for h in p.holes}), sorted({h[1] for h in p.holes})
+    dh = p.holes[0][2]
+    pitch = xs[1] - xs[0] if len(xs) > 1 else ys[1] - ys[0]
+    d.dim_h(x, x + p.w * k, y, y, y - 9, p.w, f"{p.ref}_W", "geometria_pieza")
+    d.dim_v(y, y + p.h * k, x, x, x - 9, p.h, f"{p.ref}_H", "geometria_pieza")
+    yt, xr = y + p.h * k, x + p.w * k
+    d.dim_h(x, x + xs[0] * k, yt, yt, yt + 8, xs[0], f"{p.ref}_RETICULA_X0", "geometria_pieza")
+    if len(xs) > 1:
+        d.dim_h(x + xs[0] * k, x + xs[-1] * k, yt, yt, yt + 16, xs[-1] - xs[0], None, "geometria_pieza",
+                prefix=f"{len(xs) - 1}×{fmt(pitch)} = ")
+    d.dim_v(y, y + ys[0] * k, xr, xr, xr + 8, ys[0], f"{p.ref}_RETICULA_Y0", "geometria_pieza")
+    if len(ys) > 1:
+        d.dim_v(y + ys[0] * k, y + ys[-1] * k, xr, xr, xr + 16, ys[-1] - ys[0], None, "geometria_pieza",
+                prefix=f"{len(ys) - 1}×{fmt(pitch)} = ")
+    d.notes(48, 90, [f"Pos. {p.pos} — {p.ref}: {p.name}",
+                     f"Material {catalog.material(p.material).name}, espesor {fmt(p.t)} mm, radio de esquina R{fmt(p.corner_r)}.",
+                     f"Taladros: {len(p.holes)} × Ø{fmt(dh)} pasantes en retícula {len(xs)} × {len(ys)} a paso {fmt(pitch)} mm, "
+                     f"centrada en la placa (primer taladro a {fmt(xs[0])} / {fmt(ys[0])} mm de los cantos).",
+                     "Corte por láser del contorno y de los taladros (diámetro no menor que el espesor). Posición de taladros y planitud "
+                     "tras soldar: según especificación del cliente (no verificadas por el cálculo).",
+                     f"Masa (desde el sólido): {p.mass:.2f} kg. Sin pintura: se entrega aceitada."], width=105)
+
+
 def plan_plates(d: Drawing, X: _Ctx, number: str):
-    plates = [p for p in X.m.parts.values() if isinstance(p, PlatePart)]
+    plates = [p for p in X.m.parts.values() if isinstance(p, PlatePart) and not is_perforated_plate(p)]
     if not plates:
         return
     d.new_sheet(number, "Pletinas cortadas por láser", "2:1", ", ".join(sorted({p.material for p in plates})))
@@ -695,8 +736,9 @@ def plan_bom(d: Drawing, X: _Ctx):
 def generate(model, plan, bom, eng, info, path: Path) -> dict[str, Any]:
     X = _Ctx(model, plan, bom, eng, info)
     sheets = [p for p in model.parts.values() if isinstance(p, SheetPart)]
-    plates = [p for p in model.parts.values() if isinstance(p, PlatePart)]
-    total = 2 + 1 + len(sheets) * 2 + (1 if plates else 0) + 4
+    plates = [p for p in model.parts.values() if isinstance(p, PlatePart) and not is_perforated_plate(p)]
+    perf = [p for p in model.parts.values() if is_perforated_plate(p)]
+    total = 2 + 1 + len(sheets) * 2 + (1 if plates else 0) + len(perf) + 4
     info = dict(info, total_sheets=total)
     d = Drawing(str(path), info)
     plan_general(d, X)
@@ -708,6 +750,8 @@ def generate(model, plan, bom, eng, info, path: Path) -> dict[str, Any]:
         plan_flat(d, X, p, f"04.{n}")
     if plates:
         plan_plates(d, X, f"04.{len(sheets) + 1}")
+    for n, p in enumerate(sorted(perf, key=lambda p: p.pos), start=1):
+        plan_perforated_plate(d, X, p, f"04.{len(sheets) + (1 if plates else 0) + n}")
     plan_welds(d, X)
     plan_exploded(d, X)
     plan_assembly(d, X)

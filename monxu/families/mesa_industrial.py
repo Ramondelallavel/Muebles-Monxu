@@ -92,6 +92,7 @@ class MesaIndustrial(ProductFamily):
     constructive_defaults = CONSTRUCTIVE_DEFAULTS
     leg_param = "PERFIL_PATA"
     frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR", "PERFIL_REPOSAPIES")
+    top_iid, top_label = "ENC.BANDEJA", "Encimera"          # instancia y subconjunto de la superficie de trabajo
     auto_in_construct = ("RADIO_PLEGADO", "FACTOR_K", "NUMERO_TRAVESANOS", "NUMERO_TRAVESANOS_BALDA", "HOLGURA_ENCIMERA")
     #: parámetro que elige el componente de apoyo (pie nivelador o rueda de espiga roscada)
     support_param = "PIE_NIVELADOR"
@@ -263,7 +264,7 @@ class MesaIndustrial(ProductFamily):
         model.add_subassembly(self.support_group[0], self.support_group[1], explode=(0, 0, -160), step=2)
         if d["shelf"]:
             model.add_subassembly("BAL", "Balda inferior", explode=(0, 0, 90), step=3)
-        model.add_subassembly("ENC", "Encimera", explode=(0, 0, 380), step=4)
+        model.add_subassembly("ENC", self.top_label, explode=(0, 0, 380), step=4)
 
         leg, rail, trv, bas = d["leg"], d["rail"], d["trv"], d["bas"]
         c, a = d["c"], d["a"]
@@ -318,7 +319,7 @@ class MesaIndustrial(ProductFamily):
 
             with ctx.feature("F12", "Bastidor superior"):
                 ctx.uses("LONGITUD_LARGUERO", "LONGITUD_TRAVESANO_EXT", "LONGITUD_TRAVESANO_INT", "N_TRAVESANOS_INT",
-                         "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "COTA_BASTIDOR_SUP", "PASO_FIJACIONES", "ALA_ENCIMERA",
+                         "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "COTA_BASTIDOR_SUP", *self._top_frame_uses(),
                          "MATERIAL_ESTRUCTURAL", "ACABADO")
                 self._frame_level(model, d, ctx, level="SUP", z_top=d["z_tf"], prof_long=rail, prof_end=trv,
                                   inset=0.0, n_int=d["n_top"], legs=legs, fixings=d["fix_top"], weld=weld,
@@ -343,13 +344,7 @@ class MesaIndustrial(ProductFamily):
                                                        f"{foot['thread']} en tuerca soldada"))
 
         # ---------------------------------------------------------------- chapas
-        with ctx.feature("F20", "Encimera de chapa plegada"):
-            ctx.uses("LONGITUD", "ANCHURA", "ALTURA", "ESP_ENC", "RADIO_ENC", "K_ENC", "ALA_ENCIMERA", "MATERIAL_CHAPA",
-                     "PASO_FIJACIONES", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ACABADO", "PETO_TRASERO")
-            spec = d["top_spec"]
-            tray = SheetPart("encimera", f"Encimera chapa {spec.t:g} mm", spec, mat_c, fin)
-            model.add("ENC.BANDEJA", "Encimera", tray, G.translation(0, 0, H), "ENC")
-            self._fasteners(model, d["fix_top"], "ENC", rn, sc, ctx)
+        self._build_top(model, ctx, d, H, mat_c, fin, rn, sc)
         if d["shelf"]:
             with ctx.feature("F30", "Balda inferior de chapa plegada"):
                 ctx.uses("LONGITUD", "ANCHURA", "COTA_BALDA", "ESP_BAL", "ALA_BALDA", "MATERIAL_CHAPA", "PERFIL_PATA",
@@ -378,12 +373,12 @@ class MesaIndustrial(ProductFamily):
         peto = d["peto"]
         levels = [("ALTURA_BALDA", "BAL.BANDEJA")] if d["shelf"] else []
         if peto > 0:      # el peto sobresale: la altura de trabajo y el peto se acotan en la cadena de niveles
-            levels += [("ALTURA_ENCIMERA", "ENC.BANDEJA", H)] + self._peto_level(d, H)
+            levels += [("ALTURA_ENCIMERA", self.top_iid, H)] + self._peto_level(d, H)
         model.dims = {"LONGITUD": L, "ANCHURA": W, "ALTURA": H, "ALTURA_BALDA": d["z_shelf"] if d["shelf"] else None,
                       "LONGITUD_PATA": d["leg_len"],
-                      "envelope": {"ids": ["ENC.BANDEJA"], "dx": L, "dy": W, "zmax": H + peto, "names": ("LONGITUD", "ANCHURA")},
+                      "envelope": {"ids": [self.top_iid], "dx": L, "dy": W, "zmax": H + peto, "names": ("LONGITUD", "ANCHURA")},
                       "levels": levels,
-                      "load_text": f"Carga distribuida de proyecto sobre encimera: "
+                      "load_text": f"Carga distribuida de proyecto sobre {self.top_label.lower()}: "
                                    f"{(str(ps.values['CARGA_TOTAL']) + ' kg') if ps.values.get('CARGA_TOTAL') else 'NO DEFINIDA'}"}
         if peto > 0:
             zs = [0.0] + ([d["z_shelf"]] if d["shelf"] else []) + [H, H + peto]
@@ -403,6 +398,20 @@ class MesaIndustrial(ProductFamily):
 
     def _support_part(self, corner: str, ps: ParameterSet):
         return StandardPart("pie_nivelador", ps.values[self.support_param]), "Pie nivelador"
+
+    def _top_frame_uses(self) -> tuple:
+        """Parámetros de la superficie de trabajo que intervienen en el bastidor superior."""
+        return ("PASO_FIJACIONES", "ALA_ENCIMERA")
+
+    def _build_top(self, model, ctx, d, H, mat_c, fin, rn, sc) -> None:
+        """Superficie de trabajo: encimera de chapa plegada atornillada al bastidor superior."""
+        with ctx.feature("F20", "Encimera de chapa plegada"):
+            ctx.uses("LONGITUD", "ANCHURA", "ALTURA", "ESP_ENC", "RADIO_ENC", "K_ENC", "ALA_ENCIMERA", "MATERIAL_CHAPA",
+                     "PASO_FIJACIONES", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ACABADO", "PETO_TRASERO")
+            spec = d["top_spec"]
+            tray = SheetPart("encimera", f"Encimera chapa {spec.t:g} mm", spec, mat_c, fin)
+            model.add("ENC.BANDEJA", "Encimera", tray, G.translation(0, 0, H), "ENC")
+            self._fasteners(model, d["fix_top"], "ENC", rn, sc, ctx)
 
     def _top_notch(self, ctx: ParamContext, d: dict):
         """Escotaduras de la encimera: ((nx, ny), esquinas) o None."""
@@ -539,64 +548,90 @@ class MesaIndustrial(ProductFamily):
             d["fix_top"] = fix_top
 
             # ---- balda
+            d["skirt"] = ctx["ALA_ENCIMERA"]
             if shelf:
-                ts = ctx.derive("ESP_BAL", lambda p: p["ESPESOR_BALDA"], "mm", "Espesor balda")
-                rs = radius(ts)
-                Ks = kf(rs, ts)
-                z_s = ctx.derive("COTA_BALDA", lambda p: p["ALTURA_BALDA"], "mm", "Cota cara superior de balda")
-                g_s = ctx.derive("HOLGURA_BAL", lambda p: max(rs, head_h) if p["HOLGURA_ENCIMERA"] == AUTO
-                                 else p["HOLGURA_ENCIMERA"], "mm", "Holgura bastidor–pestaña (balda)")
-                if g_s < rs - 1e-9:
-                    model.note("error", "GEO-HOLGURA-RADIO-BAL", "Holgura menor que el radio de plegado de la balda.")
-                e_sh = ts + g_s
-                z_lf = z_s - ts
-                notch = a + ctx["HOLGURA_ESCOTADURA"]
-                xb0, xb1 = c + e_sh + bas.B / 2, L - c - e_sh - bas.B / 2
-                n_sh = ctx["NUMERO_TRAVESANOS_BALDA"]
-                if n_sh == AUTO:
-                    n_sh = max(0, math.ceil((xb1 - xb0) / ctx["SEPARACION_MAX_APOYOS"]) - 1)
-                ctx.set_derived("N_TRAVESANOS_BALDA", n_sh, "ud", "Travesaños bajo balda",
-                                ["NUMERO_TRAVESANOS_BALDA", "LONGITUD"])
-                if e_sh + bas.B > a:
-                    model.note("error", "DFM-BASTIDOR-INF", "El bastidor inferior retranqueado no cabe en la sección de la pata.")
-                if z_lf - bas.H < z_leg0 + 20:
-                    model.note("error", "GEO-BALDA-BAJA", "La balda está demasiado baja para el bastidor inferior.")
-                ala_b = ctx["ALA_BALDA"]
-                fix_sh = self._fix_layout(model, ctx, L - 2 * c, W - 2 * c, 0.0, a, ts, rs + ts, ala_b, bas, bas,
-                                          z_ref=z_s, inset=e_sh, hole_d=flange_hole_d(v["MATERIAL_CHAPA"], ts, sc), rn=rn, pitch=pitch * 1.5,
-                                          short_min=1, tag="balda", notch=notch, offset=c)
-                fix_sh["gap"] = g_s
-                flanges = []
-                for e in EDGES:
-                    holes = tuple((s, fix_sh["h"][e], flange_hole_d(v["MATERIAL_CHAPA"], ts, sc)) for s in fix_sh["s"][e])
-                    flanges.append(FlangeSpec(e, ala_b, "down", holes))
-                d["shelf_spec"] = SheetMetalSpec(L - 2 * c, W - 2 * c, ts, rs, Ks, tuple(flanges), notch=(notch, notch))
-                d.update(z_shelf=z_s, z_lf=z_lf, e_shelf=e_sh, n_shelf=n_sh, xb=(xb0, xb1), fix_shelf=fix_sh)
-                if z_s > d["z_tf"] - ctx["ALA_ENCIMERA"] - 150:
-                    model.note("advertencia", "ERG-BALDA-ALTA", "Hueco libre entre balda y encimera inferior a 150 mm.")
+                self._derive_shelf(ctx, model, d)
             if H - ctx["ALA_ENCIMERA"] < 600:
                 model.note("advertencia", "ERG-ALTURA", "Altura libre bajo encimera inferior a 600 mm.")
-            d["footrest"] = None
-            if v.get("REPOSAPIES"):
-                fp = catalog.profile(ctx["PERFIL_REPOSAPIES"])
-                zr = ctx.derive("COTA_REPOSAPIES", lambda p: p["ALTURA_REPOSAPIES"], "mm", "Cota superior del reposapiés")
-                d["footrest"] = {"prof": fp, "z": zr}
-                if fp.B > a:
-                    model.note("error", "DFM-REPOSAPIES-ANCHO", f"El perfil del reposapiés {fp.code} es más ancho que "
-                               "la pata.")
-                if zr - fp.H < z_leg0 + 20:
-                    model.note("error", "GEO-REPOSAPIES-BAJO", f"El reposapiés ({zr:g} mm) queda demasiado bajo para "
-                               "soldarse a las patas por encima de la placa base.")
-                if shelf:
-                    lo_s = d["z_shelf"] - max(ctx["ALA_BALDA"], d["z_shelf"] - d["z_lf"] + bas.H)
-                    above = zr - fp.H >= d["z_shelf"] + 40
-                    below = zr + FOOT_CLEARANCE <= lo_s
-                    if not (above or below):
-                        model.note("error", "GEO-REPOSAPIES-BALDA",
-                                   f"El reposapiés ({zr - fp.H:g}–{zr:g} mm) choca con la balda inferior o no deja "
-                                   f"{FOOT_CLEARANCE:g} mm para el pie bajo ella ({lo_s:g}–{d['z_shelf']:g} mm): cambie "
-                                   "ALTURA_REPOSAPIES o ALTURA_BALDA.")
+            self._derive_footrest(ctx, model, d)
         return d
+
+    def _derive_shelf(self, ctx: ParamContext, model: ProductModel, d: dict) -> None:
+        """Balda inferior de chapa plegada sobre su bastidor (dentro de la operación F00)."""
+        v = ctx.params.values
+        L, W, c, a, bas, z_leg0 = d["Lx"], d["Ly"], d["c"], d["a"], d["bas"], d["z_leg0"]
+        fam = catalog.material(v["MATERIAL_CHAPA"]).family
+        rmin = catalog.sheet_data()["press_brake"]["min_inner_radius_factor"].get(fam, 1.0)
+
+        def radius(t):
+            return v["RADIO_PLEGADO"] if v["RADIO_PLEGADO"] != AUTO else round(max(t, rmin * t), 2)
+
+        def kf(r, t):
+            return v["FACTOR_K"] if v["FACTOR_K"] != AUTO else round(catalog.din6935_k_factor(r, t), 4)
+
+        head_h = float(catalog.component("TUERCA_REMACHABLE_M6")["head_h"])
+        rn = catalog.component("TUERCA_REMACHABLE_M6")
+        sc = catalog.component("TORNILLO_ISO7380_M6x12")
+        pitch = ctx["PASO_FIJACIONES"]
+        ts = ctx.derive("ESP_BAL", lambda p: p["ESPESOR_BALDA"], "mm", "Espesor balda")
+        rs = radius(ts)
+        Ks = kf(rs, ts)
+        z_s = ctx.derive("COTA_BALDA", lambda p: p["ALTURA_BALDA"], "mm", "Cota cara superior de balda")
+        g_s = ctx.derive("HOLGURA_BAL", lambda p: max(rs, head_h) if p["HOLGURA_ENCIMERA"] == AUTO
+                         else p["HOLGURA_ENCIMERA"], "mm", "Holgura bastidor–pestaña (balda)")
+        if g_s < rs - 1e-9:
+            model.note("error", "GEO-HOLGURA-RADIO-BAL", "Holgura menor que el radio de plegado de la balda.")
+        e_sh = ts + g_s
+        z_lf = z_s - ts
+        notch = a + ctx["HOLGURA_ESCOTADURA"]
+        xb0, xb1 = c + e_sh + bas.B / 2, L - c - e_sh - bas.B / 2
+        n_sh = ctx["NUMERO_TRAVESANOS_BALDA"]
+        if n_sh == AUTO:
+            n_sh = max(0, math.ceil((xb1 - xb0) / ctx["SEPARACION_MAX_APOYOS"]) - 1)
+        ctx.set_derived("N_TRAVESANOS_BALDA", n_sh, "ud", "Travesaños bajo balda",
+                        ["NUMERO_TRAVESANOS_BALDA", "LONGITUD"])
+        if e_sh + bas.B > a:
+            model.note("error", "DFM-BASTIDOR-INF", "El bastidor inferior retranqueado no cabe en la sección de la pata.")
+        if z_lf - bas.H < z_leg0 + 20:
+            model.note("error", "GEO-BALDA-BAJA", "La balda está demasiado baja para el bastidor inferior.")
+        ala_b = ctx["ALA_BALDA"]
+        fix_sh = self._fix_layout(model, ctx, L - 2 * c, W - 2 * c, 0.0, a, ts, rs + ts, ala_b, bas, bas,
+                                  z_ref=z_s, inset=e_sh, hole_d=flange_hole_d(v["MATERIAL_CHAPA"], ts, sc), rn=rn, pitch=pitch * 1.5,
+                                  short_min=1, tag="balda", notch=notch, offset=c)
+        fix_sh["gap"] = g_s
+        flanges = []
+        for e in EDGES:
+            holes = tuple((s, fix_sh["h"][e], flange_hole_d(v["MATERIAL_CHAPA"], ts, sc)) for s in fix_sh["s"][e])
+            flanges.append(FlangeSpec(e, ala_b, "down", holes))
+        d["shelf_spec"] = SheetMetalSpec(L - 2 * c, W - 2 * c, ts, rs, Ks, tuple(flanges), notch=(notch, notch))
+        d.update(z_shelf=z_s, z_lf=z_lf, e_shelf=e_sh, n_shelf=n_sh, xb=(xb0, xb1), fix_shelf=fix_sh)
+        if z_s > d["z_tf"] - d["skirt"] - 150:
+            model.note("advertencia", "ERG-BALDA-ALTA", "Hueco libre entre balda y encimera inferior a 150 mm.")
+
+    def _derive_footrest(self, ctx: ParamContext, model: ProductModel, d: dict) -> None:
+        """Reposapiés delantero entre patas (dentro de la operación F00)."""
+        v = ctx.params.values
+        a, z_leg0, shelf, bas = d["a"], d["z_leg0"], d["shelf"], d["bas"]
+        d["footrest"] = None
+        if v.get("REPOSAPIES"):
+            fp = catalog.profile(ctx["PERFIL_REPOSAPIES"])
+            zr = ctx.derive("COTA_REPOSAPIES", lambda p: p["ALTURA_REPOSAPIES"], "mm", "Cota superior del reposapiés")
+            d["footrest"] = {"prof": fp, "z": zr}
+            if fp.B > a:
+                model.note("error", "DFM-REPOSAPIES-ANCHO", f"El perfil del reposapiés {fp.code} es más ancho que "
+                           "la pata.")
+            if zr - fp.H < z_leg0 + 20:
+                model.note("error", "GEO-REPOSAPIES-BAJO", f"El reposapiés ({zr:g} mm) queda demasiado bajo para "
+                           "soldarse a las patas por encima de la placa base.")
+            if shelf:
+                lo_s = d["z_shelf"] - max(ctx["ALA_BALDA"], d["z_shelf"] - d["z_lf"] + bas.H)
+                above = zr - fp.H >= d["z_shelf"] + 40
+                below = zr + FOOT_CLEARANCE <= lo_s
+                if not (above or below):
+                    model.note("error", "GEO-REPOSAPIES-BALDA",
+                               f"El reposapiés ({zr - fp.H:g}–{zr:g} mm) choca con la balda inferior o no deja "
+                               f"{FOOT_CLEARANCE:g} mm para el pie bajo ella ({lo_s:g}–{d['z_shelf']:g} mm): cambie "
+                               "ALTURA_REPOSAPIES o ALTURA_BALDA.")
 
     def _fix_layout(self, model, ctx, Lx, Ly, c, a, t, R, ala, prof_long, prof_end, z_ref, inset, hole_d, rn,
                     pitch, short_min, tag, notch=0.0, offset=0.0, ranges=None, profs=None):
@@ -763,8 +798,8 @@ class MesaIndustrial(ProductFamily):
     def _structure(self, model, d, legs):
         ps = model.params.values
         lv = model.structure.get("levels", {})
-        surfaces = [{"id": "encimera", "label": "Encimera", "level": "SUP", "load_param": "CARGA_TOTAL",
-                     "sheet_instance": "ENC.BANDEJA", "area_mm2": ps["LONGITUD"] * ps["ANCHURA"],
+        surfaces = [{"id": "encimera", "label": self.top_label, "level": "SUP", "load_param": "CARGA_TOTAL",
+                     "sheet_instance": self.top_iid, "area_mm2": ps["LONGITUD"] * ps["ANCHURA"], **d.get("top_surface", {}),
                      "count_param": "NUMERO_TRAVESANOS"}]
         if d["shelf"]:
             surfaces.append({"id": "balda", "label": "Balda inferior", "level": "INF", "load_param": "CARGA_BALDA",

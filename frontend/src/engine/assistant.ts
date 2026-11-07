@@ -10,6 +10,7 @@ const NUM_WORDS = { un: 1, una: 1, uno: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5,
 const NUM = String.raw`(\d{1,3}(?:[.\s]\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)`;
 const UNIT = String.raw`(?:(mm|milimetros?|cm|centimetros?|m|metros?)\b)`;
 const FAMILY_KEYWORDS = [
+  ["mesa_soldadura", /mesas? de sold|mesas? para soldar|bancos? de soldadura|mesas? de calderer|mesas? de amarre/],
   ["puesto_trabajo", /puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion|embalaje)/],
   ["carro_estanteria", /carros? (estanteria|de (baldas|bandejas|picking|estantes))|carros? de \d+ (niveles|baldas|bandejas|estantes)|estanterias? (con ruedas|movil|movible|rodante|sobre ruedas)/],
   ["carro_taller", /\bcarros?\b|\bcarritos?\b|carro de (taller|transporte)/],
@@ -19,7 +20,7 @@ const FAMILY_KEYWORDS = [
 ];
 /** Accesorios que sí implementa una familia (no se marcan como no soportados) y parámetro que activan. */
 const SUPPORTED_BY = { "puesto_trabajo|panel_trasero": ["PANEL_HERRAMIENTAS", 1], "carro_taller|ruedas": null, "carro_estanteria|ruedas": null };
-export const MESA_LIKE = ["mesa_industrial", "puesto_trabajo", "carro_taller"];
+export const MESA_LIKE = ["mesa_industrial", "puesto_trabajo", "carro_taller", "mesa_soldadura"];
 export const SHELF_LIKE = ["estanteria", "carro_estanteria"];
 const UNSUPPORTED = [
   ["cajones", "cajon|cajonera", "Cajones / cajonera"],
@@ -32,8 +33,9 @@ const UNSUPPORTED = [
   ["regulable", "regulable en altura|altura regulable", "Regulación de altura"],
 ];
 export const LABELS = { mesa_industrial: "Mesa industrial", estanteria: "Estantería industrial", puesto_trabajo: "Puesto de trabajo industrial",
-  carro_taller: "Carro de taller", carro_estanteria: "Carro estantería", armario: "Armario / mobiliario auxiliar" };
-const DIM_PROPOSAL = { mesa_industrial: [1800.0, 800.0, 900.0], puesto_trabajo: [1500.0, 750.0, 900.0], carro_taller: [1000.0, 600.0, 900.0] };
+  carro_taller: "Carro de taller", carro_estanteria: "Carro estantería", mesa_soldadura: "Mesa de soldadura", armario: "Armario / mobiliario auxiliar" };
+const DIM_PROPOSAL = { mesa_industrial: [1800.0, 800.0, 900.0], puesto_trabajo: [1500.0, 750.0, 900.0], carro_taller: [1000.0, 600.0, 900.0],
+  mesa_soldadura: [1500.0, 1000.0, 850.0] };
 export const STRUCTURAL_KEYS = ["PROFUNDIDAD", "NUMERO_NIVELES", "CARGA_POR_NIVEL", "ALTURA_PRIMER_NIVEL", "DISTANCIA_BALDAS", "PERFIL_MONTANTE",
   "LONGITUD", "ANCHURA", "ALTURA", "CARGA_TOTAL", "CARGA_BALDA", "CARGA_PUNTUAL", "CARGA_HORIZONTAL", "MATERIAL_ESTRUCTURAL", "MATERIAL_CHAPA",
   "ACABADO", "ESPESOR_CHAPA", "NUMERO_BALDAS", "ALTURA_BALDA", "USO", "FRECUENCIA", "ENTORNO", "ANCLAJE", "TIPO_SUELO", "TIPO_APOYO", "PERFIL_PATA"];
@@ -101,7 +103,8 @@ export function parse(text, pending = null) {
     const s = mm.index, e = mm.index + mm[0].length;
     const ctx = t.slice(Math.max(0, s - 60), e + 60), after = t.slice(e, e + 40), before = t.slice(Math.max(0, s - 40), s);
     if (/por nivel|cada nivel|por balda|cada balda|por estante/.test(ctx)) it.set("CARGA_POR_NIVEL", val, mm[0] + " por nivel");
-    else if (/puntual|concentrada/.test(ctx)) it.set("CARGA_PUNTUAL", val, ctx);
+    else if (/^\s*(?:de\s+)?(?:carga\s+)?(?:puntual|concentrada)/.test(after) || /(?:puntual|concentrada)\s*(?:de|:|=)?\s*$/.test(before))
+      it.set("CARGA_PUNTUAL", val, ctx);     // pegado al valor
     else if (/balda|estante inferior/.test(after) || /balda/.test(before)) it.set("CARGA_BALDA", val, ctx);
     else if (pending && ["CARGA_BALDA", "CARGA_PUNTUAL", "CARGA_TOTAL"].includes(pending[0]) && !/distribuid|encimera/.test(ctx)) it.set(pending[0], val, mm[0]);
     else {
@@ -173,9 +176,20 @@ export function parse(text, pending = null) {
     else if (/dos asas|doble asa|asas? en (ambos|los dos) (extremos|lados)|asa en cada (extremo|lado)/.test(t)) it.set("ASA_EMPUJE", "dos_extremos", "asa en los dos extremos");
     else if (/\basa\b/.test(t)) it.set("ASA_EMPUJE", "un_extremo", "asa de empuje");
   }
+  if (it.family === "mesa_soldadura") {
+    if (/sistema\s*28|\bd\s*28\b|ø\s*28|taladros? de 28/.test(t)) it.set("SISTEMA_TALADROS", "D28_P100", "sistema 28");
+    else if (/sistema\s*16|\bd\s*16\b|ø\s*16|taladros? de 16/.test(t)) it.set("SISTEMA_TALADROS", "D16_P50", "sistema 16");
+    else if (/sin taladros|placa lisa|sin perforar/.test(t)) it.set("SISTEMA_TALADROS", "ninguno", "placa sin taladros");
+    let mm = t.match(R(String.raw`(?:placa|chapa) (?:de\s+)?${NUM}\s*mm|${NUM}\s*mm de (?:placa|espesor)`));
+    if (mm) it.set("ESPESOR_PLACA", toNumber(mm[1] || mm[2]), mm[0]);
+    delete it.values.ESPESOR_CHAPA; delete it.evidence.ESPESOR_CHAPA;     // en esta familia el espesor es el de la placa
+    mm = t.match(R(String.raw`vuelo (?:de\s+)?${NUM}\s*${UNIT}?`));
+    if (mm) it.set("VUELO", toMm(toNumber(mm[1]), mm[2]), mm[0]);
+  }
   if (MESA_LIKE.includes(it.family)) {
     const PETO = "peto|tope trasero|reborde trasero";
-    if (R(`sin (${PETO})`).test(t)) it.set("PETO_TRASERO", 0.0, "sin peto");
+    if (it.family === "mesa_soldadura") { /* sin peto en la placa de soldadura */ }
+    else if (R(`sin (${PETO})`).test(t)) it.set("PETO_TRASERO", 0.0, "sin peto");
     else {
       const mm = t.match(R(String.raw`(?:${PETO})(?: trasero)?\s*(?:de|:|=)?\s*${NUM}\s*${UNIT}?`)) ?? t.match(R(String.raw`${NUM}\s*${UNIT}?\s*de (?:${PETO})`));
       if (mm) it.set("PETO_TRASERO", toMm(toNumber(mm[1]), mm[2]), mm[0]);
@@ -231,7 +245,7 @@ export function missingData(family, values, asked = new Set()) {
     if (!(p in values)) q.push(Q(p, `¿Qué ${lbl} necesita (mm)?`, "Dimensión principal necesaria para generar la geometría.", [], "generacion", prop));
   if (values.CARGA_TOTAL == null) q.push(Q("CARGA_TOTAL", "¿Qué carga debe soportar la encimera (kg) y está distribuida o concentrada?",
     "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.", [{ label: "150 kg", value: 150 }, { label: "300 kg", value: 300 }, { label: "500 kg", value: 500 }]));
-  if ((values.NUMERO_BALDAS ?? 1) >= 1 && values.CARGA_BALDA == null && !asked.has("CARGA_BALDA")) q.push(Q("CARGA_BALDA",
+  if ((values.NUMERO_BALDAS ?? (family === "mesa_soldadura" ? 0 : 1)) >= 1 && values.CARGA_BALDA == null && !asked.has("CARGA_BALDA")) q.push(Q("CARGA_BALDA",
     "¿Qué carga soportará la balda inferior (kg)? ¿La carga indicada para la encimera incluye la de la balda?", "La balda se dimensiona y verifica de forma independiente.",
     [{ label: "Sin carga", value: 0 }, { label: "100 kg", value: 100 }, { label: "200 kg", value: 200 }]));
   if (!("MATERIAL_ESTRUCTURAL" in values) && !asked.has("MATERIAL_ESTRUCTURAL")) q.push(Q("MATERIAL_ESTRUCTURAL", "¿Material y acabado? Propuesta: acero S235 con pintura en polvo RAL 7035.",
@@ -290,9 +304,10 @@ export function proposalFor(family, values) {
   if (!MESA_LIKE.includes(family)) return {};
   const p = {};
   ["LONGITUD", "ANCHURA", "ALTURA"].forEach((k, i) => { if (!(k in values)) p[k] = DIM_PROPOSAL[family][i]; });
-  if (!("NUMERO_BALDAS" in p)) p.NUMERO_BALDAS = values.NUMERO_BALDAS ?? 1;
+  if (!("NUMERO_BALDAS" in p)) p.NUMERO_BALDAS = values.NUMERO_BALDAS ?? (family === "mesa_soldadura" ? 0 : 1);
   const haveLoad = values.CARGA_TOTAL != null;
-  for (const k of ["PERFIL_PATA", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR", "ESPESOR_CHAPA"]) if (!(k in values)) p[k] = haveLoad ? "auto" : null;
+  for (const k of ["PERFIL_PATA", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR", family === "mesa_soldadura" ? "ESPESOR_PLACA" : "ESPESOR_CHAPA"])
+    if (!(k in values)) p[k] = haveLoad ? "auto" : null;
   if (values.CARGA_BALDA && !("ESPESOR_BALDA" in p)) p.ESPESOR_BALDA = "auto";
   if (family === "puesto_trabajo") {
     if (!("PERFIL_ALTILLO" in values)) p.PERFIL_ALTILLO = haveLoad ? "auto" : null;

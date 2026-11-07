@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from .. import catalog
 from ..core.params import AUTO, ParameterSet
-from .analysis import analyze
+from .analysis import analyze, surface_sheet
 from .plate import navier
 
 G_ACC = 9.81
@@ -24,12 +24,13 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
     gG, gQ = crit["partial_factors"]["gamma_G"], crit["partial_factors"]["gamma_Q"]
     dl = crit["deflection_limits"]["panel_span_ratio"]
     surface, t_param, n_param = tgt["surface"], tgt["t_param"], tgt["n_param"]
-    mat = catalog.material(ps.values["MATERIAL_CHAPA"])
+    mat = catalog.material(ps.values[tgt.get("mat_param", "MATERIAL_CHAPA")])
     load = ps.values[tgt["load_param"]]
     t_min = crit["min_sheet_thickness_by_use_mm"].get(ps.values.get("USO", "montaje"), 1.5) \
         if tgt.get("min_t_by_use") else 1.0
     t_max = 6.0                     # chapa de encimera/bandeja razonable para plegar y manipular
-    t_opts = [t for t in catalog.sheet_thicknesses(mat.code) if t_min <= t <= t_max] if auto_t else [ps.values[t_param]]
+    t_opts = [t for t in (tgt.get("t_options") or catalog.sheet_thicknesses(mat.code)) if t_min <= t <= tgt.get("t_max", t_max)] \
+        if auto_t else [ps.values[t_param]]
     min_bay = crit["min_support_spacing_mm"]
     code = f"DIM-{surface.upper()}"
     notes[:] = [n for n in notes if n.get("code") != code]
@@ -47,8 +48,8 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
         span, b = gx[-1] - gx[0], yb - yf
         q = load * G_ACC / surf["area_mm2"]
         # peso propio igual que en la verificación: chapa real (con pestañas y escotaduras) repartida en la superficie
-        sheet_part = m.instance(surf["sheet_instance"]).part
-        qg = sheet_part.flat.net_area() * t * 1e-9 * mat.density * G_ACC / surf["area_mm2"]
+        qg = surface_sheet(m.instance(surf["sheet_instance"]).part)[0] * G_ACC / surf["area_mm2"]
+        eta = surf.get("ligament_efficiency", 1.0)
         P_kg = ps.values.get("CARGA_PUNTUAL") if surface == "encimera" else None
         fyd = mat.fy / mat.gamma_M0
         prof = catalog.profile(trial.values[tgt["trv_param"]])
@@ -60,12 +61,13 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
                 break
             ru = navier(a, b, t, mat.E, mat.nu, q=gG * qg + gQ * q)
             rs = navier(a, b, t, mat.E, mat.nu, q=qg + q)
+            ru, rs = {"sigma": ru["sigma"] / eta}, {"w": rs["w"] / eta}
             ok_p = True
             if P_kg:          # carga puntual sobre la encimera: misma comprobación que la verificación final
                 size = crit["point_load_patch_mm"]
                 rp = navier(a, b, t, mat.E, mat.nu, q=gG * qg, patch=(gQ * P_kg * G_ACC, size, size, a / 2, b / 2),
                             terms=121)
-                ok_p = rp["sigma"] <= fyd
+                ok_p = rp["sigma"] / eta <= fyd
             if ru["sigma"] <= fyd and rs["w"] <= min(a, b) / dl and ok_p:
                 sheet = surf["area_mm2"] * t * 1e-9 * mat.density
                 cross = n * cross_len * 1e-3 * prof.mass_per_m(rho_s)
@@ -151,6 +153,8 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
         idx = {k: cands[k].index(v[k]) if v[k] in cands[k] else 0 for k in prof_autos}
         for k in prof_autos:
             ps.values[k] = cands[k][idx[k]]
+        if _fit_leg(family, ps, prof_autos):
+            idx[family.leg_param] = cands[family.leg_param].index(ps.values[family.leg_param])
         iterations = 0
         for iterations in range(1, 41):
             m = family.construct(ps)
@@ -185,6 +189,8 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
                             and idx[lp] + 1 < len(cands[lp]):
                         idx[lp] += 1
                         ps.values[lp] = cands[lp][idx[lp]]
+                _fit_leg(family, ps, prof_autos)
+                idx[lp] = cands[lp].index(ps.values[lp])
             if not bumped:
                 notes.append({"level": "error", "code": "DIM-PERFILES",
                               "message": "Se han agotado los perfiles candidatos sin verificar todas las "
@@ -197,6 +203,7 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
                                  "verifica resistencia, pandeo, flechas y soldaduras): " +
                                  ", ".join(f"{k} = {ps.values[k]}" for k in prof_autos), "iterations": iterations})
         plates()      # re-verifica el reparto de travesaños con los perfiles finales
+        _fit_leg(family, ps, prof_autos)
 
     run_profiles = bool(prof_autos and (have_load or v.get("CARGA_HORIZONTAL")))   # el empuje también dimensiona patas
     if run_profiles:
@@ -204,6 +211,7 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
     for k in list(ps.values):
         if ps.values[k] == AUTO and k in defaults:
             ps.values[k] = defaults[k]
+    _fit_leg(family, ps, prof_autos)
     if foot_auto and have_load:
         for _ in range(3):                   # el pie cambia la longitud de pata: iterar hasta converger
             before = ps.values[sp]
@@ -213,6 +221,19 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
             notes[:] = [n for n in notes if n.get("code") not in ("DIM-PERFILES", "DIM-PIES")]
             size_profiles()
     return ps, notes
+
+
+def _fit_leg(family, ps: ParameterSet, prof_autos) -> bool:
+    """Regla constructiva propia de la familia sobre la pata/montante (``leg_fits``): aumenta el perfil 'auto' de la
+    serie hasta cumplirla. Devuelve True si lo ha cambiado."""
+    fits, lp = getattr(family, "leg_fits", None), family.leg_param
+    if fits is None or lp not in prof_autos or ps.values.get(lp) not in family.candidates[lp]:
+        return False
+    series, changed = family.candidates[lp], False
+    while not fits(ps.values) and series.index(ps.values[lp]) + 1 < len(series):
+        ps.values[lp] = series[series.index(ps.values[lp]) + 1]
+        changed = True
+    return changed
 
 
 def _select_feet(family, ps: ParameterSet, notes: list) -> None:

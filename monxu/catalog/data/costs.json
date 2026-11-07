@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026.11-1",
+    "version": "2026.11-2",
     "currency": "EUR",
     "note": "Tarifas orientativas de taller (España, 2026) para estimar el coste de fabricación. Deben ajustarse a los precios reales del taller y de los proveedores. No incluyen transporte, embalaje especial, diseño ni impuestos."
   },
@@ -30,7 +30,7 @@
   "operations": {
     "sierra_eur_corte": 0.45,
     "taladro_eur": 0.35,
-    "laser_eur_m": [[1.0, 0.70], [1.5, 0.85], [2.0, 1.00], [3.0, 1.35], [4.0, 1.75], [5.0, 2.20], [6.0, 2.70], [8.0, 3.80], [10.0, 5.00], [12.0, 6.20]],
+    "laser_eur_m": [[1.0, 0.70], [1.5, 0.85], [2.0, 1.00], [3.0, 1.35], [4.0, 1.75], [5.0, 2.20], [6.0, 2.70], [8.0, 3.80], [10.0, 5.00], [12.0, 6.20], [15.0, 8.10], [20.0, 11.40]],
     "laser_factor_material": {"acero_inoxidable": 1.6, "aluminio": 1.4},
     "laser_eur_perforacion": 0.04,
     "plegado_eur_pliegue": 0.70,

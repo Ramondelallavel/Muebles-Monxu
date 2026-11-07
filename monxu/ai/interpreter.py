@@ -17,6 +17,7 @@ NUM = r"(\d{1,3}(?:[.\s]\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)"
 UNIT = r"(?:(mm|milimetros?|cm|centimetros?|m|metros?)\b)"
 
 FAMILY_KEYWORDS = [
+    ("mesa_soldadura", r"mesas? de sold|mesas? para soldar|bancos? de soldadura|mesas? de calderer|mesas? de amarre"),
     ("carro_estanteria", r"carros? (estanteria|de (baldas|bandejas|picking|estantes))|carros? de \d+ (niveles|baldas|bandejas|estantes)|estanterias? (con ruedas|movil|movible|rodante|sobre ruedas)"),
     ("puesto_trabajo", r"puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion|embalaje)"),
     ("carro_taller", r"\bcarros?\b|\bcarritos?\b|carro de (taller|transporte)"),
@@ -27,7 +28,7 @@ FAMILY_KEYWORDS = [
 #: accesorios que sí implementa una familia (no se marcan como no soportados) y parámetro que activan
 SUPPORTED_BY = {("puesto_trabajo", "panel_trasero"): ("PANEL_HERRAMIENTAS", 1), ("carro_taller", "ruedas"): None,
                 ("carro_estanteria", "ruedas"): None}
-MESA_LIKE = ("mesa_industrial", "puesto_trabajo", "carro_taller")
+MESA_LIKE = ("mesa_industrial", "puesto_trabajo", "carro_taller", "mesa_soldadura")
 SHELF_LIKE = ("estanteria", "carro_estanteria")
 
 UNSUPPORTED_ACCESSORIES = [
@@ -148,7 +149,8 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
         before = t[max(0, mm.start() - 40): mm.start()]
         if re.search(r"por nivel|cada nivel|por balda|cada balda|por estante", ctx):
             it.set("CARGA_POR_NIVEL", val, mm.group(0) + " por nivel")
-        elif re.search(r"puntual|concentrada", ctx):
+        elif (re.match(r"\s*(?:de\s+)?(?:carga\s+)?(?:puntual|concentrada)", after)
+              or re.search(r"(?:puntual|concentrada)\s*(?:de|:|=)?\s*$", before)):     # pegado al valor
             it.set("CARGA_PUNTUAL", val, ctx)
         elif re.search(r"balda|estante inferior", after) or re.search(r"balda", before):
             it.set("CARGA_BALDA", val, ctx)
@@ -260,9 +262,26 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
             it.set("ASA_EMPUJE", "dos_extremos", "asa en los dos extremos")
         elif re.search(r"\basa\b", t):
             it.set("ASA_EMPUJE", "un_extremo", "asa de empuje")
+    if it.family == "mesa_soldadura":
+        if re.search(r"sistema\s*28|\bd\s*28\b|ø\s*28|taladros? de 28", t):
+            it.set("SISTEMA_TALADROS", "D28_P100", "sistema 28")
+        elif re.search(r"sistema\s*16|\bd\s*16\b|ø\s*16|taladros? de 16", t):
+            it.set("SISTEMA_TALADROS", "D16_P50", "sistema 16")
+        elif re.search(r"sin taladros|placa lisa|sin perforar", t):
+            it.set("SISTEMA_TALADROS", "ninguno", "placa sin taladros")
+        mm = re.search(rf"(?:placa|chapa) (?:de\s+)?{NUM}\s*mm|{NUM}\s*mm de (?:placa|espesor)", t)
+        if mm:
+            it.set("ESPESOR_PLACA", to_number(mm.group(1) or mm.group(2)), mm.group(0))
+        it.values.pop("ESPESOR_CHAPA", None)           # en esta familia el espesor es el de la placa
+        it.evidence.pop("ESPESOR_CHAPA", None)
+        mm = re.search(rf"vuelo (?:de\s+)?{NUM}\s*{UNIT}?", t)
+        if mm:
+            it.set("VUELO", to_mm(to_number(mm.group(1)), mm.group(2)), mm.group(0))
     if it.family in MESA_LIKE:
         PETO = r"peto|tope trasero|reborde trasero"
-        if re.search(rf"sin ({PETO})", t):
+        if it.family == "mesa_soldadura":
+            pass
+        elif re.search(rf"sin ({PETO})", t):
             it.set("PETO_TRASERO", 0.0, "sin peto")
         else:
             mm = (re.search(rf"(?:{PETO})(?: trasero)?\s*(?:de|:|=)?\s*{NUM}\s*{UNIT}?", t)
@@ -307,10 +326,10 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
 
 LABELS = {"mesa_industrial": "Mesa industrial", "estanteria": "Estantería industrial",
           "puesto_trabajo": "Puesto de trabajo industrial", "carro_taller": "Carro de taller",
-          "carro_estanteria": "Carro estantería",
+          "carro_estanteria": "Carro estantería", "mesa_soldadura": "Mesa de soldadura",
           "armario": "Armario / mobiliario auxiliar"}
 DIM_PROPOSAL = {"mesa_industrial": (1800.0, 800.0, 900.0), "puesto_trabajo": (1500.0, 750.0, 900.0),
-                "carro_taller": (1000.0, 600.0, 900.0)}
+                "carro_taller": (1000.0, 600.0, 900.0), "mesa_soldadura": (1500.0, 1000.0, 850.0)}
 
 
 def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = None) -> list[Question]:
@@ -332,7 +351,8 @@ def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = N
                           "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.",
                           [{"label": "150 kg", "value": 150}, {"label": "300 kg", "value": 300},
                            {"label": "500 kg", "value": 500}], "verificacion"))
-    if values.get("NUMERO_BALDAS", 1) >= 1 and values.get("CARGA_BALDA") is None and "CARGA_BALDA" not in asked:
+    if values.get("NUMERO_BALDAS", 0 if family == "mesa_soldadura" else 1) >= 1 and values.get("CARGA_BALDA") is None \
+            and "CARGA_BALDA" not in asked:
         q.append(Question("CARGA_BALDA", "¿Qué carga soportará la balda inferior (kg)? ¿La carga indicada para la encimera "
                                          "incluye la de la balda?",
                           "La balda se dimensiona y verifica de forma independiente.",
@@ -438,9 +458,10 @@ def proposal_for(family: str, values: dict[str, Any]) -> dict[str, Any]:
     for k, v in zip(("LONGITUD", "ANCHURA", "ALTURA"), DIM_PROPOSAL[family]):
         if k not in values:
             p[k] = v
-    p.setdefault("NUMERO_BALDAS", values.get("NUMERO_BALDAS", 1))
+    p.setdefault("NUMERO_BALDAS", values.get("NUMERO_BALDAS", 0 if family == "mesa_soldadura" else 1))
     have_load = values.get("CARGA_TOTAL") is not None
-    for k in ("PERFIL_PATA", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR", "ESPESOR_CHAPA"):
+    top_t = "ESPESOR_PLACA" if family == "mesa_soldadura" else "ESPESOR_CHAPA"
+    for k in ("PERFIL_PATA", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR", top_t):
         if k not in values:
             p[k] = "auto" if have_load else None
     if values.get("CARGA_BALDA"):
