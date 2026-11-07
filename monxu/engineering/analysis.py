@@ -483,13 +483,13 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             checks.append(Check(f"PL.{sid}", "placa", surf["label"], f"{surf['label']}: verificación de chapa",
                                 "—", None, None, "-", None, PENDING, "", {"motivo": f"{surf['load_param']} sin definir"}))
         if sid == "encimera" and P_kg:
-            size = crit["point_load_patch_mm"]
+            size = surf.get("patch_mm", crit["point_load_patch_mm"])        # huella de la carga concentrada
             r_p = navier(a, b, t, mat.E, mat.nu, q=gG * info["q_g"], patch=(gQ * P_kg * G_ACC, size, size, a / 2, b / 2),
                          terms=121)
             r_p = {**r_p, "sigma": r_p["sigma"] / eta}
             fyd = mat.fy / mat.gamma_M0
             checks.append(Check(f"PL.{sid}.P", "placa", surf["label"], f"{surf['label']}: carga puntual de {P_kg:g} kg "
-                                f"sobre huella {size}×{size} mm en el centro del panel", "Navier + EN 1993-1-1 §6.2.1",
+                                f"sobre huella {size:g}×{size:g} mm en el centro del panel", "Navier + EN 1993-1-1 §6.2.1",
                                 round(r_p["sigma"], 2), round(fyd, 1), "MPa", round(r_p["sigma"] / fyd, 4),
                                 _status(r_p["sigma"] / fyd), "ELU-5"))
 

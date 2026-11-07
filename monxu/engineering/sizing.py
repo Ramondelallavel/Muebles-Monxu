@@ -65,7 +65,7 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
             ru, rs = {"sigma": ru["sigma"] / eta}, {"w": rs["w"] / eta}
             ok_p = True
             if P_kg:          # carga puntual sobre la encimera: misma comprobación que la verificación final
-                size = crit["point_load_patch_mm"]
+                size = surf.get("patch_mm", crit["point_load_patch_mm"])
                 rp = navier(a, b, t, mat.E, mat.nu, q=gG * qg, patch=(gQ * P_kg * G_ACC, size, size, a / 2, b / 2),
                             terms=121)
                 ok_p = rp["sigma"] / eta <= fyd

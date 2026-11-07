@@ -384,11 +384,11 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     } else checks.push(check(`PL.${sid}`, "placa", surf.label, `${surf.label}: verificación de chapa`, "—", null, null, "-", null, PENDING, "",
       { motivo: `${surf.load_param} sin definir` }));
     if (sid === "encimera" && P_kg) {
-      const size = crit.point_load_patch_mm;
+      const size = surf.patch_mm ?? crit.point_load_patch_mm;        // huella de la carga concentrada
       const rp0 = navier(a, b, t, mat.E, mat.nu, gG * info.q_g, [gQ * P_kg * G_ACC, size, size, a / 2, b / 2], null, 121);
       const rp = { ...rp0, sigma: rp0.sigma / eta };
       const fyd = mat.fy / mat.gamma_M0;
-      checks.push(check(`PL.${sid}.P`, "placa", surf.label, `${surf.label}: carga puntual de ${g(P_kg)} kg sobre huella ${size}×${size} mm en el centro del panel`,
+      checks.push(check(`PL.${sid}.P`, "placa", surf.label, `${surf.label}: carga puntual de ${g(P_kg)} kg sobre huella ${g(size)}×${g(size)} mm en el centro del panel`,
         "Navier + EN 1993-1-1 §6.2.1", pyRound(rp.sigma, 2), pyRound(fyd, 1), "MPa", pyRound(rp.sigma / fyd, 4), status(rp.sigma / fyd), "ELU-5"));
     }
   }

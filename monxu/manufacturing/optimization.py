@@ -208,8 +208,10 @@ def best_format(parts: list[dict[str, Any]], formats: list[dict[str, Any]], **kw
         results.append(r)
     feasible = [r for r in results if r["feasible"]]
     if not feasible:
+        # sin formato válido el presupuesto estima por superficie de piezas (antes faltaba el dato: KeyError)
         return {"feasible": False, "alternatives": results,
-                "reason": "Ninguna pieza cabe en los formatos comerciales configurados"}
+                "reason": "Ninguna pieza cabe en los formatos comerciales configurados",
+                "parts_area_m2": round(sum(p["area"] * p["qty"] for p in parts) / 1e6, 4)}
     best = min(feasible, key=lambda r: (r["sheet_area_m2"], r["n_sheets"]))
     best = dict(best)
     best["alternatives"] = [{"format": r["format_code"], "feasible": r["feasible"], "n_sheets": r.get("n_sheets"),

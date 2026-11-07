@@ -17,7 +17,7 @@ def test_registered_and_implemented():
     lib = {f["id"]: f["status"] for f in library()}
     assert lib["puesto_trabajo"] == "implementada" and lib["carro_taller"] == "implementada"
     assert lib["carro_estanteria"] == "implementada" and lib["mesa_soldadura"] == "implementada"
-    assert lib["estanteria_bateria"] == "implementada"
+    assert lib["estanteria_bateria"] == "implementada" and lib["tarima"] == "implementada"
     assert lib["armario"] == "en_desarrollo"
 
 
@@ -341,3 +341,69 @@ def test_battery_shelving_dossier(tmp_path):
     assert res["qa"]["blocking"] == 0
     assert any(i["code"] == "EXP-STEP" and i["level"] == "ok" for i in res["qa"]["items"])
     assert any(i["code"] == "PLANO-GEOMETRIA" and i["level"] == "ok" for i in res["qa"]["items"])
+
+
+# ---------------------------------------------------------------------------------------------- tarima
+def test_tarima_en_iso_14122_loads():
+    r = regenerate("tarima", _tpl("tarima", "TA-1200x800-200"))
+    m = r.model
+    assert m.product_code == "TA1200-800-200" and r.eng["status"] == "CUMPLE"
+    deck = m.instance("ENC.PLACA")
+    assert deck.part.kind == "pletina" and deck.part.t in (3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
+    assert deck.T[2][3] == pytest.approx(200 - deck.part.t)                 # superficie a la altura pedida
+    chk = {c["id"]: c for c in r.eng["checks"]}
+    assert "200×200" in chk["PL.encimera.P"]["description"] and chk["PL.encimera.P"]["status"] == "CUMPLE"
+    assert chk["PL.encimera.D"]["standard"].endswith("L/200")
+    codes = {n["code"] for n in m.design_notes}
+    assert "ERG-ANTIDESLIZANTE" in codes and "NORMA-14122-CARGA" not in codes       # 200 kg ≥ 2 kN/m² × 0,96 m²
+    assert r.interferences["interferences"] == [] and r.qa.result()["blocking"] == 0
+    assert {"MATERIAL_CHAPA", "NUMERO_BALDAS", "SISTEMA_TALADROS"}.isdisjoint(m.params.values)
+    # carga por debajo de la de servicio de la norma: advertencia con el valor mínimo
+    low = regenerate("tarima", {**_tpl("tarima", "TA-1200x800-200"), "CARGA_TOTAL": 100.0})
+    msg = next(n["message"] for n in low.model.design_notes if n["code"] == "NORMA-14122-CARGA")
+    assert "196 kg" in msg
+
+
+def test_assistant_tarima():
+    from monxu.ai.interpreter import parse
+    p = parse("Necesito una tarima de 2000 x 1000 a 300 mm de altura para un operario, 2 kN/m2, anclada")
+    assert p.family == "tarima"
+    assert p.values == {"LONGITUD": 2000.0, "ANCHURA": 1000.0, "ALTURA": 300.0, "ANCLAJE": "al_suelo", "CARGA_TOTAL": 408.0}
+    r = assistant.handle(assistant.new_state(), "tarima de 1200 x 800 x 200")
+    assert r["family_implemented"] and r["parameters"]["CARGA_TOTAL"] == 196.0 and r["parameters"]["CARGA_PUNTUAL"] == 153.0
+    assert "NUMERO_BALDAS" not in r["parameters"]
+    # sólo planta en cualquier familia: «1800 x 800» es largo × ancho
+    assert parse("mesa de 1800 x 800 con 300 kg").values == {"LONGITUD": 1800.0, "ANCHURA": 800.0, "CARGA_TOTAL": 300.0}
+
+
+def test_weld_nuts_match_the_structure_material():
+    """Tuerca DIN 929 de acero soldada a placa base de aluminio o inoxidable: ahora del mismo material, y la regla de
+    fabricación detecta uniones soldadas entre materiales incompatibles."""
+    from monxu.core.model import StandardPart
+    for mat, suffix in (("EN AW-6082 T6", "_AL"), ("1.4301", "_A2"), ("S235JRH", "")):
+        r = regenerate("estanteria", {"ANCHURA": 1000, "PROFUNDIDAD": 400, "ALTURA": 1500, "NUMERO_NIVELES": 3,
+                                      "MATERIAL_ESTRUCTURAL": mat,
+                                      "MATERIAL_CHAPA": {"EN AW-6082 T6": "EN AW-5754 H22", "1.4301": "1.4301"}.get(mat, "S235JR")})
+        nuts = {p.code for p in r.model.parts.values() if isinstance(p, StandardPart) and p.role == "tuerca_soldar"}
+        assert nuts and all(c.endswith(suffix) if suffix else c[-3:] not in ("_AL", "_A2") for c in nuts), (mat, nuts)
+        assert not [d for d in r.dfm if d["code"] in ("SOL-MATERIALES", "SOL-DISIMILAR")]
+    # la mesa de soldadura y la tarima (placa de acero soldada) sólo admiten estructura de acero al carbono
+    for fid in ("mesa_soldadura", "tarima"):
+        mats = next(s.choices for s in family(fid).param_specs() if s.name == "MATERIAL_ESTRUCTURAL")
+        assert mats and all(catalog.material(m).family == "acero_carbono" for m in mats)
+
+
+def test_unnestable_part_still_gets_a_quotation():
+    """Pieza mayor que cualquier formato de chapa: el anidado es inviable pero el presupuesto estima por superficie."""
+    from monxu.manufacturing.optimization import best_format
+    r = best_format([{"ref": "X", "w": 5000.0, "h": 2500.0, "qty": 2, "area": 5000.0 * 2500.0, "rotate": True}],
+                    catalog.sheet_formats(), margin=10.0, spacing=8.0, kerf=0.3)
+    assert not r["feasible"] and r["parts_area_m2"] == 25.0
+
+
+@pytest.mark.slow
+def test_tarima_dossier(tmp_path):
+    r = regenerate("tarima", _tpl("tarima", "TA-2000x1000-300"))
+    res = generate_dossier(r, {"code": "P-TA", "revision": "A"}, tmp_path / "exp")
+    assert res["qa"]["blocking"] == 0
+    assert any(i["code"] == "EXP-STEP" and i["level"] == "ok" for i in res["qa"]["items"])

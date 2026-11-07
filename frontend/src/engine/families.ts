@@ -16,6 +16,9 @@ export function flangeHoleD(matCode, t, screw) {
   return pyRound(Math.max(screw.clearance_hole, Math.ceil(dmin * 10) / 10), 1);
 }
 const roundedPerimeter = (B, H, r) => 2 * (B + H) - (8 - 2 * Math.PI) * r;
+const NUT_SUFFIX = { acero_carbono: "", acero_inoxidable: "_A2", aluminio: "_AL" };
+/** Tuerca de soldar del mismo material que la estructura (acero no se suelda a aluminio; en inoxidable, corrosión). */
+export const weldNutCode = (thread, mat_s) => `TUERCA_SOLDAR_M${fx(thread)}${NUT_SUFFIX[C.material(mat_s).family] ?? ""}`;
 export function evenPositions(a, b, n) {
   if (n === 1) return [(a + b) / 2];
   return range(n).map((i) => a + (i * (b - a)) / (n - 1));
@@ -113,7 +116,7 @@ class MesaIndustrial {
     const cname = { DI: "delantera izquierda", DD: "delantera derecha", TI: "trasera izquierda", TD: "trasera derecha" };
     const foot = C.component(V[this.support_param]);
     const thread = parseFloat(foot.thread.slice(1));
-    const nutCode = `TUERCA_SOLDAR_M${fx(thread)}`;
+    const nutCode = weldNutCode(thread, mat_s);
     const rn = C.component("TUERCA_REMACHABLE_M6");
     const sc = C.component("TORNILLO_ISO7380_M6x12");
     const weld = makeWelder(model);
@@ -585,7 +588,7 @@ class Estanteria extends MesaIndustrial {
     const sp = this.support_param;
     const foot = C.component(V[sp]);
     const thread = parseFloat(foot.thread.slice(1));
-    const nutCode = `TUERCA_SOLDAR_M${fx(thread)}`;
+    const nutCode = weldNutCode(thread, mat_s);
     const weld = makeWelder(model);
     const legs = {};
     ctx.feature("F10", "Estructura soldada", () => {
@@ -1231,7 +1234,7 @@ class EstanteriaBateria extends Estanteria {
     const sp = this.support_param;
     const foot = C.component(V[sp]);
     const thread = parseFloat(foot.thread.slice(1));
-    const nutCode = `TUERCA_SOLDAR_M${fx(thread)}`;
+    const nutCode = weldNutCode(thread, mat_s);
     const weld = makeWelder(model);
     const legs = {};
     ctx.feature("F10", "Estructura soldada", () => {
@@ -1383,8 +1386,8 @@ export function holeGrid(L, W, system) {
   return out;
 }
 class MesaSoldadura extends MesaIndustrial {
-  constructor() {
-    super("mesa_soldadura");
+  constructor(id = "mesa_soldadura") {
+    super(id);
     Object.assign(this, { top_iid: "ENC.PLACA", top_label: "Placa de soldadura" });
   }
   plateTargets(v) {
@@ -1472,20 +1475,23 @@ class MesaSoldadura extends MesaIndustrial {
       const desc = holes.length ? `, ${holes.length} taladros Ø${g(holes[0][2])}` : "";
       const part = platePart("placa_soldadura", `Placa de soldadura ${g(t)} mm${desc}`, L, W, t, V.MATERIAL_PLACA, null, PLATE_CORNER_R, holes);
       model.add(this.top_iid, "Placa de soldadura", part, translation(0, 0, H - t), "ENC");
-      // cordones discontinuos placa–bastidor en largueros y travesaños extremos
-      const lv = model.structure.levels.SUP;
-      for (const mid of [...lv.long, ...lv.end]) {
-        const inst = model.instance(mid);
-        const [p0, p1] = inst.axis;
-        const Lm = Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]);
-        const n = Math.max(2, Math.ceil(Lm / STITCH_PITCH));
-        const loc = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2 + inst.part.profile.H / 2];
-        const tmin = Math.min(t, inst.part.profile.t);
-        model.joint({ id: `J.PLACA_SOLD.${mid.split(".").slice(1).join(".")}`, kind: "soldadura", members: [this.top_iid, mid], location: loc,
-          description: "Placa de soldadura a bastidor", weld: { type: "fillet", a: weldA(tmin), all_around: false, process: "135 (MAG)",
-            length: pyRound(n * STITCH_L, 1), note: `${n} cordones de ${g(STITCH_L)} mm cada ${g(STITCH_PITCH)} mm, alternos` } });
-      }
+      this._stitchWelds(model, d, t, "Placa de soldadura a bastidor");
     });
+  }
+  /** Cordones discontinuos placa–bastidor en largueros y travesaños extremos. */
+  _stitchWelds(model, d, t, desc) {
+    const lv = model.structure.levels.SUP;
+    for (const mid of [...lv.long, ...lv.end]) {
+      const inst = model.instance(mid);
+      const [p0, p1] = inst.axis;
+      const Lm = Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]);
+      const n = Math.max(2, Math.ceil(Lm / STITCH_PITCH));
+      const loc = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2 + inst.part.profile.H / 2];
+      const tmin = Math.min(t, inst.part.profile.t);
+      model.joint({ id: `J.PLACA_SOLD.${mid.split(".").slice(1).join(".")}`, kind: "soldadura", members: [this.top_iid, mid], location: loc,
+        description: desc, weld: { type: "fillet", a: weldA(tmin), all_around: false, process: "135 (MAG)",
+          length: pyRound(n * STITCH_L, 1), note: `${n} cordones de ${g(STITCH_L)} mm cada ${g(STITCH_PITCH)} mm, alternos` } });
+    }
   }
   _structure(model, d, legs) {
     const st = super._structure(model, d, legs);
@@ -1497,8 +1503,102 @@ class MesaSoldadura extends MesaIndustrial {
   }
 }
 
+// ============================================================================ tarima / plataforma de trabajo (port de tarima.py)
+const DECK_THICKNESSES = [3.0, 4.0, 5.0, 6.0, 8.0, 10.0];
+const SERVICE_LOAD_KN_M2 = 2.0, TARIMA_POINT_KG = 153.0, TARIMA_PATCH_MM = 200.0;
+class Tarima extends MesaSoldadura {
+  constructor() {
+    super("tarima");
+    Object.assign(this, { top_iid: "ENC.PLACA", top_label: "Superficie de la tarima" });
+  }
+  plateTargets(v) {
+    if (!(v.CARGA_TOTAL || v.CARGA_PUNTUAL)) return [];
+    const avail = new Set(C.sheetThicknesses(v.MATERIAL_PLACA));
+    return [{ surface: "encimera", t_param: "ESPESOR_PLACA", n_param: "NUMERO_TRAVESANOS", load_param: "CARGA_TOTAL", trv_param: "PERFIL_TRAVESANO",
+      min_t_by_use: false, mat_param: "MATERIAL_PLACA", t_options: DECK_THICKNESSES.filter((t) => avail.has(t)), t_max: DECK_THICKNESSES.at(-1) }];
+  }
+  sheetDefaultsWithoutLoad(v) { return v.CARGA_TOTAL || v.CARGA_PUNTUAL ? {} : { ESPESOR_PLACA: this.constructive_defaults.ESPESOR_PLACA }; }
+  legFits() { return true; }
+  _derive(ctx, model) {
+    const d = {};
+    ctx.feature("F00", "Parámetros derivados y reglas constructivas", () => {
+      const t = ctx.derive("ESP_PLACA", (p) => p.get("ESPESOR_PLACA"), "mm", "Espesor de la chapa de la superficie");
+      const c = ctx.derive("RETRANQUEO", () => 0.0, "mm", "Retranqueo de la estructura (enrasada con la chapa)");
+      const leg = C.profile(ctx.get("PERFIL_PATA")), rail = C.profile(ctx.get("PERFIL_LARGUERO")), trv = C.profile(ctx.get("PERFIL_TRAVESANO"));
+      if (leg.B !== leg.H) throw new Error("Las patas deben ser de tubo cuadrado");
+      const a = leg.B;
+      ctx.setDerived("SECCION_PATA", `${g(leg.B)}x${g(leg.H)}`, "mm", "Sección de pata", ["PERFIL_PATA"]);
+      ctx.setDerived("ESPESOR_PERFIL_PATA", leg.t, "mm", "Espesor de pata", ["PERFIL_PATA"]);
+      const foot = C.component(ctx.get(this.support_param));
+      const hn = +foot.nominal_height, tp = ctx.get("ESPESOR_PLACA_BASE");
+      const z_tf = ctx.derive("COTA_BASTIDOR_SUP", (p) => p.get("ALTURA") - p.get("ESP_PLACA"), "mm", "Cota cara superior del bastidor (apoyo de la chapa)");
+      const sp = this.support_param;
+      const z_leg0 = ctx.derive("COTA_INICIO_PATA", (p) => +C.component(p.get(sp)).nominal_height + p.get("ESPESOR_PLACA_BASE"), "mm", "Cota inicio de pata");
+      const leg_len = ctx.derive("LONGITUD_PATA", (p) => p.get("COTA_BASTIDOR_SUP") - p.get("COTA_INICIO_PATA"), "mm", "Longitud de corte de pata");
+      const L = ctx.get("LONGITUD"), W = ctx.get("ANCHURA"), H = ctx.get("ALTURA");
+      ctx.derive("LONGITUD_LARGUERO", (p) => p.get("LONGITUD") - 2 * C.profile(p.get("PERFIL_PATA")).B, "mm", "Longitud de largueros");
+      ctx.derive("LONGITUD_TRAVESANO_EXT", (p) => p.get("ANCHURA") - 2 * C.profile(p.get("PERFIL_PATA")).B, "mm", "Longitud de travesaños extremos");
+      ctx.derive("LONGITUD_TRAVESANO_INT", (p) => p.get("ANCHURA") - 2 * C.profile(p.get("PERFIL_LARGUERO")).B, "mm", "Longitud de travesaños intermedios");
+      if (rail.B > a || trv.B > a) model.note("error", "DFM-ANCHO-BASTIDOR", "El ancho de largueros/travesaños supera el de la pata: "
+        + "no pueden enrasarse con la cara exterior.");
+      const frameH = Math.max(rail.H, trv.H);
+      if (z_tf - frameH < z_leg0 + 10) {
+        const hMin = Math.ceil((z_leg0 + 10 + frameH + t) / 5) * 5;
+        model.note("error", "GEO-TARIMA-BAJA", `Con el pie ${foot.name} y el bastidor de ${g(frameH)} mm de canto no cabe la tarima de ${g(H)} mm: `
+          + `altura mínima ${g(hMin)} mm, o pies y perfiles más bajos.`);
+      }
+      const xe0 = c + trv.B / 2, xe1 = L - c - trv.B / 2;
+      let n_top = ctx.get("NUMERO_TRAVESANOS");
+      if (n_top === AUTO) n_top = Math.max(0, Math.ceil((xe1 - xe0) / ctx.get("SEPARACION_MAX_APOYOS")) - 1);
+      ctx.setDerived("N_TRAVESANOS_INT", n_top, "ud", "Travesaños intermedios", ["NUMERO_TRAVESANOS", "SEPARACION_MAX_APOYOS", "LONGITUD"]);
+      ctx.setDerived("VANO_ENCIMERA", pyRound((xe1 - xe0) / (n_top + 1), 2), "mm", "Vano entre apoyos de la chapa", ["LONGITUD", "NUMERO_TRAVESANOS", "PERFIL_TRAVESANO"]);
+      const q = ctx.params.values.CARGA_TOTAL;
+      if (q != null) {
+        const qkn = (q * 9.81e-3) / (L * W * 1e-6);
+        ctx.setDerived("CARGA_SUPERFICIAL", pyRound(qkn, 3), "kN/m²", "Carga repartida por unidad de superficie", ["CARGA_TOTAL", "LONGITUD", "ANCHURA"]);
+        if (qkn < SERVICE_LOAD_KN_M2 - 1e-9) model.note("advertencia", "NORMA-14122-CARGA", `Carga repartida de ${qkn.toFixed(2)} kN/m², inferior a la `
+          + `de servicio de ${g(SERVICE_LOAD_KN_M2)} kN/m² de EN ISO 14122-2 para plataformas de trabajo: use al menos `
+          + `${g(Math.ceil((SERVICE_LOAD_KN_M2 * L * W * 1e-6) / 9.81e-3))} kg.`);
+      }
+      const P = ctx.params.values.CARGA_PUNTUAL;
+      if (P != null && P < TARIMA_POINT_KG - 1e-9) model.note("advertencia", "NORMA-14122-PUNTUAL", `Carga concentrada de ${g(P)} kg, inferior a la de `
+        + `1,5 kN (${g(TARIMA_POINT_KG)} kg) de EN ISO 14122-2.`);
+      model.note("advertencia", "ERG-ANTIDESLIZANTE", "Superficie de chapa lisa: EN ISO 14122-2 exige una superficie de tránsito antideslizante; prever "
+        + "chapa lagrimada o recubrimiento antideslizante (no modelado).");
+      if (H > 250) model.note("advertencia", "ERG-ACCESO", `Altura de ${g(H)} mm: valorar un peldaño de acceso (no incluido).`);
+      Object.assign(d, { Lx: L, Ly: W, leg, rail, trv, bas: null, a, c, t, hn, tp, z_tf, z_leg0, leg_len, n_top, xe: [xe0, xe1], shelf: false, peto: 0.0,
+        footrest: null });
+      d.plate = { holes: [], eta: 1.0 };
+      d.top_surface = { patch_mm: TARIMA_PATCH_MM };
+      d.fix_top = { s: Object.fromEntries(EDGES.map((e) => [e, []])), h: Object.fromEntries(EDGES.map((e) => [e, 0.0])), z_ref: H, t, inset: 0.0, offset: 0.0,
+        Lx: L, Ly: W, c, wall: Object.fromEntries(EDGES.map((e) => [e, (e === "y0" || e === "y1" ? rail : trv).t])), gap: 0.0 };
+      d.skirt = rail.H;
+    });
+    return d;
+  }
+  _topFrameUses() { return ["ESPESOR_PLACA"]; }
+  _buildTop(model, ctx, d, H, mat_c, fin) {
+    const V = model.params.values, L = V.LONGITUD, W = V.ANCHURA, t = d.t;
+    ctx.feature("F20", "Chapa de la superficie de tránsito", () => {
+      ctx.uses("LONGITUD", "ANCHURA", "ALTURA", "ESP_PLACA", "MATERIAL_PLACA", "ACABADO");
+      const part = platePart("chapa_tarima", `Chapa de la tarima ${g(t)} mm`, L, W, t, V.MATERIAL_PLACA, fin, PLATE_CORNER_R, []);
+      model.add(this.top_iid, "Superficie de la tarima", part, translation(0, 0, H - t), "ENC");
+      this._stitchWelds(model, d, t, "Chapa de la tarima a bastidor");
+    });
+  }
+  _structure(model, d, legs) {
+    const st = super._structure(model, d, legs);
+    st.product_word = "tarima";
+    st.assembly_texts = {
+      ENC: `Colocar la chapa sobre el bastidor, enrasada con él, y soldarla con cordones discontinuos a${g(weldA(Math.min(d.t, d.rail.t)))} de `
+        + `${g(STITCH_L)} mm cada ${g(STITCH_PITCH)} mm, alternos para limitar la deformación. Aplicar el recubrimiento antideslizante antes del montaje.` };
+    return st;
+  }
+}
+
 export const REGISTRY = { mesa_industrial: new MesaIndustrial(), estanteria: new Estanteria(), puesto_trabajo: new PuestoTrabajo("puesto_trabajo"),
-  carro_taller: new CarroTaller("carro_taller"), carro_estanteria: new CarroEstanteria(), mesa_soldadura: new MesaSoldadura(), estanteria_bateria: new EstanteriaBateria() };
+  carro_taller: new CarroTaller("carro_taller"), carro_estanteria: new CarroEstanteria(), mesa_soldadura: new MesaSoldadura(), estanteria_bateria: new EstanteriaBateria(),
+  tarima: new Tarima() };
 export function family(fid) {
   const f = REGISTRY[fid];
   if (!f) {

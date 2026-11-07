@@ -33,6 +33,13 @@ ALLP = list(catalog.profiles())
 STRUCT_MATERIALS = [c for c, m in catalog._load("materials")["materials"].items() if "tubo" in m.get("forms", [])]
 SHEET_MATERIALS = [c for c, m in catalog._load("materials")["materials"].items() if "chapa" in m.get("forms", [])]
 FEET = [c for c, d in catalog.components().items() if d["category"] == "patas"]
+NUT_SUFFIX = {"acero_carbono": "", "acero_inoxidable": "_A2", "aluminio": "_AL"}
+
+
+def weld_nut_code(thread: float, mat_s: str) -> str:
+    """Tuerca de soldar del mismo material que la estructura: una tuerca de acero no puede soldarse a una placa de
+    aluminio, y en inoxidable sería una soldadura disimilar y un punto de corrosión."""
+    return f"TUERCA_SOLDAR_M{thread:.0f}{NUT_SUFFIX.get(catalog.material(mat_s).family, '')}"
 
 # Candidatos de dimensionado (orden creciente de masa por metro)
 CANDIDATES = {
@@ -285,7 +292,7 @@ class MesaIndustrial(ProductFamily):
         model = ProductModel(self.id, self.name, f"{self.prefix}{L:.0f}-{W:.0f}-{H:.0f}", ps, ctx)
         model.requested = ps
         d = self._derive(ctx, model)
-        mat_s, mat_c, fin = ps.values["MATERIAL_ESTRUCTURAL"], ps.values["MATERIAL_CHAPA"], ps.values["ACABADO"]
+        mat_s, mat_c, fin = ps.values["MATERIAL_ESTRUCTURAL"], ps.values.get("MATERIAL_CHAPA"), ps.values["ACABADO"]
 
         model.add_subassembly("EST", "Estructura soldada", welded=True, step=1)
         model.add_subassembly(self.support_group[0], self.support_group[1], explode=(0, 0, -160), step=2)
@@ -302,7 +309,7 @@ class MesaIndustrial(ProductFamily):
                         "TD": "trasera derecha"}
         foot = catalog.component(ps.values[self.support_param])
         thread = float(foot["thread"][1:])
-        nut_code = f"TUERCA_SOLDAR_M{thread:.0f}"
+        nut_code = weld_nut_code(thread, mat_s)
         rn = catalog.component("TUERCA_REMACHABLE_M6")
         sc = catalog.component("TORNILLO_ISO7380_M6x12")
 

@@ -138,7 +138,9 @@ export function nestSheets(parts, sheet_l, sheet_w, margin = 10.0, spacing = 8.0
 export function bestFormat(parts, formats, kw) {
   const results = formats.map((f) => ({ ...nestSheets(parts, f.length, f.width, kw.margin, kw.spacing, kw.kerf), format_code: f.code }));
   const feasible = results.filter((r) => r.feasible);
-  if (!feasible.length) return { feasible: false, alternatives: results, reason: "Ninguna pieza cabe en los formatos comerciales configurados" };
+  // sin formato válido el presupuesto estima por superficie de piezas (antes faltaba el dato y fallaba)
+  if (!feasible.length) return { feasible: false, alternatives: results, reason: "Ninguna pieza cabe en los formatos comerciales configurados",
+    parts_area_m2: pyRound(parts.reduce((s, p) => s + p.area * p.qty, 0) / 1e6, 4) };
   let best = feasible[0];
   for (const r of feasible) if (cmpTuple([r.sheet_area_m2, r.n_sheets], [best.sheet_area_m2, best.n_sheets]) < 0) best = r;
   return { ...best, alternatives: results.map((r) => ({ format: r.format_code, feasible: r.feasible, n_sheets: r.n_sheets ?? null,
@@ -297,6 +299,24 @@ export function dfmCheck(model, plan = null) {
   const thin = model.joints.filter((j) => j.kind === "soldadura" && j.weld.a < 3);
   if (thin.length) add("advertencia", "SOL-GARGANTA", "Uniones soldadas", `${thin.length} cordones con garganta < 3 mm en pared delgada: requieren WPS `
     + "cualificada y control de penetración.", "Soldar con MAG pulsado, hilo Ø0,8.");
+  // compatibilidad de materiales en las uniones soldadas (la tuerca DIN 929 de acero no se suelda a aluminio)
+  const weldFamily = (inst) => {
+    const p = inst.part;
+    if (p.kind === "normalizado") return p.data.material_family ?? "acero_carbono";
+    return p.material ? C.material(p.material).family : null;
+  };
+  const aluSteel = [], dissimilar = [];
+  for (const j of model.joints) {
+    if (j.kind !== "soldadura") continue;
+    const fams = new Set(j.members.map((i) => weldFamily(model.instance(i))).filter((f) => f !== null));
+    if (fams.has("aluminio") && fams.size > 1) aluSteel.push(j.id);
+    else if (fams.size === 2 && fams.has("acero_carbono") && fams.has("acero_inoxidable")) dissimilar.push(j.id);
+  }
+  if (aluSteel.length) add("error", "SOL-MATERIALES", "Uniones soldadas", `${aluSteel.length} uniones soldadas entre aluminio y acero `
+    + `(p. ej. ${aluSteel[0]}): no son soldables por fusión.`, "Usar el mismo material en las piezas soldadas.");
+  if (dissimilar.length) add("advertencia", "SOL-DISIMILAR", "Uniones soldadas", `${dissimilar.length} uniones soldadas entre acero al `
+    + `carbono e inoxidable (p. ej. ${dissimilar[0]}): soldadura disimilar con aporte austenítico (tipo 309L) y riesgo de corrosión en ambiente húmedo.`,
+    "Usar el mismo material en las piezas soldadas.");
   add("advertencia", "SOL-ENRASE", "Bastidores", "Largueros y travesaños extremos enrasados con la cara exterior de las patas: en la cara enrasada el "
     + "cordón es en ángulo exterior/borde y debe amolarse antes de pintar.");
   add("advertencia", "SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: puntear en mesa plana con "

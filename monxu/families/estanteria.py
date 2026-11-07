@@ -26,7 +26,8 @@ from ..cad.sheetmetal import EDGES, FlangeSpec, SheetMetalSpec, bend_deduction
 from ..core.model import Joint, PlatePart, ProductModel, ProfilePart, SheetPart, StandardPart
 from ..core.params import AUTO, ParamContext, ParameterSet, ParamError, ParamSpec
 from .base import register
-from .mesa_industrial import ALLP, FEET, SHEET_MATERIALS, SHS, STRUCT_MATERIALS, MesaIndustrial, flange_hole_d
+from .mesa_industrial import (ALLP, FEET, SHEET_MATERIALS, SHS, STRUCT_MATERIALS, MesaIndustrial, flange_hole_d,
+                              weld_nut_code)
 
 CANDIDATES = {
     "PERFIL_MONTANTE": ["SHS 40x40x2", "SHS 40x40x3", "SHS 50x50x2", "SHS 50x50x3", "SHS 60x60x3", "SHS 70x70x3",
@@ -181,7 +182,7 @@ class Estanteria(MesaIndustrial):
                  "TD": "trasero derecho"}
         foot = catalog.component(ps.values[self.support_param])
         thread = float(foot["thread"][1:])
-        nut_code = f"TUERCA_SOLDAR_M{thread:.0f}"
+        nut_code = weld_nut_code(thread, mat_s)
         rn = catalog.component("TUERCA_REMACHABLE_M6")
         sc = catalog.component("TORNILLO_ISO7380_M6x12")
         weld = self._make_welder(model, d)

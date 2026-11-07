@@ -49,7 +49,7 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
       const rs = { w: navier(a, b, t, mat.E, mat.nu, qg + q).w / eta };
       let okP = true;
       if (P_kg) {          // carga puntual sobre la encimera: misma comprobación que la verificación final
-        const size = crit.point_load_patch_mm;
+        const size = surf.patch_mm ?? crit.point_load_patch_mm;
         okP = navier(a, b, t, mat.E, mat.nu, gG * qg, [gQ * P_kg * G_ACC, size, size, a / 2, b / 2], null, 121).sigma / eta <= fyd;
       }
       if (ru.sigma <= fyd && rs.w <= Math.min(a, b) / dl && !okP) pointOnly = true;

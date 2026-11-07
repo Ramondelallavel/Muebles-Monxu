@@ -124,6 +124,10 @@ class MesaSoldadura(MesaIndustrial):
                       5000, help="Martilleo, tensado de amarres o desplazamiento de piezas.")
             elif s.name == "USO":
                 s = P("USO", "Uso previsto", "choice", "trabajo_pesado", None, "cargas", choices=s.choices)
+            elif s.name == "MATERIAL_ESTRUCTURAL":
+                # la placa de acero va soldada a la estructura: sólo aceros al carbono (no aluminio ni inoxidable)
+                s = P("MATERIAL_ESTRUCTURAL", "Material de la estructura", "choice", "S235JRH", None, "materiales",
+                      choices=[c for c in s.choices if catalog.material(c).family == "acero_carbono"])
             out.append(s)
         idx = max(i for i, s in enumerate(out) if s.group == "dimensiones") + 1
         out.insert(idx, P("VUELO", "Vuelo de la placa sobre la estructura", "float", 60.0, "mm", "dimensiones", 30, 200,
@@ -246,20 +250,22 @@ class MesaSoldadura(MesaIndustrial):
             part = PlatePart("placa_soldadura", f"Placa de soldadura {t:g} mm{desc}", L, W, t, v["MATERIAL_PLACA"], None,
                              corner_r=PLATE_CORNER_R, holes=holes)
             model.add(self.top_iid, "Placa de soldadura", part, G.translation(0, 0, H - t), "ENC")
-            # cordones discontinuos placa–bastidor en largueros y travesaños extremos
-            lv = model.structure["levels"]["SUP"]
-            for mid in lv["long"] + lv["end"]:
-                inst = model.instance(mid)
-                p0, p1 = inst.axis
-                Lm = float(np.linalg.norm(p1 - p0))
-                n = max(2, math.ceil(Lm / STITCH_PITCH))
-                loc = tuple(float(x) for x in (p0 + p1) / 2 + np.array([0, 0, inst.part.profile.H / 2]))
-                a_w = d["weld_a"](min(t, inst.part.profile.t))
-                model.add_joint(Joint(f"J.PLACA_SOLD.{mid.split('.', 1)[1]}", "soldadura", (self.top_iid, mid), loc,
-                                      "Placa de soldadura a bastidor",
-                                      weld={"type": "fillet", "a": a_w, "all_around": False, "process": "135 (MAG)",
-                                            "length": round(n * STITCH_L, 1),
-                                            "note": f"{n} cordones de {STITCH_L:g} mm cada {STITCH_PITCH:g} mm, alternos"}))
+            self._stitch_welds(model, d, t, "Placa de soldadura a bastidor")
+
+    def _stitch_welds(self, model, d, t, desc):
+        """Cordones discontinuos placa–bastidor en largueros y travesaños extremos."""
+        lv = model.structure["levels"]["SUP"]
+        for mid in lv["long"] + lv["end"]:
+            inst = model.instance(mid)
+            p0, p1 = inst.axis
+            Lm = float(np.linalg.norm(p1 - p0))
+            n = max(2, math.ceil(Lm / STITCH_PITCH))
+            loc = tuple(float(x) for x in (p0 + p1) / 2 + np.array([0, 0, inst.part.profile.H / 2]))
+            a_w = d["weld_a"](min(t, inst.part.profile.t))
+            model.add_joint(Joint(f"J.PLACA_SOLD.{mid.split('.', 1)[1]}", "soldadura", (self.top_iid, mid), loc, desc,
+                                  weld={"type": "fillet", "a": a_w, "all_around": False, "process": "135 (MAG)",
+                                        "length": round(n * STITCH_L, 1),
+                                        "note": f"{n} cordones de {STITCH_L:g} mm cada {STITCH_PITCH:g} mm, alternos"}))
 
     def _structure(self, model, d, legs):
         st = super()._structure(model, d, legs)

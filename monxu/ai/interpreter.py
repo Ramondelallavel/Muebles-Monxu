@@ -6,6 +6,7 @@ cálculo verifica. Distingue datos del usuario, propuestas preliminares y datos 
 """
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from dataclasses import asdict, dataclass, field
@@ -25,6 +26,7 @@ FAMILY_KEYWORDS = [
     ("puesto_trabajo", r"puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion|embalaje)"),
     ("carro_taller", r"\bcarros?\b|\bcarritos?\b|carro de (taller|transporte)"),
     ("estanteria", r"estanteri"),
+    ("tarima", r"\btarimas?\b|plataformas? (?:\w+ ){0,2}(?:de trabajo|baja|para (?:el |los )?operari|de operari)|\bpodios?\b"),
     ("mesa_industrial", r"\bmesas?\b|banco de (trabajo|montaje)|\bbancos?\b"),
     ("armario", r"\barmario"),
 ]
@@ -123,6 +125,13 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
         it.set("LONGITUD", a, m.group(0))
         it.set("ANCHURA", b, m.group(0))
         it.set("ALTURA", c, m.group(0))
+    else:   # sólo planta: «2000 x 1000», «1500 por 800» (largo × ancho)
+        m = re.search(rf"{NUM}\s*{UNIT}?\s*(?:x|por)\s*{NUM}(?![\d.,])\s*{UNIT}?(?!\s*(?:x|por)\s*\d)(?!\s*(?:kg|kilos?|n\b|niveles))",
+                      t)
+        if m:
+            unit = m.group(4) or m.group(2)
+            it.set("LONGITUD", to_mm(to_number(m.group(1)), m.group(2) or unit), m.group(0))
+            it.set("ANCHURA", to_mm(to_number(m.group(3)), m.group(4) or unit), m.group(0))
     dim_words = {"LONGITUD": r"largo|longitud|long\.", "ANCHURA": r"ancho|anchura|profundidad|fondo",
                  "ALTURA": r"altura|alto"}
     for param, words in dim_words.items():
@@ -335,7 +344,34 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
         it.notes = [n for n in it.notes if "total de la mesa" not in n]
     if it.family == "estanteria_bateria":
         _battery_width(it, t)
+    if it.family == "tarima":
+        _tarima_loads(it, t)
     return it
+
+
+TARIMA_KN_M2 = 2.0       # EN ISO 14122-2: carga repartida mínima de plataformas
+
+
+def tarima_load_kg(L: float, W: float, q_kn_m2: float = TARIMA_KN_M2) -> float:
+    """Carga repartida total (kg) equivalente a q kN/m² sobre la superficie L × W (mm)."""
+    return float(math.ceil(q_kn_m2 * L * W * 1e-6 / 9.81e-3))
+
+
+def _tarima_loads(it: Interpretation, t: str) -> None:
+    """Tarima: carga en kN/m² o kg/m² convertida a carga total; sin balda ni peto."""
+    mm = re.search(rf"{NUM}\s*(kn|kg)\s*/\s*m(?:2|²|\s*cuadrado)", t)
+    if mm:
+        q = to_number(mm.group(1)) * (1.0 if mm.group(2) == "kn" else 9.81e-3)
+        L, W = it.values.get("LONGITUD"), it.values.get("ANCHURA")
+        if L and W:
+            it.set("CARGA_TOTAL", tarima_load_kg(L, W, q), mm.group(0))
+            it.notes.append(f"Carga de {q:g} kN/m² sobre {L * W * 1e-6:g} m²: {it.values['CARGA_TOTAL']:g} kg repartidos.")
+        else:
+            it.values.pop("CARGA_TOTAL", None)
+            it.notes.append(f"Carga de {q:g} kN/m²: indique largo y ancho para convertirla en carga total.")
+    for k in ("NUMERO_BALDAS", "CARGA_BALDA", "PETO_TRASERO", "MATERIAL_CHAPA", "ESPESOR_CHAPA"):
+        it.values.pop(k, None)
+        it.evidence.pop(k, None)
 
 
 def _battery_width(it: Interpretation, t: str) -> None:
@@ -365,7 +401,7 @@ def _battery_width(it: Interpretation, t: str) -> None:
 LABELS = {"mesa_industrial": "Mesa industrial", "estanteria": "Estantería industrial",
           "puesto_trabajo": "Puesto de trabajo industrial", "carro_taller": "Carro de taller",
           "carro_estanteria": "Carro estantería", "mesa_soldadura": "Mesa de soldadura",
-          "estanteria_bateria": "Estantería en batería",
+          "estanteria_bateria": "Estantería en batería", "tarima": "Tarima / plataforma de trabajo",
           "armario": "Armario / mobiliario auxiliar"}
 DIM_PROPOSAL = {"mesa_industrial": (1800.0, 800.0, 900.0), "puesto_trabajo": (1500.0, 750.0, 900.0),
                 "carro_taller": (1000.0, 600.0, 900.0), "mesa_soldadura": (1500.0, 1000.0, 850.0)}
@@ -377,6 +413,8 @@ def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = N
     q: list[Question] = []
     if family in SHELF_LIKE:
         return _missing_shelf(values, asked, family)
+    if family == "tarima":
+        return _missing_tarima(values, asked)
     if family not in MESA_LIKE:
         return q
     dL, dW, dH = DIM_PROPOSAL[family]
@@ -437,6 +475,33 @@ def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = N
     return q
 
 
+def _missing_tarima(values: dict[str, Any], asked: set[str]) -> list[Question]:
+    q: list[Question] = []
+    for p, lbl, prop in (("LONGITUD", "longitud", 1200.0), ("ANCHURA", "anchura (fondo)", 800.0),
+                         ("ALTURA", "altura de la superficie de tránsito (hasta 500 mm)", 200.0)):
+        if p not in values:
+            q.append(Question(p, f"¿Qué {lbl} necesita (mm)?", "Dimensión principal necesaria para generar la geometría.",
+                              blocking="generacion", proposal=prop))
+    if values.get("CARGA_TOTAL") is None:
+        L, W = values.get("LONGITUD", 1200.0), values.get("ANCHURA", 800.0)
+        prop = tarima_load_kg(L, W)
+        q.append(Question("CARGA_TOTAL", "¿Qué carga repartida soportará la tarima (kg en total)? EN ISO 14122-2 pide al "
+                                         f"menos 2 kN/m²: {prop:g} kg para {L * W * 1e-6:g} m².",
+                          "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.",
+                          [{"label": f"EN ISO 14122-2 ({prop:g} kg)", "value": prop},
+                           {"label": f"Taller, 5 kN/m² ({tarima_load_kg(L, W, 5.0):g} kg)",
+                            "value": tarima_load_kg(L, W, 5.0)}], "verificacion", prop))
+    if "ANCLAJE" not in values and "ANCLAJE" not in asked:
+        q.append(Question("ANCLAJE", "¿Se anclará la tarima al suelo?", "Evita desplazamientos y vuelco con empujes.",
+                          [{"label": "Anclada al suelo", "value": "al_suelo"}, {"label": "Sin anclaje", "value": "ninguno"}],
+                          "confirmacion", "ninguno"))
+    if "ENTORNO" not in values and "ENTORNO" not in asked:
+        q.append(Question("ENTORNO", "¿Entorno de uso (interior seco, húmedo, exterior)?", "Afecta al acabado (corrosión).",
+                          [{"label": "Interior seco", "value": "interior_seco"},
+                           {"label": "Interior húmedo", "value": "interior_humedo"}], "confirmacion", "interior_seco"))
+    return q
+
+
 def _missing_shelf(values: dict[str, Any], asked: set[str], family: str = "estanteria") -> list[Question]:
     q: list[Question] = []
     cart = family == "carro_estanteria"
@@ -489,6 +554,17 @@ def _missing_shelf(values: dict[str, Any], asked: set[str], family: str = "estan
 
 def proposal_for(family: str, values: dict[str, Any]) -> dict[str, Any]:
     """Configuración constructiva preliminar (propuesta IA) para completar lo no indicado."""
+    if family == "tarima":
+        p: dict[str, Any] = {k: v for k, v in (("LONGITUD", 1200.0), ("ANCHURA", 800.0), ("ALTURA", 200.0))
+                             if k not in values}
+        if values.get("CARGA_TOTAL") is None:
+            p["CARGA_TOTAL"] = tarima_load_kg(values.get("LONGITUD", 1200.0), values.get("ANCHURA", 800.0))
+        if values.get("CARGA_PUNTUAL") is None:
+            p["CARGA_PUNTUAL"] = 153.0
+        for k in ("PERFIL_PATA", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ESPESOR_PLACA"):
+            if k not in values:
+                p[k] = "auto"
+        return p
     if family in SHELF_LIKE:
         cart = family == "carro_estanteria"
         dims = ((("ANCHURA", 1000.0), ("PROFUNDIDAD", 600.0), ("ALTURA", 1400.0), ("NUMERO_NIVELES", 3)) if cart else
@@ -546,13 +622,15 @@ def describe(it: Interpretation) -> list[str]:
             nb = v["NUMERO_NIVELES"] * (v.get("NUMERO_MODULOS", 1) if bat else 1)
             out.append(f"Carga total nominal solicitada: {v['CARGA_POR_NIVEL'] * nb:g} kg.")
     if "CARGA_TOTAL" in v:
-        out.append(f"Carga distribuida sobre encimera: {v['CARGA_TOTAL']:g} kg.")
+        out.append(f"Carga distribuida sobre {'la tarima' if it.family == 'tarima' else 'encimera'}: {v['CARGA_TOTAL']:g} kg.")
     if "CARGA_BALDA" in v:
         out.append(f"Carga sobre balda: {v['CARGA_BALDA']:g} kg.")
     if "CARGA_PUNTUAL" in v:
         out.append(f"Carga puntual: {v['CARGA_PUNTUAL']:g} kg.")
     out.append("Material: " + (v["MATERIAL_ESTRUCTURAL"] if "MATERIAL_ESTRUCTURAL" in v else "pendiente de selección") + ".")
-    if it.family in ("estanteria", "estanteria_bateria"):
+    if it.family == "tarima":
+        out.append("Superficie: chapa de acero soldada al bastidor (antideslizante a prever); cargas de EN ISO 14122-2.")
+    if it.family in ("estanteria", "estanteria_bateria", "tarima"):
         out.append("Anclaje: " + {"al_suelo": "al suelo", "ninguno": "sin anclaje"}.get(v.get("ANCLAJE"), "pendiente") + ".")
     if it.family in MESA_LIKE:
         out.append("Balda inferior: " + ("sí" if v.get("NUMERO_BALDAS", None) == 1 else

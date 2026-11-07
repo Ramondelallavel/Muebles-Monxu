@@ -16,6 +16,7 @@ const FAMILY_KEYWORDS = [
   ["estanteria_bateria", /estanterias? (?:\w+ ){0,3}en bateria|baterias? de (?:\w+ )?(?:estanterias|modulos)|estanterias? (?:\w+ ){0,3}de \w+ (?:modulos|cuerpos|vanos)|\w+ (?:modulos|cuerpos|vanos) de estanteri|estanterias? modular|estanterias? (?:corrida|continua)s?\b/],
   ["carro_taller", /\bcarros?\b|\bcarritos?\b|carro de (taller|transporte)/],
   ["estanteria", /estanteri/],
+  ["tarima", /\btarimas?\b|plataformas? (?:\w+ ){0,2}(?:de trabajo|baja|para (?:el |los )?operari|de operari)|\bpodios?\b/],
   ["mesa_industrial", /\bmesas?\b|banco de (trabajo|montaje)|\bbancos?\b/],
   ["armario", /\barmario/],
 ];
@@ -36,7 +37,7 @@ const UNSUPPORTED = [
   ["regulable", "regulable en altura|altura regulable", "Regulación de altura"],
 ];
 export const LABELS = { mesa_industrial: "Mesa industrial", estanteria: "Estantería industrial", puesto_trabajo: "Puesto de trabajo industrial",
-  carro_taller: "Carro de taller", carro_estanteria: "Carro estantería", mesa_soldadura: "Mesa de soldadura", estanteria_bateria: "Estantería en batería",
+  carro_taller: "Carro de taller", carro_estanteria: "Carro estantería", mesa_soldadura: "Mesa de soldadura", estanteria_bateria: "Estantería en batería", tarima: "Tarima / plataforma de trabajo",
   armario: "Armario / mobiliario auxiliar" };
 const DIM_PROPOSAL = { mesa_industrial: [1800.0, 800.0, 900.0], puesto_trabajo: [1500.0, 750.0, 900.0], carro_taller: [1000.0, 600.0, 900.0],
   mesa_soldadura: [1500.0, 1000.0, 850.0] };
@@ -85,6 +86,13 @@ export function parse(text, pending = null) {
     const unit = m[6] || m[4] || m[2];
     const [a, b, c] = [1, 3, 5].map((i) => toMm(toNumber(m[i]), m[i + 1] || unit));
     it.set("LONGITUD", a, m[0]); it.set("ANCHURA", b, m[0]); it.set("ALTURA", c, m[0]);
+  } else {   // sólo planta: «2000 x 1000», «1500 por 800» (largo × ancho)
+    m = t.match(R(String.raw`${NUM}\s*${UNIT}?\s*(?:x|por)\s*${NUM}(?![\d.,])\s*${UNIT}?(?!\s*(?:x|por)\s*\d)(?!\s*(?:kg|kilos?|n\b|niveles))`));
+    if (m) {
+      const unit = m[4] || m[2];
+      it.set("LONGITUD", toMm(toNumber(m[1]), m[2] || unit), m[0]);
+      it.set("ANCHURA", toMm(toNumber(m[3]), m[4] || unit), m[0]);
+    }
   }
   const dimWords = { LONGITUD: String.raw`largo|longitud|long\.`, ANCHURA: "ancho|anchura|profundidad|fondo", ALTURA: "altura|alto" };
   for (const [param, words] of Object.entries(dimWords)) {
@@ -242,6 +250,7 @@ export function parse(text, pending = null) {
     it.notes = it.notes.filter((n) => !n.includes("total de la mesa"));
   }
   if (it.family === "estanteria_bateria") batteryWidth(it, t);
+  if (it.family === "tarima") tarimaLoads(it, t);
   return it;
 }
 
@@ -269,9 +278,46 @@ function batteryWidth(it, t) {
 }
 
 const Q = (param, question, why, options = [], blocking = "verificacion", proposal = null) => ({ param, question, why, options, blocking, proposal });
+const TARIMA_KN_M2 = 2.0;       // EN ISO 14122-2: carga repartida mínima de plataformas
+/** Carga repartida total (kg) equivalente a q kN/m² sobre la superficie L × W (mm). */
+export const tarimaLoadKg = (L, W, q = TARIMA_KN_M2) => Math.ceil((q * L * W * 1e-6) / 9.81e-3);
+/** Tarima: carga en kN/m² o kg/m² convertida a carga total; sin balda ni peto. */
+function tarimaLoads(it, t) {
+  const mm = t.match(R(String.raw`${NUM}\s*(kn|kg)\s*/\s*m(?:2|²|\s*cuadrado)`));
+  if (mm) {
+    const q = toNumber(mm[1]) * (mm[2] === "kn" ? 1.0 : 9.81e-3);
+    const L = it.values.LONGITUD, W = it.values.ANCHURA;
+    if (L && W) {
+      it.set("CARGA_TOTAL", tarimaLoadKg(L, W, q), mm[0]);
+      it.notes.push(`Carga de ${g(q)} kN/m² sobre ${g(L * W * 1e-6)} m²: ${g(it.values.CARGA_TOTAL)} kg repartidos.`);
+    } else {
+      delete it.values.CARGA_TOTAL;
+      it.notes.push(`Carga de ${g(q)} kN/m²: indique largo y ancho para convertirla en carga total.`);
+    }
+  }
+  for (const k of ["NUMERO_BALDAS", "CARGA_BALDA", "PETO_TRASERO", "MATERIAL_CHAPA", "ESPESOR_CHAPA"]) { delete it.values[k]; delete it.evidence[k]; }
+}
+function missingTarima(values, asked) {
+  const q = [];
+  for (const [p, lbl, prop] of [["LONGITUD", "longitud", 1200.0], ["ANCHURA", "anchura (fondo)", 800.0], ["ALTURA", "altura de la superficie de tránsito (hasta 500 mm)", 200.0]])
+    if (!(p in values)) q.push(Q(p, `¿Qué ${lbl} necesita (mm)?`, "Dimensión principal necesaria para generar la geometría.", [], "generacion", prop));
+  if (values.CARGA_TOTAL == null) {
+    const L = values.LONGITUD ?? 1200.0, W = values.ANCHURA ?? 800.0, prop = tarimaLoadKg(L, W);
+    q.push(Q("CARGA_TOTAL", `¿Qué carga repartida soportará la tarima (kg en total)? EN ISO 14122-2 pide al menos 2 kN/m²: ${g(prop)} kg para ${g(L * W * 1e-6)} m².`,
+      "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.",
+      [{ label: `EN ISO 14122-2 (${g(prop)} kg)`, value: prop }, { label: `Taller, 5 kN/m² (${g(tarimaLoadKg(L, W, 5.0))} kg)`, value: tarimaLoadKg(L, W, 5.0) }],
+      "verificacion", prop));
+  }
+  if (!("ANCLAJE" in values) && !asked.has("ANCLAJE")) q.push(Q("ANCLAJE", "¿Se anclará la tarima al suelo?", "Evita desplazamientos y vuelco con empujes.",
+    [{ label: "Anclada al suelo", value: "al_suelo" }, { label: "Sin anclaje", value: "ninguno" }], "confirmacion", "ninguno"));
+  if (!("ENTORNO" in values) && !asked.has("ENTORNO")) q.push(Q("ENTORNO", "¿Entorno de uso (interior seco, húmedo, exterior)?", "Afecta al acabado (corrosión).",
+    [{ label: "Interior seco", value: "interior_seco" }, { label: "Interior húmedo", value: "interior_humedo" }], "confirmacion", "interior_seco"));
+  return q;
+}
 export function missingData(family, values, asked = new Set()) {
   const q = [];
   if (SHELF_LIKE.includes(family)) return missingShelf(values, asked, family);
+  if (family === "tarima") return missingTarima(values, asked);
   if (!MESA_LIKE.includes(family)) return q;
   const [dL, dW, dH] = DIM_PROPOSAL[family];
   for (const [p, lbl, prop] of [["LONGITUD", "longitud", dL], ["ANCHURA", "anchura (fondo)", dW], ["ALTURA", "altura de trabajo", dH]])
@@ -329,6 +375,14 @@ function missingShelf(values, asked, family = "estanteria") {
 }
 
 export function proposalFor(family, values) {
+  if (family === "tarima") {
+    const p = {};
+    for (const [k, v] of [["LONGITUD", 1200.0], ["ANCHURA", 800.0], ["ALTURA", 200.0]]) if (!(k in values)) p[k] = v;
+    if (values.CARGA_TOTAL == null) p.CARGA_TOTAL = tarimaLoadKg(values.LONGITUD ?? 1200.0, values.ANCHURA ?? 800.0);
+    if (values.CARGA_PUNTUAL == null) p.CARGA_PUNTUAL = 153.0;
+    for (const k of ["PERFIL_PATA", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ESPESOR_PLACA"]) if (!(k in values)) p[k] = "auto";
+    return p;
+  }
   if (SHELF_LIKE.includes(family)) {
     const cart = family === "carro_estanteria";
     const p = {};
@@ -369,11 +423,12 @@ export function describe(it) {
     out.push(`Carga por ${bat ? "bandeja" : "nivel"}: ${g(v.CARGA_POR_NIVEL)} kg.`);
     if ("NUMERO_NIVELES" in v) out.push(`Carga total nominal solicitada: ${g(v.CARGA_POR_NIVEL * v.NUMERO_NIVELES * (bat ? v.NUMERO_MODULOS ?? 1 : 1))} kg.`);
   }
-  if ("CARGA_TOTAL" in v && v.CARGA_TOTAL != null) out.push(`Carga distribuida sobre encimera: ${g(v.CARGA_TOTAL)} kg.`);
+  if ("CARGA_TOTAL" in v && v.CARGA_TOTAL != null) out.push(`Carga distribuida sobre ${it.family === "tarima" ? "la tarima" : "encimera"}: ${g(v.CARGA_TOTAL)} kg.`);
   if ("CARGA_BALDA" in v && v.CARGA_BALDA != null) out.push(`Carga sobre balda: ${g(v.CARGA_BALDA)} kg.`);
   if ("CARGA_PUNTUAL" in v && v.CARGA_PUNTUAL != null) out.push(`Carga puntual: ${g(v.CARGA_PUNTUAL)} kg.`);
   out.push("Material: " + ("MATERIAL_ESTRUCTURAL" in v ? v.MATERIAL_ESTRUCTURAL : "pendiente de selección") + ".");
-  if (it.family === "estanteria" || it.family === "estanteria_bateria") out.push("Anclaje: " + ({ al_suelo: "al suelo", ninguno: "sin anclaje" }[v.ANCLAJE] ?? "pendiente") + ".");
+  if (it.family === "tarima") out.push("Superficie: chapa de acero soldada al bastidor (antideslizante a prever); cargas de EN ISO 14122-2.");
+  if (it.family === "estanteria" || it.family === "estanteria_bateria" || it.family === "tarima") out.push("Anclaje: " + ({ al_suelo: "al suelo", ninguno: "sin anclaje" }[v.ANCLAJE] ?? "pendiente") + ".");
   if (MESA_LIKE.includes(it.family)) {
     out.push("Balda inferior: " + (v.NUMERO_BALDAS === 1 ? "sí" : v.NUMERO_BALDAS === 0 ? "no" : "no indicada") + ".");
     out.push("Tipo de estructura: tubular soldada" + (it.accessories.includes("estructura tubular") ? " (indicada)." : " (propuesta)."));

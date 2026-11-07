@@ -212,6 +212,29 @@ def dfm_check(model, plan: dict[str, Any] | None = None) -> list[dict[str, Any]]
     if thin:
         add("advertencia", "SOL-GARGANTA", "Uniones soldadas", f"{len(thin)} cordones con garganta < 3 mm en pared "
             "delgada: requieren WPS cualificada y control de penetración.", "Soldar con MAG pulsado, hilo Ø0,8.")
+    # compatibilidad de materiales en las uniones soldadas (la tuerca DIN 929 de acero no se suelda a aluminio)
+    def weld_family(inst):
+        p = inst.part
+        if isinstance(p, StandardPart):
+            return p.data.get("material_family", "acero_carbono")
+        mat = getattr(p, "material", None)
+        return catalog.material(mat).family if mat else None
+    alu_steel, dissimilar = [], []
+    for j in model.joints:
+        if j.kind != "soldadura":
+            continue
+        fams = {weld_family(model.instance(i)) for i in j.members} - {None}
+        if "aluminio" in fams and len(fams) > 1:
+            alu_steel.append(j.id)
+        elif fams == {"acero_carbono", "acero_inoxidable"}:
+            dissimilar.append(j.id)
+    if alu_steel:
+        add("error", "SOL-MATERIALES", "Uniones soldadas", f"{len(alu_steel)} uniones soldadas entre aluminio y acero "
+            f"(p. ej. {alu_steel[0]}): no son soldables por fusión.", "Usar el mismo material en las piezas soldadas.")
+    if dissimilar:
+        add("advertencia", "SOL-DISIMILAR", "Uniones soldadas", f"{len(dissimilar)} uniones soldadas entre acero al "
+            f"carbono e inoxidable (p. ej. {dissimilar[0]}): soldadura disimilar con aporte austenítico (tipo 309L) y "
+            "riesgo de corrosión en ambiente húmedo.", "Usar el mismo material en las piezas soldadas.")
     add("advertencia", "SOL-ENRASE", "Bastidores", "Largueros y travesaños extremos enrasados con la cara exterior de "
         "las patas: en la cara enrasada el cordón es en ángulo exterior/borde y debe amolarse antes de pintar.")
     add("advertencia", "SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: "

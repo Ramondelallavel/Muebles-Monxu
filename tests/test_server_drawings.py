@@ -31,7 +31,8 @@ def _overlaps(path):
 @pytest.mark.slow
 @pytest.mark.parametrize("fid,tid", [("carro_estanteria", "CE-1000-3"), ("mesa_industrial", "MI-2200"),
                                      ("puesto_trabajo", "PT-1500-MONTAJE"),
-                                     ("estanteria_bateria", "EB-3x1000-5"), ("mesa_soldadura", "MS-2000-28")])
+                                     ("estanteria_bateria", "EB-3x1000-5"), ("mesa_soldadura", "MS-2000-28"),
+                                     ("tarima", "TA-3000x1200-450")])
 def test_server_drawings_without_text_overlaps(tmp_path, fid, tid):
     t = next(t for t in REGISTRY[fid].templates() if t["id"] == tid)
     d = regenerate(fid, t["values"])

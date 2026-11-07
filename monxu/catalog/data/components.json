@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026.11-3",
+    "version": "2026.11-4",
     "note": "Componentes normalizados y comerciales. Las capacidades de carga de componentes comerciales (pies, ruedas) son datos de catálogo de referencia genéricos y DEBEN confirmarse con la ficha técnica del proveedor seleccionado; el informe de cálculo las marca como tales. Masas de tornillería: valores típicos de catálogo (orientativos)."
   },
   "components": {
@@ -240,7 +240,28 @@
       "thread": "M10",
       "s": 17,
       "m": 8,
-      "mass_kg": 0.011
+      "mass_kg": 0.011,
+      "material_family": "acero_carbono"
+    },
+    "TUERCA_SOLDAR_M10_A2": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M10, inoxidable A2",
+      "standard": "DIN 929 A2",
+      "thread": "M10",
+      "s": 17,
+      "m": 8,
+      "mass_kg": 0.011,
+      "material_family": "acero_inoxidable"
+    },
+    "TUERCA_SOLDAR_M10_AL": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M10, aluminio AlMg3",
+      "standard": "Hexagonal para soldar (catálogo de fabricante, aluminio)",
+      "thread": "M10",
+      "s": 17,
+      "m": 8,
+      "mass_kg": 0.0037,
+      "material_family": "aluminio"
     },
     "TUERCA_SOLDAR_M12": {
       "category": "tornilleria",
@@ -249,7 +270,28 @@
       "thread": "M12",
       "s": 19,
       "m": 10,
-      "mass_kg": 0.016
+      "mass_kg": 0.016,
+      "material_family": "acero_carbono"
+    },
+    "TUERCA_SOLDAR_M12_A2": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M12, inoxidable A2",
+      "standard": "DIN 929 A2",
+      "thread": "M12",
+      "s": 19,
+      "m": 10,
+      "mass_kg": 0.016,
+      "material_family": "acero_inoxidable"
+    },
+    "TUERCA_SOLDAR_M12_AL": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M12, aluminio AlMg3",
+      "standard": "Hexagonal para soldar (catálogo de fabricante, aluminio)",
+      "thread": "M12",
+      "s": 19,
+      "m": 10,
+      "mass_kg": 0.0054,
+      "material_family": "aluminio"
     },
     "TUERCA_SOLDAR_M16": {
       "category": "tornilleria",
@@ -258,7 +300,28 @@
       "thread": "M16",
       "s": 24,
       "m": 13,
-      "mass_kg": 0.034
+      "mass_kg": 0.034,
+      "material_family": "acero_carbono"
+    },
+    "TUERCA_SOLDAR_M16_A2": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M16, inoxidable A2",
+      "standard": "DIN 929 A2",
+      "thread": "M16",
+      "s": 24,
+      "m": 13,
+      "mass_kg": 0.034,
+      "material_family": "acero_inoxidable"
+    },
+    "TUERCA_SOLDAR_M16_AL": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M16, aluminio AlMg3",
+      "standard": "Hexagonal para soldar (catálogo de fabricante, aluminio)",
+      "thread": "M16",
+      "s": 24,
+      "m": 13,
+      "mass_kg": 0.0115,
+      "material_family": "aluminio"
     },
     "TUERCA_SOLDAR_M20": {
       "category": "tornilleria",
@@ -267,7 +330,28 @@
       "thread": "M20",
       "s": 30,
       "m": 16,
-      "mass_kg": 0.07
+      "mass_kg": 0.07,
+      "material_family": "acero_carbono"
+    },
+    "TUERCA_SOLDAR_M20_A2": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M20, inoxidable A2",
+      "standard": "DIN 929 A2",
+      "thread": "M20",
+      "s": 30,
+      "m": 16,
+      "mass_kg": 0.07,
+      "material_family": "acero_inoxidable"
+    },
+    "TUERCA_SOLDAR_M20_AL": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M20, aluminio AlMg3",
+      "standard": "Hexagonal para soldar (catálogo de fabricante, aluminio)",
+      "thread": "M20",
+      "s": 30,
+      "m": 16,
+      "mass_kg": 0.0237,
+      "material_family": "aluminio"
     },
     "TUERCA_SOLDAR_M8": {
       "category": "tornilleria",
@@ -276,7 +360,28 @@
       "thread": "M8",
       "s": 14,
       "m": 6.5,
-      "mass_kg": 0.0055
+      "mass_kg": 0.0055,
+      "material_family": "acero_carbono"
+    },
+    "TUERCA_SOLDAR_M8_A2": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M8, inoxidable A2",
+      "standard": "DIN 929 A2",
+      "thread": "M8",
+      "s": 14,
+      "m": 6.5,
+      "mass_kg": 0.0055,
+      "material_family": "acero_inoxidable"
+    },
+    "TUERCA_SOLDAR_M8_AL": {
+      "category": "tornilleria",
+      "name": "Tuerca hexagonal para soldar M8, aluminio AlMg3",
+      "standard": "Hexagonal para soldar (catálogo de fabricante, aluminio)",
+      "thread": "M8",
+      "s": 14,
+      "m": 6.5,
+      "mass_kg": 0.0019,
+      "material_family": "aluminio"
     },
     "RUEDA_ESP_M12_D80": {
       "category": "ruedas_espiga",

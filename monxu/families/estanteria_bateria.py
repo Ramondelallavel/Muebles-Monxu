@@ -24,7 +24,7 @@ from ..core.model import Joint, PlatePart, ProductModel, ProfilePart, SheetPart,
 from ..core.params import AUTO, ParamContext, ParameterSet, ParamSpec
 from .base import register
 from .estanteria import CANDIDATES as EST_CANDIDATES, CONSTRUCTIVE_DEFAULTS as EST_DEFAULTS, Estanteria
-from .mesa_industrial import flange_hole_d
+from .mesa_industrial import flange_hole_d, weld_nut_code
 
 BAY_GAP = 1.0                 # junta entre bandejas de módulos contiguos
 FIX_MARGIN = 60.0             # margen de fijaciones respecto a la cara del montante (como _fix_layout)
@@ -162,7 +162,7 @@ class EstanteriaBateria(Estanteria):
             corners[f"T{k}"], cname[f"T{k}"] = (x, Pf - a / 2), f"trasero {k + 1}"
         foot = catalog.component(v[self.support_param])
         thread = float(foot["thread"][1:])
-        nut_code = f"TUERCA_SOLDAR_M{thread:.0f}"
+        nut_code = weld_nut_code(thread, mat_s)
         rn = catalog.component("TUERCA_REMACHABLE_M6")
         sc = catalog.component("TORNILLO_ISO7380_M6x12")
         weld = self._make_welder(model, d)
