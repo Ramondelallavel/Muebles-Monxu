@@ -1,0 +1,50 @@
+{
+  "_meta": {
+    "version": "2026.11-2",
+    "currency": "EUR",
+    "note": "Tarifas orientativas de taller (España, 2026) para estimar el coste de fabricación. Deben ajustarse a los precios reales del taller y de los proveedores. No incluyen transporte, embalaje especial, diseño ni impuestos."
+  },
+  "material_eur_kg": {
+    "acero_carbono": {"tubo": 1.45, "chapa": 1.15, "pletina": 1.20},
+    "acero_inoxidable": {"tubo": 5.20, "chapa": 4.40, "pletina": 4.60},
+    "aluminio": {"tubo": 5.50, "chapa": 5.00, "pletina": 5.20}
+  },
+  "material_overrides_eur_kg": {
+    "S250GD+Z": 1.35, "DX51D+Z": 1.30, "DC01": 1.20, "S355JR": 1.30, "S355J2H": 1.60, "S275JR": 1.22,
+    "S275J0H": 1.52, "1.4404": 6.20, "1.4016": 3.20
+  },
+  "components_eur": [
+    ["PIE_NIV_M8", 2.10], ["PIE_NIV_M10", 2.60], ["PIE_NIV_M12_D80", 4.20], ["PIE_NIV_M12", 3.40],
+    ["PIE_NIV_M16_D100", 8.90], ["PIE_NIV_M16", 6.80], ["PIE_NIV_M20", 11.50],
+    ["RUEDA_ESP_M12_D80_FRENO", 9.50], ["RUEDA_ESP_M12_D80", 6.90], ["RUEDA_ESP_M12_D100_FRENO", 11.80],
+    ["RUEDA_ESP_M12_D100", 8.40], ["RUEDA_ESP_M16_D125_FRENO", 16.50], ["RUEDA_ESP_M16_D125", 12.20],
+    ["RUEDA_ESP_M16_D160_FRENO", 24.00], ["RUEDA_ESP_M16_D160", 18.50],
+    ["RUEDA_100", 9.00], ["RUEDA_125", 13.00],
+    ["TUERCA_SOLDAR_M8", 0.18], ["TUERCA_SOLDAR_M10", 0.22], ["TUERCA_SOLDAR_M12", 0.28], ["TUERCA_SOLDAR_M16", 0.45],
+    ["TUERCA_SOLDAR_M20", 0.70], ["TUERCA_REMACHABLE", 0.12], ["TORNILLO_ISO7380_M6", 0.09], ["TORNILLO_ISO7380_M8", 0.14],
+    ["TAPON", 0.15]
+  ],
+  "component_default_eur": 0.50,
+  "consumables_eur": {"hilo_kg": 3.20, "gas_l": 0.025},
+  "labor_eur_h": {"taller": 32.0, "soldadura": 36.0, "montaje": 28.0},
+  "operations": {
+    "sierra_eur_corte": 0.45,
+    "taladro_eur": 0.35,
+    "laser_eur_m": [[1.0, 0.70], [1.5, 0.85], [2.0, 1.00], [3.0, 1.35], [4.0, 1.75], [5.0, 2.20], [6.0, 2.70], [8.0, 3.80], [10.0, 5.00], [12.0, 6.20], [15.0, 8.10], [20.0, 11.40]],
+    "laser_factor_material": {"acero_inoxidable": 1.6, "aluminio": 1.4},
+    "laser_eur_perforacion": 0.04,
+    "plegado_eur_pliegue": 0.70,
+    "soldadura_factor_marcha": 0.30,
+    "montaje_min": {"tornillo": 0.6, "tuerca_remachable": 0.5, "apoyo": 1.5, "por_unidad": 20.0},
+    "aprovechamiento_chapa_lote": 0.80,
+    "merma_perfil": 0.08,
+    "imputacion_material": "consumo"
+  },
+  "setup_eur": {"sierra_por_perfil": 6.0, "laser_por_referencia": 8.0, "plegado_por_referencia": 12.0, "soldadura_util": 25.0},
+  "finishes_eur": {
+    "POLVO_m2": 9.50, "CATAFORESIS_POLVO_m2": 15.00, "GALVANIZADO_kg": 0.85, "ZINCADO_CONTINUO_m2": 0.0,
+    "INOX_SATINADO_m2": 6.00, "INOX_PULIDO_m2": 14.00, "ANODIZADO_NATURAL_m2": 18.00, "SIN_ACABADO_m2": 0.0
+  },
+  "overheads": {"gastos_generales": 0.15, "margen": 0.20},
+  "lots": [1, 5, 10, 25, 50]
+}

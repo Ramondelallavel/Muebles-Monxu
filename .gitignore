@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+/var/
+/frontend/node_modules/
+/frontend/dist/
+*.egg-info/
+/frontend/tsconfig.tsbuildinfo
+/frontend/dist-artifact/
