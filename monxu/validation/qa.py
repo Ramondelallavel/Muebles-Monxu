@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 
 from .. import catalog
-from ..core.model import ProfilePart, SheetPart
+from ..core.model import PlatePart, ProfilePart, SheetPart
 
 BLOCK, WARN, OK, PEND = "bloqueante", "advertencia", "ok", "pendiente"
 
@@ -143,6 +143,22 @@ def model_checks(model, interf: dict, eng: dict, dfm: list, bom: dict) -> QA:
                   f"{p.ref}: desarrollo coherente con el sólido 3D (desviación de volumen {dev:.1e})." if dev < 1e-6
                   else f"{p.ref}: el desarrollo NO coincide con el sólido 3D (desviación de volumen {dev:.1e}); "
                        "suele deberse a taladros dentro de la zona de pliegue.")
+    # sólido B-rep frente a la definición analítica de perfiles y pletinas: detecta booleanas fallidas (taladros no
+    # restados, sólidos degenerados); misma comprobación que el motor del navegador
+    vol_dev = []
+    for p in model.parts.values():
+        if isinstance(p, ProfilePart):
+            exp = p.profile.props.A * p.length - sum(math.pi * h[3] ** 2 / 4 * p.profile.t for h in p.holes)
+        elif isinstance(p, PlatePart):
+            exp = (p.w * p.h - (4 - math.pi) * p.corner_r ** 2 - sum(math.pi * d ** 2 / 4 for _, _, d in p.holes)) * p.t
+        else:
+            continue
+        dev = abs(p.volume - exp) / exp
+        if dev > 5e-3:
+            vol_dev.append(f"{p.ref} {dev * 100:.2f} %")
+    q.add(BLOCK if vol_dev else OK, "GEO-VOLUMEN", f"Volumen del sólido distinto del analítico: {'; '.join(vol_dev)}"
+          if vol_dev else "Volumen de cada sólido (perfiles con taladros y pletinas) coherente con su definición analítica "
+                          "(< 0,5 %).")
     # verificación estructural
     st = eng["status"]
     if st == "NO_CUMPLE":

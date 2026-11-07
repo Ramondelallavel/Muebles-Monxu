@@ -21,7 +21,7 @@ from ..cad import geometry as G
 from ..core.model import PlatePart, ProfilePart, SheetPart, StandardPart
 from . import hlr
 from .drawing_kit import (FRAME, GREY, LW_DIM, LW_THICK, LW_THIN, SCALES, Drawing, choose_scale, fmt, place_view,
-                          scale_label)
+                          scale_label, text_width)
 
 TB_RESERVED = (226.0, 6.0, 412.0, 80.0)
 
@@ -100,24 +100,40 @@ def fit_view(proj, rect, scales=SCALES, free=False):
     return None, place_view(proj, k, ox, oy)
 
 
-def balloons(d: Drawing, view, view_name, targets: list[tuple[str, Any]], above=True, spacing=10.0, y_off=14.0):
+def balloons(d: Drawing, view, view_name, targets: list[tuple[str, Any]], above=True, spacing=10.0, y_off=14.0,
+             x_max: float | None = None):
     """targets: [(etiqueta, punto 3D)] -> globos en fila sobre (o bajo) la vista, ordenados por x."""
     pts = sorted(((lbl, _P(view, view_name, p)) for lbl, p in targets), key=lambda t: t[1][0])
     if not pts:
         return
-    n = len(pts)
-    xs = []
-    for _, tgt in pts:
-        x = tgt[0] if not xs else max(tgt[0], xs[-1] + spacing)
-        xs.append(x)
-    over = xs[-1] - (view.ox + view.w + 5)
-    if over > 0:                     # desplaza a la izquierda manteniendo la separación
-        xs = [x - over for x in xs]
-        for i in range(n - 2, -1, -1):
-            xs[i] = min(xs[i], xs[i + 1] - spacing)
-    y = view.oy + view.h + y_off if above else view.oy - y_off
-    for (lbl, tgt), x in zip(pts, xs):
-        d.balloon((x, y), tgt, lbl)
+    x_lo, x_hi = FRAME[0] + 6, (x_max if x_max is not None else min(view.ox + view.w + 5, FRAME[2] - 6))
+
+    def row(step):
+        xs = []
+        for _, tgt in pts:
+            xs.append(tgt[0] if not xs else max(tgt[0], xs[-1] + step))
+        over = xs[-1] - x_hi
+        if over > 0:                 # desplaza a la izquierda manteniendo la separación
+            xs = [x - over for x in xs]
+            for i in range(len(xs) - 2, -1, -1):
+                xs[i] = min(xs[i], xs[i + 1] - step)
+        return xs
+
+    # si una fila no cabe dentro del marco, se comprime y se reparte por turnos en varias filas: los globos de
+    # cada fila conservan la separación y los de una fila caen entre los de la otra
+    min_step = 8.8                   # globo de radio 4 con 0,8 mm de holgura
+    for n_rows, step in [(1, spacing), (1, min(spacing, min_step))] + [(n, min_step / n) for n in (2, 3, 4)]:
+        xs = row(step)
+        if xs[0] >= x_lo:
+            break
+    dy = spacing * 1.15
+    y0 = view.oy + view.h + y_off if above else view.oy - y_off
+    if above:                        # las filas apiladas no salen por arriba del marco
+        y0 = min(y0, FRAME[3] - 5 - (n_rows - 1) * dy)
+    for i, ((lbl, tgt), x) in enumerate(zip(pts, xs)):
+        k = i % n_rows
+        y = y0 + (k * dy if above else -k * dy)
+        d.balloon((max(x, x_lo), y), tgt, lbl)
 
 
 # ============================================================================ planos
@@ -192,7 +208,9 @@ def plan_general(d: Drawing, X: _Ctx):
     d.dim_v(ya, yb, pl.ox, pl.ox, pl.ox - 9, hi[1] - lo[1])
     # isométrica en el mayor hueco libre
     iso = X.proj("all", insts, "iso", hidden=False)
-    cands = [(p.ox + p.w + 18, 86, 405, 270), (pl.ox + pl.w + 22, 86, 405, p.oy - 14)]
+    # la isométrica no lleva cotas debajo: su rótulo va pegado a la vista y por encima de la franja del sello
+    # de estado (TB_RESERVED llega hasta y = 80)
+    cands = [(p.ox + p.w + 18, 92, 405, 270), (pl.ox + pl.w + 22, 92, 405, p.oy - 14)]
     best = None
     for r in cands:
         if r[2] - r[0] < 40 or r[3] - r[1] < 40:
@@ -203,6 +221,7 @@ def plan_general(d: Drawing, X: _Ctx):
     if best:
         vi = best[1]
         vi.label = "PERSPECTIVA ISOMÉTRICA" + (f" (E {scale_label(best[0])})" if best[0] else " (sin escala)")
+        vi.label_offset = 7
         vi.draw(d, hidden=False, lw=0.35)
     # datos del producto
     eng = X.eng
@@ -272,7 +291,8 @@ def plan_structure(d: Drawing, X: _Ctx):
             reps[i.part.key] = i
     targets = [(str(i.part.pos), i.centroid if i.part.kind != "normalizado" else (i.bbox[0] + i.bbox[1]) / 2)
                for i in reps.values() if i.part.kind == "perfil"]
-    balloons(d, a, "alzado", targets, above=True, y_off=20)
+    # la franja sobre el alzado y el perfil está libre hasta las notas de la derecha (x = 300)
+    balloons(d, a, "alzado", targets, above=True, y_off=20, x_max=296)
     d.notes(305, 268, ["Estructura soldada (subconjunto EST).",
                        f"Clase de ejecución {m.params.values['CLASE_EJECUCION']} según EN 1090-2.",
                        "Cotas a caras exteriores de perfil.",
@@ -322,7 +342,9 @@ def plan_profiles(d: Drawing, X: _Ctx):
         y -= 5
         for b in c["bars"]:
             x = 40.0
-            W = 180.0
+            lbl = f"Barra {b['bar']}: retal {fmt(b['remnant'])} mm{' (aprovechable)' if b['remnant_reusable'] else ''}"
+            # a la altura del cajetín la barra se acorta para que su rótulo termine antes de él
+            W = 180.0 if y > TB_RESERVED[3] else min(180.0, TB_RESERVED[0] - 4 - 3 - text_width(lbl, 2.2) - x)
             d.polyline([(x, y), (x + W, y), (x + W, y + 3.5), (x, y + 3.5), (x, y)], LW_THIN)
             k = W / c["bar_length"]
             xx = x + c["trim"] * k
@@ -334,8 +356,7 @@ def plan_profiles(d: Drawing, X: _Ctx):
                 if ww > 9:
                     d.text(xx + ww / 2, y + 0.9, cut["ref"].split("-")[-1], 2.0, "c")
                 xx += ww + c["kerf"] * k
-            d.text(x + W + 3, y + 0.6, f"Barra {b['bar']}: retal {fmt(b['remnant'])} mm"
-                                     f"{' (aprovechable)' if b['remnant_reusable'] else ''}", 2.2)
+            d.text(x + W + 3, y + 0.6, lbl, 2.2)
             y -= 5.5
             if y < 22:
                 return
@@ -394,8 +415,9 @@ def plan_sheet_part(d: Drawing, X: _Ctx, part: SheetPart, number: str):
         d.dim_h(Q(-spec.t, -hf)[0], Q(0, -hf)[0], Q(0, -hf)[1], Q(0, -hf)[1], Q(0, -hf)[1] - 4, spec.t,
                 f"{part.ref}_ESPESOR", "seccion")
         d.text(Q(-spec.R, -spec.R)[0] - 2, Q(-spec.R, -spec.R)[1] - 4, f"Ri {fmt(spec.r)}", 2.6, "r")
-        d.text((rect[0] + rect[2]) / 2, rect[1] - 6, f"SECCIÓN A-A (E {scale_label(sc)})", 3.0, "c", bold=True)
-        d.notes(rect[0], rect[1] - 12, [f"Espesor t = {fmt(spec.t)} mm · Ri = {fmt(spec.r)} mm · K = {spec.K:.3f}",
+        # título y notas por debajo del texto de la cota de espesor (que queda bajo el perfil)
+        d.text((rect[0] + rect[2]) / 2, rect[1] - 9, f"SECCIÓN A-A (E {scale_label(sc)})", 3.0, "c", bold=True)
+        d.notes(rect[0], rect[1] - 14, [f"Espesor t = {fmt(spec.t)} mm · Ri = {fmt(spec.r)} mm · K = {spec.K:.3f}",
                                         f"{bend_direction_text(spec)} · BD = {fmt(spec.BD, 3)} mm"], width=105)
     holes = sum(len(f.holes) for f in spec.flanges) + len(spec.holes)
     d.notes(296, 150, [f"Referencia: {part.ref}", f"Material: {catalog.material(part.material).name}",
@@ -549,9 +571,13 @@ def plan_welds(d: Drawing, X: _Ctx):
         while any(abs(y - py) < 6.5 and (px < v.ox + v.w / 2) == left for px, py in placed):
             y += 6.5
         bx = (v.ox - 4) if left else (v.ox + v.w + 4)
+        tail = 22 + 3.5 + text_width(f"135  ({n})", 2.4)      # base → final del texto de proceso y nº de unión
+        if left:          # la cola no debe salir del marco
+            bx = max(bx, FRAME[0] + 3 + tail)
+        else:             # ni entrar en los recuadros de detalle
+            bx = min(bx, 297 - tail)
         if y < 268:
-            d.weld_symbol(tgt, (bx, y), j.weld["a"], j.weld.get("all_around", True), "135", side=side)
-            d.text(bx + 24 * side + (3 if side > 0 else -3), y + 1.2, f"({n})", 2.4, "l" if side > 0 else "r")
+            d.weld_symbol(tgt, (bx, y), j.weld["a"], j.weld.get("all_around", True), "135", side=side, tag=f"({n})")
             placed.append((bx, y))
         L = j.weld["length"]
         rows.append([n, desc, f"a{fmt(j.weld['a'])}", "perimetral" if j.weld.get("all_around") else "3 cordones",

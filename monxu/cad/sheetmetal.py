@@ -129,10 +129,12 @@ class SheetMetalSpec:
         }
         if f.direction == "up":
             pts = {k: (x, -t - y) for k, (x, y) in pts.items()}
-        wp = (cq.Workplane("XY").moveTo(*pts["o0"]).threePointArc(pts["om"], pts["o1"])
-              .lineTo(*pts["tip0"]).lineTo(*pts["tip1"]).lineTo(*pts["i0"])
-              .threePointArc(pts["im"], pts["i1"]).close())
-        return wp
+        wp = cq.Workplane("XY").moveTo(*pts["o0"]).threePointArc(pts["om"], pts["o1"])
+        if h - R >= 0.01:
+            wp = wp.lineTo(*pts["tip0"]).lineTo(*pts["tip1"])
+        # si la pestaña no supera el pliegue sólo queda la zona curva (diseño señalado por el DFM como PLG-ALA-MIN),
+        # igual que en el motor del navegador
+        return wp.lineTo(*pts["i0"]).threePointArc(pts["im"], pts["i1"]).close()
 
     def solid(self) -> cq.Shape:
         base = self.base_region()
@@ -156,6 +158,8 @@ class SheetMetalSpec:
             T = G.frame(o, n, (0, 0, 1))  # X local = n̂, Y local = ẑ, Z local = n̂ × ẑ = ĉ
             assert np.allclose(T[:3, 2], c)
             solid = solid.fuse(G.place(sec, T))
+            if f.height - self.R < 0.01:
+                continue          # sin ala recta no hay taladros de pestaña
             for s, hh, d in f.holes:
                 zl = -hh if f.direction == "down" else -self.t + hh
                 p = pt(s) + np.array([0, 0, zl]) - n * 1.0

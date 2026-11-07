@@ -29,6 +29,12 @@ def text_width(s: str, h: float, bold: bool = False) -> float:
     return stringWidth(s, "Helvetica-Bold" if bold else "Helvetica", h / 0.72)
 
 
+def weld_triangle_offset(a: float, side: int) -> float:
+    """Distancia de la base del símbolo de soldadura al triángulo (con signo de lado)."""
+    w = text_width(f"a{fmt(a)}", 2.6)
+    return (max(9.0, 3.2 + w + 2.6) if side > 0 else 9.0) * side
+
+
 def fit_text(s: str, width: float, h: float) -> str:
     if text_width(s, h) <= width:
         return s
@@ -285,7 +291,7 @@ class Drawing:
         self.c.setFillColor(black)
         self.text(cx, cy - 1.2, str(label), 3.2, "c", bold=True)
 
-    def weld_symbol(self, target, base, a: float, all_around=True, process="135", length=None, side=1):
+    def weld_symbol(self, target, base, a: float, all_around=True, process="135", length=None, side=1, tag=None):
         """Símbolo ISO 2553: flecha, línea de referencia, triángulo de cordón en ángulo, garganta a, contorno."""
         bx, by = base
         self.line(base, target, LW_THIN)
@@ -294,7 +300,9 @@ class Drawing:
         Lr = 22 * side
         self.line((bx, by), (bx + Lr, by), LW_THIN)
         self.line((bx, by - 1.2), (bx + Lr, by - 1.2), LW_THIN, dash=[1.2, 0.8])   # línea de identificación
-        tx = bx + 9 * side
+        # el valor de garganta va antes del triángulo: con texto ancho (a1,5) se aleja el triángulo para que el
+        # texto no invada el círculo de contorno ni la línea de referencia que sale de la base
+        tx = bx + weld_triangle_offset(a, side)
         p = self.c.beginPath()
         p.moveTo(tx - 2.2, by)
         p.lineTo(tx + 2.2, by)
@@ -310,7 +318,8 @@ class Drawing:
         ex = bx + Lr
         self.line((ex, by), (ex + 2.5 * side, by + 2.5), LW_THIN)
         self.line((ex, by), (ex + 2.5 * side, by - 2.5), LW_THIN)
-        self.text(ex + 3.5 * side, by - 1.0, process, 2.4, "l" if side > 0 else "r")
+        # proceso y número de unión en un solo texto en la cola (no se pisan por anchos distintos)
+        self.text(ex + 3.5 * side, by - 1.0, process + (f"  {tag}" if tag else ""), 2.4, "l" if side > 0 else "r")
 
     def table(self, x, y_top, cols: list[tuple[str, float, str]], rows: list[list[Any]], row_h=5.0, head_h=6.0,
               text_h=2.4, max_rows: int | None = None) -> float:

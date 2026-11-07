@@ -7,7 +7,7 @@ const [N, SEED] = process.argv.slice(2).map(Number);
 let st = SEED || 1;
 const rnd = () => { st = (st * 1103515245 + 12345) % 2147483648; return st / 2147483648; };
 const pick = (a) => a[Math.floor(rnd() * a.length)];
-const KEEP = /^(LONGITUD|ANCHURA|PROFUNDIDAD|ALTURA|NUMERO_|CARGA_|ALA_|ESPESOR_|PERFIL_|PIE_|ALTURA_)/;
+const KEEP = /^(LONGITUD|ANCHURA|PROFUNDIDAD|ALTURA|NUMERO_|CARGA_|ALA_|ESPESOR_|PERFIL_|PIE_|ALTURA_|PETO_|ASA_|REPOSAPIES|ESTANTE_|PANEL_|RUEDA)/;
 function sample(fam) {
   const v = {};
   for (const s of fam.specs()) {

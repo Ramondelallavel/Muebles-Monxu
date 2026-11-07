@@ -135,8 +135,12 @@ class Store:
         with self.Session() as s:
             for fam in REGISTRY.values():
                 for t in fam.templates():
-                    if not s.get(Template, t["id"]):
+                    row = s.get(Template, t["id"])
+                    if not row:
                         s.add(Template(id=t["id"], family=t["family"], name=t["name"], values=t["values"]))
+                    elif row.builtin and (row.name, row.family, row.values) != (t["name"], t["family"], t["values"]):
+                        # plantilla integrada modificada en el código: se actualiza (las del usuario no se tocan)
+                        row.name, row.family, row.values = t["name"], t["family"], dict(t["values"])
             if not s.scalars(select(User)).first():
                 s.add(User(name="Ingeniería", email="ingenieria@monxu.local", role="disenador"))
             for it in s.scalars(select(CatalogItem)):

@@ -151,7 +151,7 @@ class PlatePart(PartDef):
         from shapely.geometry import box as sbox
         poly = sbox(0, 0, self.w, self.h)
         if self.corner_r > 0:
-            poly = poly.buffer(-self.corner_r, join_style=2).buffer(self.corner_r, resolution=8)
+            poly = poly.buffer(-self.corner_r, join_style=2).buffer(self.corner_r, quad_segs=8)
         return poly
 
     def bom_dims(self):

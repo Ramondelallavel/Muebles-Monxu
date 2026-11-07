@@ -51,3 +51,21 @@ def test_planos_sin_solapes_en_una_plantilla_por_familia(tmp_path):
     assert len(res) == len(cases)
     for r in res:
         assert r["planos"]["total"] == 0 and r["montaje"]["total"] == 0, (r["id"], r["planos"]["sheets"], r["montaje"]["sheets"])
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not shutil.which("node") or not ESBUILD.exists(), reason="requiere node y las dependencias del frontend")
+def test_control_de_calidad_igual_en_ambos_motores(tmp_path):
+    """Misma lista de comprobaciones de QA (nivel y código) en el navegador y en el servidor, una plantilla por familia."""
+    from monxu.families import REGISTRY
+    from monxu.pipeline import regenerate
+    bundle = tmp_path / "webrun.mjs"
+    subprocess.run([str(ESBUILD), str(ROOT / "tools/webcheck/run.ts"), "--bundle", "--platform=node", "--format=esm",
+                    f"--outfile={bundle}", "--log-level=warning"], cwd=ROOT / "frontend", check=True)
+    cases = [{"id": f.templates()[0]["id"], "family": fid, "values": f.templates()[0]["values"]} for fid, f in REGISTRY.items()]
+    js = {c["id"]: c for c in json.loads(subprocess.run(["node", str(bundle)], input=json.dumps(cases), capture_output=True,
+                                                         text=True, check=True).stdout)}
+    for c in cases:
+        r = regenerate(c["family"], c["values"])
+        py = sorted((i["level"], i["code"]) for i in r.qa.result()["items"])
+        assert py == sorted(tuple(x) for x in js[c["id"]]["qa"]), c["id"]

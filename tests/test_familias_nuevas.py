@@ -211,3 +211,12 @@ def test_assistant_footrest():
     r = assistant.handle(assistant.new_state(), "Puesto de trabajo 1200x700x850 con reposapiés a 220 mm, 100 kg")
     v = r["state"]["values"]
     assert v["REPOSAPIES"] == 1 and v["ALTURA_REPOSAPIES"] == 220
+
+
+def test_flange_lower_than_bend_is_reported_not_crashing():
+    """Pestaña más baja que radio + espesor: se genera la zona de pliegue y el DFM lo señala (antes, fallo de OCC)."""
+    r = regenerate("mesa_industrial", {"LONGITUD": 1200, "ANCHURA": 700, "ALTURA": 900, "CARGA_TOTAL": 150,
+                                       "NUMERO_BALDAS": 0, "ESPESOR_CHAPA": 6.0, "RADIO_PLEGADO": 16.0,
+                                       "ALA_ENCIMERA": 22.0})
+    codes = {i["code"] for i in r.qa.result()["items"] if i["level"] == "bloqueante"}
+    assert "PLG-ALA-MIN" in codes

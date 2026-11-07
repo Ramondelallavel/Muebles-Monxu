@@ -48,7 +48,7 @@ python -m pytest -q
 | 5. Fabricación | ✔ | Desarrollos con BA = π/2·(Ri+K·t), DFM (láser, plegadora, perfiles, soldadura, montaje), corte de barras hasta la cota inferior, anidado de chapa |
 | 6. Asistente IA | ✔ | Interpretación en español con evidencia, preguntas de datos faltantes, propuesta preliminar diferenciada de lo verificado |
 | 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) **carro de taller** (ruedas de espiga con freno; asa en uno, dos o ningún extremo) y **carro estantería** (N niveles sobre ruedas, asa opcional). Peto trasero opcional en mesa, puesto y carro. Armarios: sólo se identifican en el asistente |
-| 8. Validación | ✔ | 83 pruebas: unidades frente a soluciones analíticas y tablas, las cinco familias, QA, API, aceptación §23, validación cruzada navegador ↔ servidor, expediente del navegador y legibilidad de planos |
+| 8. Validación | ✔ | 90 pruebas: unidades frente a soluciones analíticas y tablas, las cinco familias, QA, API, aceptación §23, validación cruzada navegador ↔ servidor, expediente del navegador y legibilidad de planos |
 
 ### Verificaciones de la cadena (no simuladas)
 
@@ -315,6 +315,35 @@ La comparación destapó dos fallos del motor de referencia, ya corregidos en am
 - **Plantillas de mesa:** las de uso general y trabajo pesado se proponen ancladas al suelo. Con el
   empuje de 300 N, una mesa vacía de 45 kg vuelca de verdad. Quedan pendientes solo de verificar el
   taco. Ninguna plantilla del catálogo sale NO_CUMPLE.
+
+## Errores encontrados por los barridos y corregidos
+
+- **Pestaña más baja que el pliegue:** si la pestaña no llegaba a radio más espesor (radio de plegado
+  grande con pestaña corta), OpenCascade no podía crear la arista y el diseño fallaba entero
+  (`StdFail_NotDone`). Ahora se modela solo la zona curva, como en el navegador, y el DFM lo señala
+  (`PLG-ALA-MIN`, `CHAPA-DESARROLLO`). En ese caso no fabricable la masa de esa chapa difiere entre
+  motores: el navegador la calcula desde el desarrollo y el servidor desde el sólido. El veredicto y los
+  errores sí coinciden.
+- **Plantillas desactualizadas en el servidor:** las plantillas integradas solo se insertaban si
+  faltaban, así que en una base de datos existente las modificadas conservaban sus valores antiguos.
+  Ahora se actualizan al arrancar; las plantillas guardadas por el usuario no se tocan.
+- **Control de calidad distinto según el motor:** el servidor no comprobaba el volumen de perfiles y
+  pletinas frente a su definición analítica (`GEO-VOLUMEN`), que detecta booleanas fallidas. Ahora lo
+  hace, y una prueba compara la lista completa de control de calidad de los dos motores.
+- **Planos del navegador:** el diámetro de taladro de las pletinas se colocaba antes que sus cotas y
+  podía quedar atravesado. En los símbolos de soldadura, una garganta de texto ancho («a1,5») invadía
+  el círculo de soldadura perimetral. El barrido de 120 configuraciones (1920 hojas) baja de 18
+  conflictos a 1.
+- **Planos del servidor:** no tenían auditoría de legibilidad. `tests/test_server_drawings.py`
+  comprueba ahora que ningún texto pise a otro. Se han corregido:
+  - el número de unión montado sobre el proceso de soldadura;
+  - el título de la sección A-A sobre la cota de espesor;
+  - el rótulo de la perspectiva sobre el sello de estado;
+  - los rótulos del plan de corte dentro del cajetín;
+  - los símbolos de soldadura fuera del marco o dentro de los detalles;
+  - las filas de globos fuera del marco (ahora se compactan o se reparten en filas intercaladas).
+
+  Las 25 plantillas salen sin solapes de texto.
 
 ## Datos que quedan como hipótesis o pendientes
 

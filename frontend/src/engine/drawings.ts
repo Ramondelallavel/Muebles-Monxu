@@ -286,8 +286,9 @@ export class Drawing {
   weldBox(base, a, length, process, side, tag) {
     const [bx, by] = base, Lr = 22 * side, ex = bx + Lr;
     const tw = textWidth(process + (tag ? `  ${tag}` : ""), 2.4) + 4;
-    const xs = [bx - 2 * side, bx + 9 * side - 3.2 * side - (side > 0 ? textWidth(`a${fmt(a)}`, 2.6) : -textWidth(`a${fmt(a)}`, 2.6)), ex + (3.5 + tw) * side];
-    if (length) xs.push(bx + 12 * side + textWidth(fmt(length), 2.6) * side);
+    const tx = bx + weldTriangleOffset(a, side), wa = textWidth(`a${fmt(a)}`, 2.6);
+    const xs = [bx - 2 * side, tx - 3.2 - wa, tx + 2.2, ex + (3.5 + tw) * side];
+    if (length) xs.push(tx + 3.0 + textWidth(fmt(length), 2.6));
     return [Math.min(...xs), by - 2.8, Math.max(...xs), by + 4.6];
   }
   weldSymbol(target, base, a, allAround = true, process = "135", length = null, side = 1, tag = null) {
@@ -300,7 +301,9 @@ export class Drawing {
       const Lr = 22 * side;
       this.line([bx, by], [bx + Lr, by]);
       this.line([bx, by - 1.2], [bx + Lr, by - 1.2], LW_THIN, [1.2, 0.8]);
-      const tx = bx + 9 * side;
+      // el valor de garganta va antes del triángulo: con texto ancho (a1,5) se aleja el triángulo para que el texto
+      // no invada el círculo de contorno ni la línea de referencia que sale de la base
+      const tx = bx + weldTriangleOffset(a, side);
       this.pdf.lw(LW_THIN).poly([[tx - 2.2, by], [tx + 2.2, by], [tx - 2.2, by + 4.0]], true);
       this.text(tx - 3.2, by + 0.8, `a${fmt(a)}`, 2.6, "r");
       if (length) this.text(tx + 3.0, by + 0.8, fmt(length), 2.6, "l");
@@ -456,6 +459,12 @@ const segCircleHit = (sg, c, r) => {
  * textos ni otras referencias y lo más corta posible. Los candidatos están en anillos alrededor de la vista,
  * con preferencia por los lados indicados. Al final se intercambian globos cuyas referencias se crucen.
  */
+/** Distancia de la base del símbolo de soldadura al triángulo (con signo de lado). */
+function weldTriangleOffset(a, side) {
+  const w = textWidth(`a${fmt(a)}`, 2.6);
+  return (side > 0 ? Math.max(9.0, 3.2 + w + 2.6) : 9.0) * side;
+}
+
 function balloons(d, v, targets, opts = {}) {
   const r = opts.r ?? 4, sides = opts.sides ?? ["top", "right", "left", "bottom"], region = opts.region ?? AREA;
   const pts = targets.map(([l, p]) => [l, v.at(p)]);
@@ -857,12 +866,16 @@ function planPlates(d, X, number) {
         const ext = (hd * k) / 2 + 2;
         d.line([cx - ext, cy], [cx + ext, cy], LW_THIN, [3, 1, 1, 1]); d.line([cx, cy - ext], [cx, cy + ext], LW_THIN, [3, 1, 1, 1]);
       });
+    }
+    // cotas antes que los rótulos de taladro, para que éstos busquen hueco fuera de las líneas de cota
+    d.dimH(x, x + p.w * k, y, y, y - 9, p.w, `${p.ref}_W`, "geometria_pieza");
+    d.dimV(y, y + p.h * k, x, x, x - 9, p.h, `${p.ref}_H`, "geometria_pieza");
+    for (const [hx, hy, hd] of p.holes) {
+      const cx = x + hx * k, cy = y + hy * k;
       const rr = (hd * k) / 2, hc = [];
       for (const g of [2, 5, 9]) hc.push([cx + rr + g, cy + rr + g * 0.6], [cx + rr + g, cy - rr - 3.6 - g * 0.6], [cx - rr - g, cy + rr + g * 0.6, "r"], [cx - rr - g, cy - rr - 3.6 - g * 0.6, "r"]);
       d.group("note", () => d.placeText(`Ø${fmt(hd)}`, 2.8, hc));
     }
-    d.dimH(x, x + p.w * k, y, y, y - 9, p.w, `${p.ref}_W`, "geometria_pieza");
-    d.dimV(y, y + p.h * k, x, x, x - 9, p.h, `${p.ref}_H`, "geometria_pieza");
     d.group("label", () => {
       d.text(x, y + p.h * k + 11, `Pos. ${p.pos} — ${p.ref}`, 3.0, "l", 0, true);
       d.text(x, y + p.h * k + 6, fitText(`${p.name} · ${p.material} e=${fmt(p.t)} · R${fmt(p.corner_r)}`, 100, 2.6), 2.6);
