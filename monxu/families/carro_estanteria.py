@@ -14,6 +14,8 @@ encima de la altura total.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from .. import catalog
@@ -30,6 +32,20 @@ CANDIDATES = {**EST_CANDIDATES, "PERFIL_ASA": ["RHS 40x20x2", "RHS 50x30x2", "RH
 CONSTRUCTIVE_DEFAULTS = {**{k: v for k, v in EST_DEFAULTS.items() if k != "PIE_NIVELADOR"},
                          "PERFIL_ASA": "RHS 40x20x2", "RUEDA": "RUEDA_ESP_M12_D100"}
 HAND_CLEARANCE = 40.0      # holgura mínima del asa a bandejas y bastidores (mano)
+
+
+def nearest_handle(z_levels, lo_of, asa_h, H, za):
+    """Cota superior del asa válida más próxima a ``za``: deja HAND_CLEARANCE con la banda de cada nivel
+    (de ``lo_of(z)`` a ``z``) y no sobrepasa los montantes; preferentemente a 800 mm o más. None si no hay ninguna."""
+    forb = [(lo_of(z) - HAND_CLEARANCE, z + HAND_CLEARANCE + asa_h) for z in z_levels]   # intervalos abiertos
+    for z_min in (800.0, 600.0):
+        cands = {math.ceil(z_min / 5) * 5, math.floor(H / 5) * 5}
+        for a, b in forb:
+            cands |= {math.floor(a / 5) * 5, math.ceil(b / 5) * 5}
+        ok = sorted(float(c) for c in cands if z_min <= c <= H and not any(a < c < b for a, b in forb))
+        if ok:
+            return min(ok, key=lambda c: (abs(c - za), c))
+    return None
 
 
 @register
@@ -146,10 +162,17 @@ class CarroEstanteria(Estanteria):
                 for i, z in enumerate(d["z_levels"], start=1):
                     lo_l = z - max(ala, band)
                     if not (lo_b >= z + HAND_CLEARANCE or hi_b <= lo_l - HAND_CLEARANCE):
+                        z_ok = nearest_handle(d["z_levels"], lambda zz: zz - max(ala, band), asa.H, H, za)
+                        if z_ok is not None and ctx.params.sources.get("ALTURA_ASA") == "defecto":
+                            model.rule_fixes["ALTURA_ASA"] = (
+                                z_ok, f"Asa a {z_ok:g} mm (regla de diseño): a la altura por defecto, {za:g} mm, no dejaba "
+                                      f"{HAND_CLEARANCE:g} mm para la mano con el nivel {i}.")
                         model.note("error", "GEO-ASA-NIVEL",
                                    f"El asa ({lo_b:g}–{hi_b:g} mm) no deja {HAND_CLEARANCE:g} mm de holgura para la mano "
-                                   f"con el nivel {i} ({lo_l:g}–{z:g} mm): cambie ALTURA_ASA o la distancia entre "
-                                   f"niveles.")
+                                   f"con el nivel {i} ({lo_l:g}–{z:g} mm): " +
+                                   (f"ALTURA_ASA válida más próxima, {z_ok:g} mm." if z_ok is not None else
+                                    "ninguna altura de asa es válida con estos niveles; cambie la distancia entre "
+                                    "niveles."))
                         break
             c = catalog.component(ctx["RUEDA"])
             ctx.set_derived("DIAMETRO_RUEDA", c["wheel_d"], "mm", "Diámetro de rueda", ["RUEDA"])

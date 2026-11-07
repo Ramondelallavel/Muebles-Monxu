@@ -74,7 +74,7 @@ class MesaSoldadura(MesaIndustrial):
     # ------------------------------------------------------------------ cálculo
     def plate_targets(self, v):
         out = []
-        if v.get("CARGA_TOTAL"):
+        if v.get("CARGA_TOTAL") or v.get("CARGA_PUNTUAL"):
             sd = HOLE_SYSTEMS.get(v.get("SISTEMA_TALADROS"))
             avail = set(catalog.sheet_thicknesses(v["MATERIAL_PLACA"]))
             out.append({"surface": "encimera", "t_param": "ESPESOR_PLACA", "n_param": "NUMERO_TRAVESANOS",
@@ -91,7 +91,7 @@ class MesaSoldadura(MesaIndustrial):
 
     def sheet_defaults_without_load(self, v):
         out = {}
-        if not v.get("CARGA_TOTAL"):
+        if not (v.get("CARGA_TOTAL") or v.get("CARGA_PUNTUAL")):
             out["ESPESOR_PLACA"] = max(CONSTRUCTIVE_DEFAULTS["ESPESOR_PLACA"],
                                        MIN_PLATE_T.get(v.get("SISTEMA_TALADROS"), 10.0))
         if not (v.get("CARGA_BALDA") and (v.get("NUMERO_BALDAS") or 0) >= 1):

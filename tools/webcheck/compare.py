@@ -11,8 +11,12 @@ import os
 import random
 import subprocess
 import sys
+from pathlib import Path
 
 from monxu.families import REGISTRY
+
+sys.path.insert(0, str(Path(__file__).parent))
+from cases import random_cases  # noqa: E402
 
 bundle, n_rand, seed = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 cases = []
@@ -23,70 +27,7 @@ cases.append({"id": "ACEPT-2000", "family": "mesa_industrial", "values": {"LONGI
 cases.append({"id": "ACEPT-2400", "family": "mesa_industrial", "values": {"LONGITUD": 2400, "ANCHURA": 800, "ALTURA": 900, "CARGA_TOTAL": 400}})
 cases.append({"id": "SIN-CARGA", "family": "mesa_industrial", "values": {}})
 cases.append({"id": "EST-DEF", "family": "estanteria", "values": {}})
-rng = random.Random(seed)
-MATS = [("S235JRH", "S235JR", "RAL7035_POLVO"), ("1.4301", "1.4301", "INOX_SATINADO"),
-        ("S235JRH", "DC01", "RAL5010_POLVO"), ("EN AW-6082 T6", "EN AW-5754 H22", "ANODIZADO_NATURAL")]
-for k in range(n_rand):
-    m = rng.choice(MATS)
-    u = rng.random()
-    if u >= 0.9:
-        fid = "carro_taller"
-        H = rng.choice(range(800, 1001, 50))
-        v = {"LONGITUD": rng.choice(range(700, 1601, 100)), "ANCHURA": rng.choice(range(450, 801, 50)), "ALTURA": H,
-             "ALTURA_ASA": H + rng.choice([100, 150, 200]), "CARGA_TOTAL": rng.choice([None, 50, 100, 200]),
-             "NUMERO_BALDAS": rng.choice([0, 1]), "CARGA_BALDA": rng.choice([None, 50, 100]),
-             "CARGA_HORIZONTAL": rng.choice([50, 100, 150]),
-             "ASA_EMPUJE": rng.choice(["un_extremo", "dos_extremos", "ninguna"]), "PETO_TRASERO": rng.choice([0, 0, 50, 100])}
-    elif u >= 0.82:
-        fid = "carro_estanteria"
-        H = rng.choice(range(1000, 1801, 100))
-        n = rng.randint(2, 5)
-        v = {"ANCHURA": rng.choice(range(600, 1601, 100)), "PROFUNDIDAD": rng.choice(range(400, 801, 50)), "ALTURA": H,
-             "NUMERO_NIVELES": n, "ALTURA_PRIMER_NIVEL": rng.choice([250, 300, 350]),
-             "CARGA_POR_NIVEL": rng.choice([None, 20, 40, 80]), "ASA_EMPUJE": rng.choice(["un_extremo", "dos_extremos", "ninguna"]),
-             "ALTURA_ASA": rng.choice([900, 1000, 1100]), "CARGA_HORIZONTAL": rng.choice([40, 60, 100])}
-    elif u >= 0.7:
-        fid = "puesto_trabajo"
-        H = rng.choice(range(800, 1001, 50))
-        top = rng.choice(range(1500, 2201, 100))
-        v = {"LONGITUD": rng.choice(range(1000, 2401, 100)), "ANCHURA": rng.choice(range(600, 901, 50)), "ALTURA": H,
-             "ALTURA_TOTAL": top, "ESTANTE_SUPERIOR": rng.choice([0, 1]), "ALTURA_ESTANTE": rng.choice(range(H + 400, top - 149, 50)),
-             "PROFUNDIDAD_ESTANTE": rng.choice(range(200, 401, 50)), "PANEL_HERRAMIENTAS": rng.choice([0, 1]),
-             "CARGA_TOTAL": rng.choice([None, 100, 200, 400]), "CARGA_ESTANTE": rng.choice([None, 20, 50, 80]),
-             "NUMERO_BALDAS": rng.choice([0, 1]), "CARGA_BALDA": rng.choice([None, 50, 100]),
-             "CARGA_HORIZONTAL": rng.choice([100, 200, 300]), "ANCLAJE": rng.choice(["ninguno", "al_suelo"]),
-             "PETO_TRASERO": rng.choice([0, 0, 60]), "REPOSAPIES": rng.choice([0, 1])}
-    elif u < 0.08:
-        fid = "mesa_soldadura"
-        v = {"LONGITUD": rng.choice(range(800, 3001, 100)), "ANCHURA": rng.choice(range(600, 1501, 100)),
-             "ALTURA": rng.choice(range(750, 951, 50)), "CARGA_TOTAL": rng.choice([None, 300, 600, 1200]),
-             "CARGA_PUNTUAL": rng.choice([None, 100, 300]), "SISTEMA_TALADROS": rng.choice(["D16_P50", "D28_P100", "ninguno"]),
-             "ESPESOR_PLACA": rng.choice(["auto", "auto", 12.0, 15.0, 20.0]), "VUELO": rng.choice([40, 60, 100]),
-             "NUMERO_BALDAS": rng.choice([0, 1]), "CARGA_BALDA": rng.choice([None, 100]),
-             "CARGA_HORIZONTAL": rng.choice([200, 300, 500]), "ANCLAJE": rng.choice(["ninguno", "al_suelo"])}
-    elif u < 0.4:
-        fid = "mesa_industrial"
-        v = {"LONGITUD": rng.choice(range(800, 3001, 100)), "ANCHURA": rng.choice(range(500, 1201, 50)),
-             "ALTURA": rng.choice(range(700, 1101, 50)), "CARGA_TOTAL": rng.choice([None, 100, 200, 300, 400, 600, 800]),
-             "NUMERO_BALDAS": rng.choice([0, 1]), "CARGA_BALDA": rng.choice([None, 0, 50, 100, 200]),
-             "CARGA_PUNTUAL": rng.choice([None, None, 50, 100]),
-             "USO": rng.choice(["montaje", "trabajo_pesado", "inspeccion"]), "CARGA_HORIZONTAL": rng.choice([100, 200, 300]),
-             "ANCLAJE": rng.choice(["ninguno", "al_suelo"]), "PETO_TRASERO": rng.choice([0, 0, 0, 40, 100]),
-             "REPOSAPIES": rng.choice([0, 0, 1]), "ALTURA_REPOSAPIES": rng.choice([200, 250, 300])}
-    elif u >= 0.58:
-        fid = "estanteria_bateria"
-        v = {"NUMERO_MODULOS": rng.randint(2, 5), "ANCHURA": rng.choice(range(600, 1601, 100)),
-             "PROFUNDIDAD": rng.choice(range(300, 901, 50)), "ALTURA": rng.choice(range(1200, 2801, 100)),
-             "NUMERO_NIVELES": rng.randint(2, 6), "CARGA_POR_NIVEL": rng.choice([None, 50, 100, 150, 250]),
-             "ANCLAJE": rng.choice(["al_suelo", "ninguno"]), "CARGA_HORIZONTAL": rng.choice([100, 200, 300]),
-             "PERFIL_TRAVESANO": rng.choice(["auto", "auto", "RHS 50x30x2"])}
-    else:
-        fid = "estanteria"
-        v = {"ANCHURA": rng.choice(range(800, 3001, 100)), "PROFUNDIDAD": rng.choice(range(300, 1001, 50)),
-             "ALTURA": rng.choice(range(1200, 3001, 100)), "NUMERO_NIVELES": rng.randint(2, 7),
-             "CARGA_POR_NIVEL": rng.choice([None, 50, 100, 150, 250, 400]), "ANCLAJE": rng.choice(["al_suelo", "ninguno"])}
-    v.update({"MATERIAL_ESTRUCTURAL": m[0], "MATERIAL_CHAPA": m[1], "ACABADO": m[2]})
-    cases.append({"id": f"R{k:03d}", "family": fid, "values": v})
+cases += random_cases(n_rand, seed)
 
 if os.environ.get("COMPARE_ONLY"):
     keep = set(os.environ["COMPARE_ONLY"].split(","))

@@ -37,12 +37,14 @@ FEET = [c for c, d in catalog.components().items() if d["category"] == "patas"]
 # Candidatos de dimensionado (orden creciente de masa por metro)
 CANDIDATES = {
     "PERFIL_PATA": ["SHS 40x40x2", "SHS 40x40x3", "SHS 50x50x2", "SHS 50x50x3", "SHS 60x60x3", "SHS 70x70x3",
-                    "SHS 80x80x3", "SHS 80x80x4", "SHS 90x90x4", "SHS 100x100x4"],
+                    "SHS 80x80x3", "SHS 80x80x4", "SHS 90x90x4", "SHS 100x100x4", "SHS 100x100x5", "SHS 120x120x4", "SHS 120x120x5"],
     "PERFIL_LARGUERO": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2", "RHS 80x40x2", "RHS 60x40x3",
                         "RHS 80x40x3", "RHS 100x50x3", "RHS 100x50x4", "RHS 120x60x4"],
     "PERFIL_TRAVESANO": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2", "RHS 80x40x2"],
     "PERFIL_BASTIDOR": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2"],
-    "PERFIL_REPOSAPIES": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2"],
+    # hasta 40 mm de ancho (cabe en la pata más pequeña); los de 80 y 100 mm de canto, para aluminio o vanos largos
+    "PERFIL_REPOSAPIES": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2", "RHS 80x40x2", "RHS 80x40x3",
+                          "RHS 100x40x3"],
 }
 FOOTREST_LOAD_N = 1000.0     # apoyo del pie en el centro del reposapiés (criterio de ensayo habitual de 1 kN)
 FOOT_CLEARANCE = 100.0       # hueco libre mínimo sobre el reposapiés para apoyar el pie
@@ -99,6 +101,30 @@ class MesaIndustrial(ProductFamily):
     support_category = "patas"
     support_group = ("APO", "Apoyos niveladores")
 
+    @staticmethod
+    def sheet_inset(v, t_param, gap_param) -> float:
+        """Retranqueo bastidor–cara exterior para una chapa plegada: espesor + holgura (igual que en la derivación)."""
+        t = v[t_param]
+        fam = catalog.material(v["MATERIAL_CHAPA"]).family
+        rmin = catalog.sheet_data()["press_brake"]["min_inner_radius_factor"].get(fam, 1.0)
+        r = round(max(t, rmin * t), 2) if v["RADIO_PLEGADO"] == AUTO else v["RADIO_PLEGADO"]
+        head_h = float(catalog.component("TUERCA_REMACHABLE_M6")["head_h"])
+        return t + (max(r, head_h) if v[gap_param] == AUTO else v[gap_param])
+
+    def leg_fits(self, v) -> bool:
+        """El bastidor inferior, retranqueado para la pestaña de la balda, cabe en la sección de la pata (el
+        dimensionado aumenta la pata 'auto' si no; antes sólo se comparaban los anchos: DFM-BASTIDOR-INF)."""
+        if not (v.get("NUMERO_BALDAS") or 0) >= 1:
+            return True
+        if any(v.get(k) in (AUTO, None) for k in (self.leg_param, "PERFIL_BASTIDOR", "ESPESOR_BALDA")):
+            return True
+        return (self.sheet_inset(v, "ESPESOR_BALDA", "HOLGURA_ENCIMERA") + catalog.profile(v["PERFIL_BASTIDOR"]).B
+                <= catalog.profile(v[self.leg_param]).B + 1e-9)
+
+    def sway_beam_param(self, axis: int) -> str:
+        """Perfil de las vigas que forman pórtico con las patas en la dirección X (largueros) o Y (travesaños)."""
+        return "PERFIL_LARGUERO" if axis == 0 else "PERFIL_TRAVESANO"
+
     def param_for_role(self, role: str) -> str | None:
         return {"pata": "PERFIL_PATA", "larguero_sup": "PERFIL_LARGUERO", "travesano_ext_sup": "PERFIL_TRAVESANO",
                 "travesano_int_sup": "PERFIL_TRAVESANO", "larguero_inf": "PERFIL_BASTIDOR",
@@ -106,11 +132,12 @@ class MesaIndustrial(ProductFamily):
                 "reposapies": "PERFIL_REPOSAPIES"}.get(role)
 
     def vertical_load_present(self, v) -> bool:
-        return bool(v.get("CARGA_TOTAL"))
+        # una carga puntual sobre la encimera también exige dimensionar (antes sólo la carga repartida)
+        return bool(v.get("CARGA_TOTAL") or v.get("CARGA_PUNTUAL"))
 
     def plate_targets(self, v) -> list[dict]:
         out = []
-        if v.get("CARGA_TOTAL"):
+        if v.get("CARGA_TOTAL") or v.get("CARGA_PUNTUAL"):
             out.append({"surface": "encimera", "t_param": "ESPESOR_CHAPA", "n_param": "NUMERO_TRAVESANOS",
                         "load_param": "CARGA_TOTAL", "trv_param": "PERFIL_TRAVESANO", "min_t_by_use": True})
         if v.get("CARGA_BALDA") and v.get("NUMERO_BALDAS", 0) >= 1:
@@ -121,7 +148,7 @@ class MesaIndustrial(ProductFamily):
     def sheet_defaults_without_load(self, v) -> dict:
         """Espesores por defecto cuando no hay carga para dimensionar."""
         out = {}
-        if not v.get("CARGA_TOTAL"):
+        if not (v.get("CARGA_TOTAL") or v.get("CARGA_PUNTUAL")):
             out["ESPESOR_CHAPA"] = CONSTRUCTIVE_DEFAULTS["ESPESOR_CHAPA"]
         if not (v.get("CARGA_BALDA") and v.get("NUMERO_BALDAS", 0) >= 1):
             out["ESPESOR_BALDA"] = CONSTRUCTIVE_DEFAULTS["ESPESOR_BALDA"]
@@ -593,7 +620,14 @@ class MesaIndustrial(ProductFamily):
         if e_sh + bas.B > a:
             model.note("error", "DFM-BASTIDOR-INF", "El bastidor inferior retranqueado no cabe en la sección de la pata.")
         if z_lf - bas.H < z_leg0 + 20:
-            model.note("error", "GEO-BALDA-BAJA", "La balda está demasiado baja para el bastidor inferior.")
+            z_min = math.ceil((z_leg0 + 20 + bas.H + ts) / 5) * 5
+            if ctx.params.sources.get("ALTURA_BALDA") == "defecto" and z_min <= 600 \
+                    and z_min <= d["z_tf"] - d["skirt"] - 150:
+                model.rule_fixes["ALTURA_BALDA"] = (
+                    float(z_min), f"Balda inferior a {z_min:g} mm (regla de diseño): a la altura por defecto, {z_s:g} mm, su "
+                                  "bastidor no cabía sobre las placas base y los apoyos.")
+            model.note("error", "GEO-BALDA-BAJA", f"La balda está demasiado baja para el bastidor inferior: ALTURA_BALDA de "
+                       f"{z_min:g} mm como mínimo.")
         ala_b = ctx["ALA_BALDA"]
         fix_sh = self._fix_layout(model, ctx, L - 2 * c, W - 2 * c, 0.0, a, ts, rs + ts, ala_b, bas, bas,
                                   z_ref=z_s, inset=e_sh, hole_d=flange_hole_d(v["MATERIAL_CHAPA"], ts, sc), rn=rn, pitch=pitch * 1.5,
@@ -628,10 +662,29 @@ class MesaIndustrial(ProductFamily):
                 above = zr - fp.H >= d["z_shelf"] + 40
                 below = zr + FOOT_CLEARANCE <= lo_s
                 if not (above or below):
+                    z_fix = self._shelf_clear_of_footrest(ctx, d, zr, fp)
+                    if z_fix is not None:
+                        model.rule_fixes["ALTURA_BALDA"] = (
+                            z_fix, f"Balda inferior a {z_fix:g} mm (regla de diseño): a la altura por defecto, "
+                                   f"{d['z_shelf']:g} mm, chocaba con el reposapiés a {zr:g} mm.")
                     model.note("error", "GEO-REPOSAPIES-BALDA",
                                f"El reposapiés ({zr - fp.H:g}–{zr:g} mm) choca con la balda inferior o no deja "
                                f"{FOOT_CLEARANCE:g} mm para el pie bajo ella ({lo_s:g}–{d['z_shelf']:g} mm): cambie "
                                "ALTURA_REPOSAPIES o ALTURA_BALDA.")
+
+    @staticmethod
+    def _shelf_clear_of_footrest(ctx, d, zr, fp):
+        """Cota de balda compatible con el reposapiés: por debajo (el pie apoya sobre él con la balda debajo) o por
+        encima dejando el hueco para el pie; la más próxima a la actual. None si ninguna cabe."""
+        ts, bas, z_s = d["z_shelf"] - d["z_lf"], d["bas"], d["z_shelf"]
+        lo = math.floor((zr - fp.H - 40) / 5) * 5                       # balda bajo el reposapiés
+        hi = math.ceil((zr + FOOT_CLEARANCE + max(ctx["ALA_BALDA"], ts + bas.H)) / 5) * 5   # balda sobre él
+        ok = []
+        if lo >= 100 and lo - ts - bas.H >= d["z_leg0"] + 20:
+            ok.append(float(lo))
+        if hi <= 600 and hi <= d["z_tf"] - d["skirt"] - 150:
+            ok.append(float(hi))
+        return min(ok, key=lambda z: abs(z - z_s)) if ok else None
 
     def _fix_layout(self, model, ctx, Lx, Ly, c, a, t, R, ala, prof_long, prof_end, z_ref, inset, hole_d, rn,
                     pitch, short_min, tag, notch=0.0, offset=0.0, ranges=None, profs=None):

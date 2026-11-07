@@ -194,10 +194,18 @@ def test_footrest_is_verified():
     assert chk["B.EST.REPOSAPIES"]["combination"] == "ELU-F" and chk["B.EST.REPOSAPIES"]["status"] == "CUMPLE"
     assert chk["D.EST.REPOSAPIES"]["combination"] == "ELS-F" and chk["D.EST.REPOSAPIES"]["status"] == "CUMPLE"
     assert r.interferences["interferences"] == [] and r.qa.result()["blocking"] == 0
-    # con la balda a la misma altura, el reposapiés se señala como error de geometría
-    r2 = regenerate("mesa_industrial", {"LONGITUD": 1500, "ANCHURA": 750, "ALTURA": 900, "CARGA_TOTAL": 150,
-                                        "NUMERO_BALDAS": 1, "CARGA_BALDA": 50, "REPOSAPIES": 1, "ALTURA_REPOSAPIES": 250})
-    assert any(n["code"] == "GEO-REPOSAPIES-BALDA" for n in r2.model.design_notes)
+    # balda a la altura por defecto (200 mm, chocaba con el reposapiés a 250): la regla de diseño la recoloca
+    base = {"LONGITUD": 1500, "ANCHURA": 750, "ALTURA": 900, "CARGA_TOTAL": 150, "NUMERO_BALDAS": 1, "CARGA_BALDA": 50,
+            "REPOSAPIES": 1, "ALTURA_REPOSAPIES": 250}
+    r2 = regenerate("mesa_industrial", base)
+    codes = {n["code"] for n in r2.model.design_notes}
+    assert "REGLA-ALTURA_BALDA" in codes and "GEO-REPOSAPIES-BALDA" not in codes
+    assert r2.model.params.sources["ALTURA_BALDA"] == "regla_diseno" and r2.model.params.values["ALTURA_BALDA"] != 200
+    assert r2.interferences["interferences"] == [] and r2.qa.result()["blocking"] == 0
+    # si el usuario fija la balda a esa altura, no se toca y el choque se señala como error de geometría
+    r3 = regenerate("mesa_industrial", {**base, "ALTURA_BALDA": 230})
+    assert any(n["code"] == "GEO-REPOSAPIES-BALDA" for n in r3.model.design_notes)
+    assert r3.model.params.values["ALTURA_BALDA"] == 230
 
 
 @pytest.mark.parametrize("tid", ["MI-1500-INOX", "MI-2400-PESADA"])

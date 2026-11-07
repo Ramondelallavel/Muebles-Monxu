@@ -40,11 +40,25 @@ class ProductFamily(ABC):
     def build(self, params: ParameterSet):
         """Resuelve los parámetros 'auto' (dimensionado) y construye el modelo."""
         from ..engineering.sizing import resolve_auto
-        autos = [k for k, v in params.values.items() if v == AUTO]
-        resolved, notes = resolve_auto(self, params, autos) if autos else (params.copy(), [])
-        model = self.construct(resolved)
+        rule_notes: list[dict] = []
+        ruled: set[str] = set()         # la regla puede reajustar lo que ella misma fijó (el redimensionado cambia perfiles)
+        for _ in range(4):
+            autos = [k for k, v in params.values.items() if v == AUTO]
+            resolved, notes = resolve_auto(self, params, autos) if autos else (params.copy(), [])
+            model = self.construct(resolved)
+            # valores por defecto incompatibles (nunca los del usuario): se corrigen y se vuelve a dimensionar
+            fixes = {k: fv for k, fv in model.rule_fixes.items()
+                     if (params.sources.get(k) == "defecto" or k in ruled) and params.values.get(k) != fv[0]}
+            if not fixes:
+                break
+            params = params.copy()
+            for k, (val, why) in fixes.items():
+                params.values[k], params.sources[k] = val, "regla_diseno"
+                rule_notes = [n for n in rule_notes if n["code"] != f"REGLA-{k}"]
+                rule_notes.append({"level": "propuesta", "code": f"REGLA-{k}", "message": why})
+                ruled.add(k)
         model.requested = params
-        for n in notes:
+        for n in notes + rule_notes:
             model.design_notes.insert(0, n)
         return model
 

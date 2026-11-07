@@ -153,6 +153,7 @@ export class ProductModel {
     Object.assign(this, { family, family_name: familyName, product_code: productCode, params, ctx });
     this.parts = {}; this.instances = []; this.subassemblies = {}; this.joints = []; this.structure = {};
     this.design_notes = []; this.dims = {}; this._ids = new Set();
+    this.rule_fixes = {};          // parámetros por defecto incompatibles que corrige la regla de diseño: {param: [valor, motivo]}
   }
   addSub(id, name, opts = {}) { this.subassemblies[id] = { id, name, parent: null, explode: [0, 0, 0], step: 0, welded: false, ...opts }; }
   part(p) { if (!this.parts[p.key]) this.parts[p.key] = p; return this.parts[p.key]; }

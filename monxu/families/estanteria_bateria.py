@@ -30,7 +30,8 @@ BAY_GAP = 1.0                 # junta entre bandejas de módulos contiguos
 FIX_MARGIN = 60.0             # margen de fijaciones respecto a la cara del montante (como _fix_layout)
 CANDIDATES = {**EST_CANDIDATES,
               "PERFIL_MONTANTE": ["SHS 50x50x2", "SHS 50x50x3", "SHS 60x60x3", "SHS 70x70x3", "SHS 80x80x3",
-                                  "SHS 80x80x4", "SHS 90x90x4", "SHS 100x100x4"]}
+                                  "SHS 80x80x4", "SHS 90x90x4", "SHS 100x100x4", "SHS 100x100x5", "SHS 120x120x4",
+                                  "SHS 120x120x5"]}
 CONSTRUCTIVE_DEFAULTS = {**EST_DEFAULTS, "PERFIL_MONTANTE": "SHS 50x50x2"}
 
 
@@ -83,18 +84,10 @@ class EstanteriaBateria(Estanteria):
         ]
 
     # ------------------------------------------------------------------ regla de montante común (dimensionado)
-    def bay_inset(self, v) -> float:
-        """Retranqueo bastidor–cara exterior (espesor de bandeja + holgura), igual que en la derivación."""
-        ts = v["ESPESOR_BALDA"]
-        fam = catalog.material(v["MATERIAL_CHAPA"]).family
-        rmin = catalog.sheet_data()["press_brake"]["min_inner_radius_factor"].get(fam, 1.0)
-        rs = round(max(ts, rmin * ts), 2) if v["RADIO_PLEGADO"] == AUTO else v["RADIO_PLEGADO"]
-        head_h = float(catalog.component("TUERCA_REMACHABLE_M6")["head_h"])
-        g = max(rs, head_h) if v["HOLGURA_BALDA"] == AUTO else v["HOLGURA_BALDA"]
-        return ts + g
-
     def leg_fits(self, v) -> bool:
-        """Los dos travesaños laterales caben en el montante común."""
+        """Además de la regla de la estantería, los dos travesaños laterales caben en el montante común."""
+        if not super().leg_fits(v):
+            return False
         if any(v.get(k) in (AUTO, None) for k in ("PERFIL_MONTANTE", "PERFIL_TRAVESANO", "ESPESOR_BALDA")):
             return True
         a = catalog.profile(v["PERFIL_MONTANTE"]).B

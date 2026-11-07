@@ -59,7 +59,7 @@ class PuestoTrabajo(MesaIndustrial):
         return super().param_for_role(role)
 
     def vertical_load_present(self, v):
-        return bool(v.get("CARGA_TOTAL")) or bool(v.get("CARGA_ESTANTE") and v.get("ESTANTE_SUPERIOR"))
+        return super().vertical_load_present(v) or bool(v.get("CARGA_ESTANTE") and v.get("ESTANTE_SUPERIOR"))
 
     def plate_targets(self, v):
         out = super().plate_targets(v)

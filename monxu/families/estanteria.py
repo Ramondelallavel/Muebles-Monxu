@@ -30,7 +30,7 @@ from .mesa_industrial import ALLP, FEET, SHEET_MATERIALS, SHS, STRUCT_MATERIALS,
 
 CANDIDATES = {
     "PERFIL_MONTANTE": ["SHS 40x40x2", "SHS 40x40x3", "SHS 50x50x2", "SHS 50x50x3", "SHS 60x60x3", "SHS 70x70x3",
-                        "SHS 80x80x3", "SHS 80x80x4", "SHS 90x90x4", "SHS 100x100x4"],
+                        "SHS 80x80x3", "SHS 80x80x4", "SHS 90x90x4", "SHS 100x100x4", "SHS 100x100x5", "SHS 120x120x4", "SHS 120x120x5"],
     "PERFIL_LARGUERO": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2", "RHS 80x40x2", "RHS 60x40x3",
                         "RHS 80x40x3", "RHS 100x50x3", "RHS 100x50x4"],
     "PERFIL_TRAVESANO": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2"],
@@ -54,6 +54,18 @@ class Estanteria(MesaIndustrial):
     leg_param = "PERFIL_MONTANTE"
     frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO")
     auto_in_construct = ("RADIO_PLEGADO", "FACTOR_K", "NUMERO_TRAVESANOS_BALDA", "HOLGURA_BALDA", "DISTANCIA_BALDAS")
+
+    def bay_inset(self, v) -> float:
+        """Retranqueo bastidor–cara exterior (espesor de bandeja + holgura), igual que en la derivación."""
+        return self.sheet_inset(v, "ESPESOR_BALDA", "HOLGURA_BALDA")
+
+    def leg_fits(self, v) -> bool:
+        """Largueros y travesaños, retranqueados para la pestaña de la bandeja, caben en el montante."""
+        if any(v.get(k) in (AUTO, None) for k in ("PERFIL_MONTANTE", "PERFIL_LARGUERO", "PERFIL_TRAVESANO",
+                                                     "ESPESOR_BALDA")):
+            return True
+        b = max(catalog.profile(v["PERFIL_LARGUERO"]).B, catalog.profile(v["PERFIL_TRAVESANO"]).B)
+        return self.bay_inset(v) + b <= catalog.profile(v["PERFIL_MONTANTE"]).B + 1e-9
 
     def param_for_role(self, role):
         if role == "montante":
@@ -304,7 +316,14 @@ class Estanteria(MesaIndustrial):
                 raise ParamError(f"Los {n} niveles a {dist:g} mm superan la altura total de {H:g} mm: reduzca "
                                  f"DISTANCIA_BALDAS a {(H - z1) / max(n - 1, 1):.0f} mm o menos, o use 'auto'.")
             if z1 - ts - rail.H < z_leg0 + 20:
-                model.note("error", "GEO-NIVEL-BAJO", "El primer nivel está demasiado bajo para su bastidor.")
+                z1_min = math.ceil((z_leg0 + 20 + ts + rail.H) / 5) * 5
+                fits = ctx["DISTANCIA_BALDAS"] == AUTO or z1_min + (n - 1) * dist <= H
+                if ctx.params.sources.get("ALTURA_PRIMER_NIVEL") == "defecto" and z1_min <= 800 and fits:
+                    model.rule_fixes["ALTURA_PRIMER_NIVEL"] = (
+                        float(z1_min), f"Primer nivel a {z1_min:g} mm (regla de diseño): a la altura por defecto, {z1:g} mm, "
+                                       "su bastidor no cabía sobre las placas base y los apoyos.")
+                model.note("error", "GEO-NIVEL-BAJO", f"El primer nivel está demasiado bajo para su bastidor: "
+                           f"ALTURA_PRIMER_NIVEL de {z1_min:g} mm como mínimo.")
             libre = dist - ts - max(rail.H, trv.H)
             ctx.set_derived("HUECO_LIBRE", round(libre, 1), "mm", "Altura libre entre niveles",
                             ["DISTANCIA_BALDAS", "ALTURA", "NUMERO_NIVELES", "PERFIL_LARGUERO"])

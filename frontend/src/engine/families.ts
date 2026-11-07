@@ -26,6 +26,17 @@ const pt = (p) => p.map(Number);
 // ============================================================================ base común (mesa)
 const FOOTREST_LOAD_N = 1000.0;     // apoyo del pie en el centro del reposapiés (criterio de ensayo habitual de 1 kN)
 const FOOT_CLEARANCE = 100.0;       // hueco libre mínimo sobre el reposapiés para apoyar el pie
+/** Cota de balda compatible con el reposapiés: por debajo o por encima dejando el hueco para el pie; la más próxima. */
+function shelfClearOfFootrest(ctx, d, zr, fp) {
+  const ts = d.z_shelf - d.z_lf, bas = d.bas, zs = d.z_shelf;
+  const lo = Math.floor((zr - fp.H - 40) / 5) * 5;
+  const hi = Math.ceil((zr + FOOT_CLEARANCE + Math.max(ctx.get("ALA_BALDA"), ts + bas.H)) / 5) * 5;
+  const ok = [];
+  if (lo >= 100 && lo - ts - bas.H >= d.z_leg0 + 20) ok.push(lo);
+  if (hi <= 600 && hi <= d.z_tf - d.skirt - 150) ok.push(hi);
+  if (!ok.length) return null;
+  return ok.reduce((b, z) => (Math.abs(z - zs) < Math.abs(b - zs) ? z : b));
+}
 class MesaIndustrial {
   constructor(id = "mesa_industrial") {
     const d = FAM.families[id];
@@ -40,15 +51,32 @@ class MesaIndustrial {
   describe() { const { templates, candidates, constructive_defaults, leg_param, frame_params, auto_in_construct, ...r } = this.def; return r; }
   newParams(values = {}, sources = {}) { return newParams(this.specs(), values, sources); }
 
+  /** Perfil de las vigas que forman pórtico con las patas en la dirección X (largueros) o Y (travesaños). */
+  swayBeamParam(axis) { return axis === 0 ? "PERFIL_LARGUERO" : "PERFIL_TRAVESANO"; }
+  /** Retranqueo bastidor–cara exterior para una chapa plegada: espesor + holgura (igual que en la derivación). */
+  sheetInset(v, tParam, gapParam) {
+    const t = v[tParam];
+    const fam = C.material(v.MATERIAL_CHAPA).family;
+    const rmin = C.sheetData().press_brake.min_inner_radius_factor[fam] ?? 1.0;
+    const r = v.RADIO_PLEGADO === AUTO ? pyRound(Math.max(t, rmin * t), 2) : v.RADIO_PLEGADO;
+    const head_h = +C.component("TUERCA_REMACHABLE_M6").head_h;
+    return t + (v[gapParam] === AUTO ? Math.max(r, head_h) : v[gapParam]);
+  }
+  /** El bastidor inferior, retranqueado para la pestaña de la balda, cabe en la sección de la pata. */
+  legFits(v) {
+    if (!((v.NUMERO_BALDAS ?? 0) >= 1)) return true;
+    if ([this.leg_param, "PERFIL_BASTIDOR", "ESPESOR_BALDA"].some((k) => v[k] === AUTO || v[k] == null)) return true;
+    return this.sheetInset(v, "ESPESOR_BALDA", "HOLGURA_ENCIMERA") + C.profile(v.PERFIL_BASTIDOR).B <= C.profile(v[this.leg_param]).B + 1e-9;
+  }
   paramForRole(role) {
     return { pata: "PERFIL_PATA", larguero_sup: "PERFIL_LARGUERO", travesano_ext_sup: "PERFIL_TRAVESANO",
       travesano_int_sup: "PERFIL_TRAVESANO", larguero_inf: "PERFIL_BASTIDOR", travesano_ext_inf: "PERFIL_BASTIDOR",
       travesano_int_inf: "PERFIL_BASTIDOR", reposapies: "PERFIL_REPOSAPIES" }[role] ?? null;
   }
-  verticalLoadPresent(v) { return !!v.CARGA_TOTAL; }
+  verticalLoadPresent(v) { return !!(v.CARGA_TOTAL || v.CARGA_PUNTUAL); }     // la carga puntual también dimensiona
   plateTargets(v) {
     const out = [];
-    if (v.CARGA_TOTAL) out.push({ surface: "encimera", t_param: "ESPESOR_CHAPA", n_param: "NUMERO_TRAVESANOS",
+    if (v.CARGA_TOTAL || v.CARGA_PUNTUAL) out.push({ surface: "encimera", t_param: "ESPESOR_CHAPA", n_param: "NUMERO_TRAVESANOS",
       load_param: "CARGA_TOTAL", trv_param: "PERFIL_TRAVESANO", min_t_by_use: true });
     if (v.CARGA_BALDA && (v.NUMERO_BALDAS ?? 0) >= 1) out.push({ surface: "balda", t_param: "ESPESOR_BALDA",
       n_param: "NUMERO_TRAVESANOS_BALDA", load_param: "CARGA_BALDA", trv_param: "PERFIL_BASTIDOR", min_t_by_use: false });
@@ -56,7 +84,7 @@ class MesaIndustrial {
   }
   sheetDefaultsWithoutLoad(v) {
     const out = {};
-    if (!v.CARGA_TOTAL) out.ESPESOR_CHAPA = this.constructive_defaults.ESPESOR_CHAPA;
+    if (!(v.CARGA_TOTAL || v.CARGA_PUNTUAL)) out.ESPESOR_CHAPA = this.constructive_defaults.ESPESOR_CHAPA;
     if (!(v.CARGA_BALDA && (v.NUMERO_BALDAS ?? 0) >= 1)) out.ESPESOR_BALDA = this.constructive_defaults.ESPESOR_BALDA;
     return out;
   }
@@ -276,7 +304,13 @@ class MesaIndustrial {
     if (n_sh === AUTO) n_sh = Math.max(0, Math.ceil((xb1 - xb0) / ctx.get("SEPARACION_MAX_APOYOS")) - 1);
     ctx.setDerived("N_TRAVESANOS_BALDA", n_sh, "ud", "Travesaños bajo balda", ["NUMERO_TRAVESANOS_BALDA", "LONGITUD"]);
     if (e_sh + bas.B > a) model.note("error", "DFM-BASTIDOR-INF", "El bastidor inferior retranqueado no cabe en la sección de la pata.");
-    if (z_lf - bas.H < z_leg0 + 20) model.note("error", "GEO-BALDA-BAJA", "La balda está demasiado baja para el bastidor inferior.");
+    if (z_lf - bas.H < z_leg0 + 20) {
+      const zMin = Math.ceil((z_leg0 + 20 + bas.H + ts) / 5) * 5;
+      if (ctx.params.sources.ALTURA_BALDA === "defecto" && zMin <= 600 && zMin <= d.z_tf - d.skirt - 150)
+        model.rule_fixes.ALTURA_BALDA = [zMin, `Balda inferior a ${g(zMin)} mm (regla de diseño): a la altura por defecto, ${g(z_s)} mm, su `
+          + "bastidor no cabía sobre las placas base y los apoyos."];
+      model.note("error", "GEO-BALDA-BAJA", `La balda está demasiado baja para el bastidor inferior: ALTURA_BALDA de ${g(zMin)} mm como mínimo.`);
+    }
     const ala_b = ctx.get("ALA_BALDA");
     const hds = flangeHoleD(v.MATERIAL_CHAPA, ts, sc);
     const fix_sh = fixLayout(model, L - 2 * c, W - 2 * c, 0.0, a, ts, rs + ts, ala_b, bas, bas, z_s, e_sh, hds, rn, pitch * 1.5, 1,
@@ -301,8 +335,13 @@ class MesaIndustrial {
       if (shelf) {
         const lo_s = d.z_shelf - Math.max(ctx.get("ALA_BALDA"), d.z_shelf - d.z_lf + bas.H);
         const above = zr - fp.H >= d.z_shelf + 40, below = zr + FOOT_CLEARANCE <= lo_s;
-        if (!(above || below)) model.note("error", "GEO-REPOSAPIES-BALDA", `El reposapiés (${g(zr - fp.H)}–${g(zr)} mm) choca con la balda inferior o no deja `
-          + `${g(FOOT_CLEARANCE)} mm para el pie bajo ella (${g(lo_s)}–${g(d.z_shelf)} mm): cambie ALTURA_REPOSAPIES o ALTURA_BALDA.`);
+        if (!(above || below)) {
+          const zFix = shelfClearOfFootrest(ctx, d, zr, fp);
+          if (zFix !== null) model.rule_fixes.ALTURA_BALDA = [zFix, `Balda inferior a ${g(zFix)} mm (regla de diseño): a la altura por defecto, `
+            + `${g(d.z_shelf)} mm, chocaba con el reposapiés a ${g(zr)} mm.`];
+          model.note("error", "GEO-REPOSAPIES-BALDA", `El reposapiés (${g(zr - fp.H)}–${g(zr)} mm) choca con la balda inferior o no deja `
+            + `${g(FOOT_CLEARANCE)} mm para el pie bajo ella (${g(lo_s)}–${g(d.z_shelf)} mm): cambie ALTURA_REPOSAPIES o ALTURA_BALDA.`);
+        }
       }
     }
   }
@@ -506,6 +545,14 @@ function fasteners(model, fix, group, prefix = null, tray_id = null) {
 // ============================================================================ estantería
 class Estanteria extends MesaIndustrial {
   constructor(id = "estanteria") { super(id); }
+  /** Retranqueo bastidor–cara exterior (espesor de bandeja + holgura), igual que en la derivación. */
+  bayInset(v) { return this.sheetInset(v, "ESPESOR_BALDA", "HOLGURA_BALDA"); }
+  /** Largueros y travesaños, retranqueados para la pestaña de la bandeja, caben en el montante. */
+  legFits(v) {
+    if (["PERFIL_MONTANTE", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ESPESOR_BALDA"].some((k) => v[k] === AUTO || v[k] == null)) return true;
+    const b = Math.max(C.profile(v.PERFIL_LARGUERO).B, C.profile(v.PERFIL_TRAVESANO).B);
+    return this.bayInset(v) + b <= C.profile(v.PERFIL_MONTANTE).B + 1e-9;
+  }
   paramForRole(role) {
     if (role === "montante") return "PERFIL_MONTANTE";
     if (role.startsWith("larguero")) return "PERFIL_LARGUERO";
@@ -624,7 +671,14 @@ class Estanteria extends MesaIndustrial {
       if (zs.at(-1) > H + 1e-6 * H)
         throw new ParamError(`Los ${n} niveles a ${g(dist)} mm superan la altura total de ${g(H)} mm: reduzca `
           + `DISTANCIA_BALDAS a ${fx((H - z1) / Math.max(n - 1, 1))} mm o menos, o use 'auto'.`);
-      if (z1 - ts - rail.H < z_leg0 + 20) model.note("error", "GEO-NIVEL-BAJO", "El primer nivel está demasiado bajo para su bastidor.");
+      if (z1 - ts - rail.H < z_leg0 + 20) {
+        const z1min = Math.ceil((z_leg0 + 20 + ts + rail.H) / 5) * 5;
+        const fits = ctx.get("DISTANCIA_BALDAS") === AUTO || z1min + (n - 1) * dist <= H;
+        if (ctx.params.sources.ALTURA_PRIMER_NIVEL === "defecto" && z1min <= 800 && fits)
+          model.rule_fixes.ALTURA_PRIMER_NIVEL = [z1min, `Primer nivel a ${g(z1min)} mm (regla de diseño): a la altura por defecto, ${g(z1)} mm, `
+            + "su bastidor no cabía sobre las placas base y los apoyos."];
+        model.note("error", "GEO-NIVEL-BAJO", `El primer nivel está demasiado bajo para su bastidor: ALTURA_PRIMER_NIVEL de ${g(z1min)} mm como mínimo.`);
+      }
       const libre = dist - ts - Math.max(rail.H, trv.H);
       ctx.setDerived("HUECO_LIBRE", pyRound(libre, 1), "mm", "Altura libre entre niveles", ["DISTANCIA_BALDAS", "ALTURA", "NUMERO_NIVELES", "PERFIL_LARGUERO"]);
       if (libre < 150) model.note("advertencia", "ERG-HUECO", `Altura libre entre niveles de ${fx(libre)} mm (< 150 mm).`);
@@ -677,7 +731,7 @@ class PuestoTrabajo extends MesaIndustrial {
     if (["travesano_alto", "larguero_est", "brazo_est", "travesano_int_est"].includes(role)) return "PERFIL_ALTILLO";
     return super.paramForRole(role);
   }
-  verticalLoadPresent(v) { return !!v.CARGA_TOTAL || !!(v.CARGA_ESTANTE && v.ESTANTE_SUPERIOR); }
+  verticalLoadPresent(v) { return super.verticalLoadPresent(v) || !!(v.CARGA_ESTANTE && v.ESTANTE_SUPERIOR); }
   plateTargets(v) {
     const out = super.plateTargets(v);
     if (v.ESTANTE_SUPERIOR && v.CARGA_ESTANTE) out.push({ surface: "estante", t_param: "ESPESOR_ESTANTE", n_param: "NUMERO_TRAVESANOS_ESTANTE",
@@ -1011,6 +1065,17 @@ class CarroTaller extends MesaIndustrial {
 
 // ============================================================================ carro estantería (port de carro_estanteria.py)
 const HAND_CLEARANCE = 40.0;
+/** Cota superior del asa válida más próxima a za (holgura para la mano con cada nivel, sin sobrepasar los montantes). */
+function nearestHandle(zLevels, loOf, asaH, H, za) {
+  const forb = zLevels.map((z) => [loOf(z) - HAND_CLEARANCE, z + HAND_CLEARANCE + asaH]);
+  for (const zMin of [800.0, 600.0]) {
+    const cands = new Set([Math.ceil(zMin / 5) * 5, Math.floor(H / 5) * 5]);
+    for (const [a, b] of forb) { cands.add(Math.floor(a / 5) * 5); cands.add(Math.ceil(b / 5) * 5); }
+    const ok = [...cands].filter((c) => zMin <= c && c <= H && !forb.some(([a, b]) => a < c && c < b)).sort((x, y) => x - y);
+    if (ok.length) return ok.reduce((best, c) => (Math.abs(c - za) < Math.abs(best - za) ? c : best));
+  }
+  return null;
+}
 class CarroEstanteria extends Estanteria {
   constructor() {
     super();
@@ -1044,8 +1109,13 @@ class CarroEstanteria extends Estanteria {
         for (let i = 0; i < d.z_levels.length; i++) {
           const z = d.z_levels[i], lo_l = z - Math.max(ala, band);
           if (!(lo_b >= z + HAND_CLEARANCE || hi_b <= lo_l - HAND_CLEARANCE)) {
+            const zOk = nearestHandle(d.z_levels, (zz) => zz - Math.max(ala, band), asa.H, H, za);
+            if (zOk !== null && ctx.params.sources.ALTURA_ASA === "defecto")
+              model.rule_fixes.ALTURA_ASA = [zOk, `Asa a ${g(zOk)} mm (regla de diseño): a la altura por defecto, ${g(za)} mm, no dejaba `
+                + `${g(HAND_CLEARANCE)} mm para la mano con el nivel ${i + 1}.`];
             model.note("error", "GEO-ASA-NIVEL", `El asa (${g(lo_b)}–${g(hi_b)} mm) no deja ${g(HAND_CLEARANCE)} mm de holgura para la mano `
-              + `con el nivel ${i + 1} (${g(lo_l)}–${g(z)} mm): cambie ALTURA_ASA o la distancia entre niveles.`);
+              + `con el nivel ${i + 1} (${g(lo_l)}–${g(z)} mm): ` + (zOk !== null ? `ALTURA_ASA válida más próxima, ${g(zOk)} mm.`
+                : "ninguna altura de asa es válida con estos niveles; cambie la distancia entre niveles."));
             break;
           }
         }
@@ -1093,18 +1163,9 @@ const BAY_GAP = 1.0;                 // junta entre bandejas de módulos contigu
 const FIX_MARGIN = 60.0;             // margen de fijaciones respecto a la cara del montante (como fixLayout)
 class EstanteriaBateria extends Estanteria {
   constructor() { super("estanteria_bateria"); }
-  /** Retranqueo bastidor–cara exterior (espesor de bandeja + holgura), igual que en la derivación. */
-  bayInset(v) {
-    const ts = v.ESPESOR_BALDA;
-    const fam = C.material(v.MATERIAL_CHAPA).family;
-    const rmin = C.sheetData().press_brake.min_inner_radius_factor[fam] ?? 1.0;
-    const rs = v.RADIO_PLEGADO === AUTO ? pyRound(Math.max(ts, rmin * ts), 2) : v.RADIO_PLEGADO;
-    const head_h = +C.component("TUERCA_REMACHABLE_M6").head_h;
-    const gg = v.HOLGURA_BALDA === AUTO ? Math.max(rs, head_h) : v.HOLGURA_BALDA;
-    return ts + gg;
-  }
-  /** Los dos travesaños laterales caben en el montante común. */
+  /** Además de la regla de la estantería, los dos travesaños laterales caben en el montante común. */
   legFits(v) {
+    if (!super.legFits(v)) return false;
     if (["PERFIL_MONTANTE", "PERFIL_TRAVESANO", "ESPESOR_BALDA"].some((k) => v[k] === AUTO || v[k] == null)) return true;
     const a = C.profile(v.PERFIL_MONTANTE).B;
     return BAY_GAP / 2 + this.bayInset(v) + C.profile(v.PERFIL_TRAVESANO).B <= a / 2 + 1e-9;
@@ -1328,7 +1389,7 @@ class MesaSoldadura extends MesaIndustrial {
   }
   plateTargets(v) {
     const out = [];
-    if (v.CARGA_TOTAL) {
+    if (v.CARGA_TOTAL || v.CARGA_PUNTUAL) {
       const sd = HOLE_SYSTEMS[v.SISTEMA_TALADROS];
       const avail = new Set(C.sheetThicknesses(v.MATERIAL_PLACA));
       out.push({ surface: "encimera", t_param: "ESPESOR_PLACA", n_param: "NUMERO_TRAVESANOS", load_param: "CARGA_TOTAL", trv_param: "PERFIL_TRAVESANO",
@@ -1342,7 +1403,7 @@ class MesaSoldadura extends MesaIndustrial {
   }
   sheetDefaultsWithoutLoad(v) {
     const out = {};
-    if (!v.CARGA_TOTAL) out.ESPESOR_PLACA = Math.max(this.constructive_defaults.ESPESOR_PLACA, MIN_PLATE_T[v.SISTEMA_TALADROS] ?? 10.0);
+    if (!(v.CARGA_TOTAL || v.CARGA_PUNTUAL)) out.ESPESOR_PLACA = Math.max(this.constructive_defaults.ESPESOR_PLACA, MIN_PLATE_T[v.SISTEMA_TALADROS] ?? 10.0);
     if (!(v.CARGA_BALDA && (v.NUMERO_BALDAS ?? 0) >= 1)) out.ESPESOR_BALDA = this.constructive_defaults.ESPESOR_BALDA;
     return out;
   }

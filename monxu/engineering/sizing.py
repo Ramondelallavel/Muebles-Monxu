@@ -25,7 +25,7 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
     dl = crit["deflection_limits"]["panel_span_ratio"]
     surface, t_param, n_param = tgt["surface"], tgt["t_param"], tgt["n_param"]
     mat = catalog.material(ps.values[tgt.get("mat_param", "MATERIAL_CHAPA")])
-    load = ps.values[tgt["load_param"]]
+    load = ps.values[tgt["load_param"]] or 0.0          # p. ej. sólo carga puntual sobre la encimera
     t_min = crit["min_sheet_thickness_by_use_mm"].get(ps.values.get("USO", "montaje"), 1.5) \
         if tgt.get("min_t_by_use") else 1.0
     t_max = 6.0                     # chapa de encimera/bandeja razonable para plegar y manipular
@@ -35,6 +35,7 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
     code = f"DIM-{surface.upper()}"
     notes[:] = [n for n in notes if n.get("code") != code]
     alternatives = []
+    point_only = False            # la carga repartida se verifica pero la puntual no
     for t in t_opts:
         trial = ps.copy()
         trial.values[t_param] = t
@@ -68,6 +69,8 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
                 rp = navier(a, b, t, mat.E, mat.nu, q=gG * qg, patch=(gQ * P_kg * G_ACC, size, size, a / 2, b / 2),
                             terms=121)
                 ok_p = rp["sigma"] / eta <= fyd
+            if ru["sigma"] <= fyd and rs["w"] <= min(a, b) / dl and not ok_p:
+                point_only = True
             if ru["sigma"] <= fyd and rs["w"] <= min(a, b) / dl and ok_p:
                 sheet = surf["area_mm2"] * t * 1e-9 * mat.density
                 cross = n * cross_len * 1e-3 * prof.mass_per_m(rho_s)
@@ -78,9 +81,12 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
         surface, f"la bandeja ({surface})")
     if not alternatives:
         fixed = [p for p, a in ((t_param, auto_t), (n_param, auto_n)) if not a]
+        P_kg = ps.values.get("CARGA_PUNTUAL") if surface == "encimera" else None
+        what = (f"la carga puntual de {P_kg:g} kg (la carga repartida de {load:g} kg sí se verifica; la flexión local "
+                "bajo una pieza concentrada depende del espesor, no del vano)" if point_only and P_kg else f"{load:g} kg")
         notes.append({"level": "error", "code": code,
                       "message": f"No se encuentra combinación de espesor y travesaños que verifique {label} con "
-                                 f"{load:g} kg" + (f" manteniendo fijo {', '.join(fixed)}" if fixed else "") +
+                                 f"{what}" + (f" manteniendo fijo {', '.join(fixed)}" if fixed else "") +
                                  f" (espesores disponibles en {mat.code}: {', '.join(f'{t:g}' for t in t_opts) or '—'} mm; "
                                  f"separación mínima de apoyos {min_bay} mm). Ponga esos parámetros en 'auto', reduzca la "
                                  "carga" + ("" if mat.fy_guaranteed and max(t_opts or [0]) >= t_max else
@@ -160,12 +166,15 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
             m = family.construct(ps)
             rep = analyze(m, include_stability=False, include_welds=True)
             failing: set[str] = set()
+            why: dict[str, str] = {}
             for c in rep["checks"]:
                 if c["status"] != "NO_CUMPLE":
                     continue
-                if c["id"].startswith("S."):          # desplome del conjunto: rigidez lateral de patas/montantes
-                    if family.leg_param in prof_autos:
-                        failing.add(family.leg_param)
+                if c["id"].startswith("S."):          # desplome del conjunto: pórtico de patas y vigas
+                    prm = _sway_member(family, m, ps, prof_autos, idx, cands, 0 if c["id"] == "S.ELS-3" else 1)
+                    if prm:
+                        failing.add(prm)
+                        why.setdefault(prm, c["description"])
                     continue
                 role = m.structure["member_roles"].get(c["element"])
                 if role is None and c["category"] == "soldadura":
@@ -174,6 +183,7 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
                 prm = family.param_for_role(role) if role else None
                 if prm in prof_autos:
                     failing.add(prm)
+                    why.setdefault(prm, c["description"])
             if not failing:
                 break
             bumped = False
@@ -194,7 +204,10 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
             if not bumped:
                 notes.append({"level": "error", "code": "DIM-PERFILES",
                               "message": "Se han agotado los perfiles candidatos sin verificar todas las "
-                                         "comprobaciones: " + ", ".join(sorted(failing))})
+                                         "comprobaciones: " + "; ".join(f"{k} = {ps.values[k]} ({why[k]})"
+                                                                        for k in sorted(failing)) +
+                                         ". Use un material más rígido (acero), ancle o arriostre la estructura, "
+                                         "o reduzca cargas y dimensiones."})
                 break
         for k in prof_autos:
             ps.sources[k] = "calculo"
@@ -221,6 +234,22 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
             notes[:] = [n for n in notes if n.get("code") not in ("DIM-PERFILES", "DIM-PIES")]
             size_profiles()
     return ps, notes
+
+
+def _sway_member(family, m, ps: ParameterSet, prof_autos, idx, cands, axis: int) -> str | None:
+    """Perfil que hay que aumentar cuando falla el desplome en la dirección ``axis`` (0 = X, 1 = Y): el más flexible
+    del pórtico, pata (EI/h) o viga de esa dirección (EI/L, L = vano entre patas). Antes sólo se aumentaba la pata, y
+    con travesaños débiles el desplome no se corregía ni con la pata mayor de la serie."""
+    lp, beam = family.leg_param, family.sway_beam_param(axis)
+    opts = [k for k in (lp, beam) if k and k in prof_autos and idx[k] + 1 < len(cands[k])]
+    if len(opts) < 2:
+        return opts[0] if opts else (lp if lp in prof_autos else None)
+    pts = sorted({round(s["point"][axis], 3) for s in m.structure.get("supports", [])})
+    span = max((b - a for a, b in zip(pts, pts[1:])), default=0.0)
+    h = m.structure["worktop_height"]
+    k_leg = catalog.profile(ps.values[lp]).props.Iy / h
+    k_beam = catalog.profile(ps.values[beam]).props.Iy / span if span > 0 else float("inf")
+    return beam if k_beam < k_leg else lp
 
 
 def _fit_leg(family, ps: ParameterSet, prof_autos) -> bool:

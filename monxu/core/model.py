@@ -267,6 +267,8 @@ class ProductModel:
     structure: dict[str, Any] = field(default_factory=dict)    # datos para el motor de cálculo
     design_notes: list[dict[str, Any]] = field(default_factory=list)
     dims: dict[str, float] = field(default_factory=dict)        # cotas principales esperadas
+    # parámetros por defecto incompatibles entre sí que la regla de diseño corrige: {param: (valor, motivo)}
+    rule_fixes: dict[str, tuple[Any, str]] = field(default_factory=dict)
 
     # -- construcción
     def add_subassembly(self, sid: str, name: str, **kw) -> Subassembly:
