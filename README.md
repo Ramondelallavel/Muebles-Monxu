@@ -407,7 +407,9 @@ La comparación destapó dos fallos del motor de referencia, ya corregidos en am
   - los símbolos de soldadura fuera del marco o dentro de los detalles;
   - las filas de globos fuera del marco (ahora se compactan o se reparten en filas intercaladas).
 
-  Las 31 plantillas salen sin solapes de texto, en los planos del servidor y en los del navegador.
+  Las 31 plantillas salen sin solapes de texto, en los planos del servidor y en los del navegador. En el
+  navegador queda un único aviso de maquetación: dos líneas de referencia que se cruzan en la vista
+  explosionada de PT-2000-TALLER.
 
 - **Alertas repetidas en el interfaz:** el panel de alertas juntaba las notas de diseño con el control de
   calidad, que ya incluye las notas de error y advertencia, así que cada una aparecía dos veces.
