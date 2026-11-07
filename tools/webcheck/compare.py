@@ -1,11 +1,13 @@
 """Validación cruzada: motor del navegador (TypeScript, ejecutado en node) frente al motor de referencia (Python).
 
 Uso: python tools/webcheck/compare.py BUNDLE.mjs N_ALEATORIOS SEMILLA
+(COMPARE_ONLY=familia1,familia2 limita los casos a esas familias.)
 Compara parámetros resueltos por el dimensionado, derivados, piezas, masas, comprobaciones estructurales,
 reacciones, plan de corte, anidado, soldadura, pintura, DFM y totales del BOM.
 """
 import json
 import math
+import os
 import random
 import subprocess
 import sys
@@ -71,6 +73,13 @@ for k in range(n_rand):
              "USO": rng.choice(["montaje", "trabajo_pesado", "inspeccion"]), "CARGA_HORIZONTAL": rng.choice([100, 200, 300]),
              "ANCLAJE": rng.choice(["ninguno", "al_suelo"]), "PETO_TRASERO": rng.choice([0, 0, 0, 40, 100]),
              "REPOSAPIES": rng.choice([0, 0, 1]), "ALTURA_REPOSAPIES": rng.choice([200, 250, 300])}
+    elif u >= 0.58:
+        fid = "estanteria_bateria"
+        v = {"NUMERO_MODULOS": rng.randint(2, 5), "ANCHURA": rng.choice(range(600, 1601, 100)),
+             "PROFUNDIDAD": rng.choice(range(300, 901, 50)), "ALTURA": rng.choice(range(1200, 2801, 100)),
+             "NUMERO_NIVELES": rng.randint(2, 6), "CARGA_POR_NIVEL": rng.choice([None, 50, 100, 150, 250]),
+             "ANCLAJE": rng.choice(["al_suelo", "ninguno"]), "CARGA_HORIZONTAL": rng.choice([100, 200, 300]),
+             "PERFIL_TRAVESANO": rng.choice(["auto", "auto", "RHS 50x30x2"])}
     else:
         fid = "estanteria"
         v = {"ANCHURA": rng.choice(range(800, 3001, 100)), "PROFUNDIDAD": rng.choice(range(300, 1001, 50)),
@@ -79,6 +88,9 @@ for k in range(n_rand):
     v.update({"MATERIAL_ESTRUCTURAL": m[0], "MATERIAL_CHAPA": m[1], "ACABADO": m[2]})
     cases.append({"id": f"R{k:03d}", "family": fid, "values": v})
 
+if os.environ.get("COMPARE_ONLY"):
+    keep = set(os.environ["COMPARE_ONLY"].split(","))
+    cases = [c for c in cases if c["family"] in keep]
 payload = json.dumps(cases)
 js = json.loads(subprocess.run(["node", bundle], input=payload, capture_output=True, text=True, check=True).stdout)
 py = json.loads(subprocess.run([sys.executable, "tools/webcheck/ref.py"], input=payload, capture_output=True, text=True,

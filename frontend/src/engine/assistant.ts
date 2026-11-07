@@ -13,6 +13,7 @@ const FAMILY_KEYWORDS = [
   ["mesa_soldadura", /mesas? de sold|mesas? para soldar|bancos? de soldadura|mesas? de calderer|mesas? de amarre/],
   ["puesto_trabajo", /puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion|embalaje)/],
   ["carro_estanteria", /carros? (estanteria|de (baldas|bandejas|picking|estantes))|carros? de \d+ (niveles|baldas|bandejas|estantes)|estanterias? (con ruedas|movil|movible|rodante|sobre ruedas)/],
+  ["estanteria_bateria", /estanterias? (?:\w+ ){0,3}en bateria|baterias? de (?:\w+ )?(?:estanterias|modulos)|estanterias? (?:\w+ ){0,3}de \w+ (?:modulos|cuerpos|vanos)|\w+ (?:modulos|cuerpos|vanos) de estanteri|estanterias? modular|estanterias? (?:corrida|continua)s?\b/],
   ["carro_taller", /\bcarros?\b|\bcarritos?\b|carro de (taller|transporte)/],
   ["estanteria", /estanteri/],
   ["mesa_industrial", /\bmesas?\b|banco de (trabajo|montaje)|\bbancos?\b/],
@@ -21,7 +22,9 @@ const FAMILY_KEYWORDS = [
 /** Accesorios que sí implementa una familia (no se marcan como no soportados) y parámetro que activan. */
 const SUPPORTED_BY = { "puesto_trabajo|panel_trasero": ["PANEL_HERRAMIENTAS", 1], "carro_taller|ruedas": null, "carro_estanteria|ruedas": null };
 export const MESA_LIKE = ["mesa_industrial", "puesto_trabajo", "carro_taller", "mesa_soldadura"];
-export const SHELF_LIKE = ["estanteria", "carro_estanteria"];
+export const SHELF_LIKE = ["estanteria", "carro_estanteria", "estanteria_bateria"];
+const MODULE_WORDS = "modulos|cuerpos|vanos";
+const BAY_MAX = 2000.0;          // anchura máxima de módulo (ParamSpec de ANCHURA en estanteria_bateria)
 const UNSUPPORTED = [
   ["cajones", "cajon|cajonera", "Cajones / cajonera"],
   ["panel_trasero", "panel (trasero|perforado)|panel de herramientas|panel posterior", "Panel trasero perforado"],
@@ -33,7 +36,8 @@ const UNSUPPORTED = [
   ["regulable", "regulable en altura|altura regulable", "Regulación de altura"],
 ];
 export const LABELS = { mesa_industrial: "Mesa industrial", estanteria: "Estantería industrial", puesto_trabajo: "Puesto de trabajo industrial",
-  carro_taller: "Carro de taller", carro_estanteria: "Carro estantería", mesa_soldadura: "Mesa de soldadura", armario: "Armario / mobiliario auxiliar" };
+  carro_taller: "Carro de taller", carro_estanteria: "Carro estantería", mesa_soldadura: "Mesa de soldadura", estanteria_bateria: "Estantería en batería",
+  armario: "Armario / mobiliario auxiliar" };
 const DIM_PROPOSAL = { mesa_industrial: [1800.0, 800.0, 900.0], puesto_trabajo: [1500.0, 750.0, 900.0], carro_taller: [1000.0, 600.0, 900.0],
   mesa_soldadura: [1500.0, 1000.0, 850.0] };
 export const STRUCTURAL_KEYS = ["PROFUNDIDAD", "NUMERO_NIVELES", "CARGA_POR_NIVEL", "ALTURA_PRIMER_NIVEL", "DISTANCIA_BALDAS", "PERFIL_MONTANTE",
@@ -75,7 +79,7 @@ export function parse(text, pending = null) {
     it.family = "carro_taller";
     it.notes.push("Mesa sobre ruedas: se genera como carro de taller sin asa de empuje (mesa móvil).");
   }
-  for (const [w, n] of Object.entries(NUM_WORDS)) t = t.replace(R(String.raw`\b${w}\b(?=\s+(niveles|baldas|estantes|cajones|travesanos))`, "g"), String(n));
+  for (const [w, n] of Object.entries(NUM_WORDS)) t = t.replace(R(String.raw`\b${w}\b(?=\s+(niveles|baldas|estantes|cajones|travesanos|${MODULE_WORDS}))`, "g"), String(n));
   let m = t.match(R(String.raw`${NUM}\s*${UNIT}?\s*x\s*${NUM}\s*${UNIT}?\s*x\s*${NUM}\s*${UNIT}?`));
   if (m) {
     const unit = m[6] || m[4] || m[2];
@@ -90,19 +94,24 @@ export function parse(text, pending = null) {
       if (mm) { it.set(param, toMm(toNumber(mm[1]), mm[2]), mm[0]); break; }
     }
   }
-  if (SHELF_LIKE.includes(it.family) && "ANCHURA" in it.values) {
+  if (SHELF_LIKE.includes(it.family)) {
+    // en estanterías: anchura = frente, profundidad = fondo
     const pm = t.match(R(String.raw`${NUM}\s*${UNIT}?\s*(?:de\s+)?(?:profundidad|fondo)`));
     if (pm) it.set("PROFUNDIDAD", toMm(toNumber(pm[1]), pm[2]), pm[0]);
-    const am = t.match(R(String.raw`${NUM}\s*${UNIT}?\s*(?:de\s+)?(?:ancho|anchura)`));
+    const am = t.match(R(String.raw`${NUM}\s*${UNIT}?\s*(?:de\s+)?(?:ancho|anchura|frente)`))
+      ?? t.match(R(String.raw`\bfrente\s*(?:total\s*)?(?:de|:|=)?\s*${NUM}\s*${UNIT}?`));
     if (am) it.set("ANCHURA", toMm(toNumber(am[1]), am[2]), am[0]);
+    else if (pm && it.evidence.ANCHURA === pm[0].trim()) { it.pop("ANCHURA"); delete it.evidence.ANCHURA; }   // el único dato era el fondo
   }
   m = t.match(/(\d+)\s+(?:niveles|baldas|estantes)/);
   if (m) it.set("NUMERO_NIVELES", parseInt(m[1], 10), m[0]);
+  m = t.match(R(String.raw`(\d+)\s+(?:${MODULE_WORDS})`));
+  if (m && it.family === "estanteria_bateria") it.set("NUMERO_MODULOS", parseInt(m[1], 10), m[0]);
   for (const mm of t.matchAll(R(String.raw`${NUM}\s*(kg|kilos?|kilogramos?)\b`, "g"))) {
     const val = toNumber(mm[1]);
     const s = mm.index, e = mm.index + mm[0].length;
     const ctx = t.slice(Math.max(0, s - 60), e + 60), after = t.slice(e, e + 40), before = t.slice(Math.max(0, s - 40), s);
-    if (/por nivel|cada nivel|por balda|cada balda|por estante/.test(ctx)) it.set("CARGA_POR_NIVEL", val, mm[0] + " por nivel");
+    if (/por nivel|cada nivel|por balda|cada balda|por estante|por bandeja|cada bandeja/.test(ctx)) it.set("CARGA_POR_NIVEL", val, mm[0] + " por nivel");
     else if (/^\s*(?:de\s+)?(?:carga\s+)?(?:puntual|concentrada)/.test(after) || /(?:puntual|concentrada)\s*(?:de|:|=)?\s*$/.test(before))
       it.set("CARGA_PUNTUAL", val, ctx);     // pegado al valor
     else if (/balda|estante inferior/.test(after) || /balda/.test(before)) it.set("CARGA_BALDA", val, ctx);
@@ -232,7 +241,31 @@ export function parse(text, pending = null) {
     delete it.values.NUMERO_BALDAS;
     it.notes = it.notes.filter((n) => !n.includes("total de la mesa"));
   }
+  if (it.family === "estanteria_bateria") batteryWidth(it, t);
   return it;
+}
+
+/** Estantería en batería: ANCHURA es la de cada módulo (entre ejes de montantes). "módulos de 1.000 mm" fija el módulo; un frente
+ * mayor que el módulo máximo, o indicado como total/largo, se reparte entre los módulos (y si no se dijo cuántos, se deduce). */
+function batteryWidth(it, t) {
+  const mm = t.match(R(String.raw`(?:${MODULE_WORDS})\s+(?:de\s+|:\s*)?${NUM}(?![\d.,])\s*${UNIT}?(?!\s*(?:kg|kilos?|niveles|baldas|bandejas))`));
+  const modW = mm ? toMm(toNumber(mm[1]), mm[2]) : null;
+  const front = it.values.ANCHURA;
+  let n = it.values.NUMERO_MODULOS;
+  const evFront = it.evidence.ANCHURA ?? "";
+  if (modW) {
+    if (front && front > modW * 1.5 && front !== modW && !n) {
+      n = Math.max(2, pyRound(front / modW, 0));
+      it.set("NUMERO_MODULOS", n, evFront);
+      it.notes.push(`Frente total de ${thousands(front)} mm con módulos de ${thousands(modW)} mm: ${n} módulos.`);
+    }
+    it.set("ANCHURA", modW, mm[0]);
+  } else if (front && n && (front > BAY_MAX || /\btotal|en total|de largo|longitud/.test(t))) {
+    const mw = pyRound(front / n, 0);
+    it.set("ANCHURA", mw, evFront);
+    it.notes.push(`Frente total de ${thousands(front)} mm repartido en ${n} módulos de ${thousands(mw)} mm entre ejes de montantes `
+      + `(anchura total = ${n} × módulo + un montante).`);
+  }
 }
 
 const Q = (param, question, why, options = [], blocking = "verificacion", proposal = null) => ({ param, question, why, options, blocking, proposal });
@@ -270,12 +303,16 @@ export function missingData(family, values, asked = new Set()) {
 }
 function missingShelf(values, asked, family = "estanteria") {
   const q = [];
-  const cart = family === "carro_estanteria";
-  for (const [p, lbl, prop] of [["ANCHURA", "anchura de frente", cart ? 1000.0 : 1500.0], ["PROFUNDIDAD", "profundidad", 600.0], ["ALTURA", "altura total", cart ? 1400.0 : 2000.0]])
+  const cart = family === "carro_estanteria", bat = family === "estanteria_bateria";
+  if (bat && !("NUMERO_MODULOS" in values)) q.push(Q("NUMERO_MODULOS", "¿Cuántos módulos contiguos tendrá la batería?",
+    "Los módulos comparten los montantes intermedios; define la longitud total.", [2, 3, 4].map((n) => ({ label: `${n} módulos`, value: n })), "generacion", 3));
+  for (const [p, lbl, prop] of [["ANCHURA", bat ? "anchura de cada módulo (entre ejes de montantes)" : "anchura de frente", cart || bat ? 1000.0 : 1500.0],
+    ["PROFUNDIDAD", "profundidad", bat ? 500.0 : 600.0], ["ALTURA", "altura total", cart ? 1400.0 : 2000.0]])
     if (!(p in values)) q.push(Q(p, `¿Qué ${lbl} necesita (mm)?`, "Dimensión principal necesaria para generar la geometría.", [], "generacion", prop));
   if (!("NUMERO_NIVELES" in values)) { const [ns, def] = cart ? [[3, 4], 3] : [[4, 5], 5];
     q.push(Q("NUMERO_NIVELES", "¿Cuántos niveles de bandejas?", "Define el número de bastidores y bandejas.", ns.map((n) => ({ label: `${n} niveles`, value: n })), "generacion", def)); }
-  if (values.CARGA_POR_NIVEL == null) q.push(Q("CARGA_POR_NIVEL", "¿Qué carga soportará cada nivel (kg) y estará repartida (cajas) o concentrada (piezas pesadas)?",
+  if (values.CARGA_POR_NIVEL == null) q.push(Q("CARGA_POR_NIVEL", (bat ? "¿Qué carga soportará cada bandeja (cada módulo y nivel, kg)" : "¿Qué carga soportará cada nivel (kg)")
+    + " y estará repartida (cajas) o concentrada (piezas pesadas)?",
     "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.", (cart ? [25, 40, 60] : [80, 150, 250]).map((n) => ({ label: `${n} kg`, value: n }))));
   if (cart && !("CARGA_HORIZONTAL" in values) && !asked.has("CARGA_HORIZONTAL")) q.push(Q("CARGA_HORIZONTAL",
     "¿Qué fuerza de maniobra tendrá el carro (empuje con las ruedas frenadas o contra un obstáculo)?", "Es la acción que puede volcar el carro; un carro no se ancla.",
@@ -296,7 +333,8 @@ export function proposalFor(family, values) {
     const cart = family === "carro_estanteria";
     const p = {};
     const dims = cart ? [["ANCHURA", 1000.0], ["PROFUNDIDAD", 600.0], ["ALTURA", 1400.0], ["NUMERO_NIVELES", 3]]
-      : [["ANCHURA", 1500.0], ["PROFUNDIDAD", 600.0], ["ALTURA", 2000.0], ["NUMERO_NIVELES", 5]];
+      : family === "estanteria_bateria" ? [["NUMERO_MODULOS", 3], ["ANCHURA", 1000.0], ["PROFUNDIDAD", 500.0], ["ALTURA", 2000.0], ["NUMERO_NIVELES", 5]]
+        : [["ANCHURA", 1500.0], ["PROFUNDIDAD", 600.0], ["ALTURA", 2000.0], ["NUMERO_NIVELES", 5]];
     for (const [k, v] of dims) if (!(k in values)) p[k] = v;
     for (const k of ["PERFIL_MONTANTE", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ESPESOR_BALDA", ...(cart ? ["PERFIL_ASA", "RUEDA"] : [])]) if (!(k in values)) p[k] = "auto";
     return p;
@@ -321,18 +359,21 @@ const thousands = (x) => pyRound(x, 0).toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/
 export function describe(it) {
   const v = it.values;
   const out = [`Familia: ${LABELS[it.family] ?? "no identificada"}.`];
-  const lab = { LONGITUD: "Longitud", ANCHURA: SHELF_LIKE.includes(it.family) ? "Anchura (frente)" : "Anchura/fondo", PROFUNDIDAD: "Profundidad", ALTURA: "Altura" };
+  const bat = it.family === "estanteria_bateria";
+  const lab = { LONGITUD: "Longitud", ANCHURA: bat ? "Anchura de módulo (entre ejes)" : SHELF_LIKE.includes(it.family) ? "Anchura (frente)" : "Anchura/fondo",
+    PROFUNDIDAD: "Profundidad", ALTURA: "Altura" };
   for (const [k, l] of Object.entries(lab)) if (k in v) out.push(`${l}: ${thousands(v[k])} mm.`);
+  if (bat && "NUMERO_MODULOS" in v) out.push(`Módulos: ${v.NUMERO_MODULOS} (montantes intermedios compartidos).`);
   if ("NUMERO_NIVELES" in v) out.push(`Niveles: ${v.NUMERO_NIVELES}.`);
   if ("CARGA_POR_NIVEL" in v && v.CARGA_POR_NIVEL != null) {
-    out.push(`Carga por nivel: ${g(v.CARGA_POR_NIVEL)} kg.`);
-    if ("NUMERO_NIVELES" in v) out.push(`Carga total nominal solicitada: ${g(v.CARGA_POR_NIVEL * v.NUMERO_NIVELES)} kg.`);
+    out.push(`Carga por ${bat ? "bandeja" : "nivel"}: ${g(v.CARGA_POR_NIVEL)} kg.`);
+    if ("NUMERO_NIVELES" in v) out.push(`Carga total nominal solicitada: ${g(v.CARGA_POR_NIVEL * v.NUMERO_NIVELES * (bat ? v.NUMERO_MODULOS ?? 1 : 1))} kg.`);
   }
   if ("CARGA_TOTAL" in v && v.CARGA_TOTAL != null) out.push(`Carga distribuida sobre encimera: ${g(v.CARGA_TOTAL)} kg.`);
   if ("CARGA_BALDA" in v && v.CARGA_BALDA != null) out.push(`Carga sobre balda: ${g(v.CARGA_BALDA)} kg.`);
   if ("CARGA_PUNTUAL" in v && v.CARGA_PUNTUAL != null) out.push(`Carga puntual: ${g(v.CARGA_PUNTUAL)} kg.`);
   out.push("Material: " + ("MATERIAL_ESTRUCTURAL" in v ? v.MATERIAL_ESTRUCTURAL : "pendiente de selección") + ".");
-  if (it.family === "estanteria") out.push("Anclaje: " + ({ al_suelo: "al suelo", ninguno: "sin anclaje" }[v.ANCLAJE] ?? "pendiente") + ".");
+  if (it.family === "estanteria" || it.family === "estanteria_bateria") out.push("Anclaje: " + ({ al_suelo: "al suelo", ninguno: "sin anclaje" }[v.ANCLAJE] ?? "pendiente") + ".");
   if (MESA_LIKE.includes(it.family)) {
     out.push("Balda inferior: " + (v.NUMERO_BALDAS === 1 ? "sí" : v.NUMERO_BALDAS === 0 ? "no" : "no indicada") + ".");
     out.push("Tipo de estructura: tubular soldada" + (it.accessories.includes("estructura tubular") ? " (indicada)." : " (propuesta)."));

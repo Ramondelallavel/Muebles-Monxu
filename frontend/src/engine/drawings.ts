@@ -651,7 +651,8 @@ function planStructure(d, X) {
   const [x0, yz] = a.at([lo[0], 0, hi[2]]), [x1] = a.at([hi[0], 0, hi[2]]);
   d.dimH(x0, x1, yz, yz, yz + 9, hi[0] - lo[0], "EST_LONGITUD");
   const [, yb] = a.at([0, 0, lo[2]]);
-  const lower = Object.keys(lv).filter((k) => k !== "SUP").map((k) => [instanceBBox(X.inst(lv[k].long[0]))[1][2], k]).sort((u, w) => u[0] - w[0]);
+  // niveles inferiores del primer módulo (en batería, los demás módulos repiten las cotas: claves "_M<j>")
+  const lower = Object.keys(lv).filter((k) => k !== "SUP" && !k.includes("_M")).map((k) => [instanceBBox(X.inst(lv[k].long[0]))[1][2], k]).sort((u, w) => u[0] - w[0]);
   d.dimV(yb, yz, a.ox, a.ox, a.ox - (lower.length ? 17 : 9), hi[2] - lo[2], "EST_ALTURA");
   if (lower.length === 1) { const [z, k] = lower[0]; const [, yr] = a.at([0, 0, z]); d.dimV(yb, yr, a.ox, a.ox, a.ox - 9, z - lo[2], `COTA_BASTIDOR_${k}`); }
   else if (lower.length) {

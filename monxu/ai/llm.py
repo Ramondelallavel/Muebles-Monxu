@@ -16,15 +16,20 @@ SYSTEM = (
     "Eres un ingeniero de diseño de mobiliario industrial. Extrae de la solicitud del usuario los parámetros "
     "técnicos indicados explícitamente. No inventes valores: deja a null todo lo que el usuario no haya dicho. "
     "Dimensiones en milímetros; cargas en kg (fuerzas horizontales en N). Familias: mesa_industrial, estanteria, "
-    "puesto_trabajo, armario."
+    "estanteria_bateria, puesto_trabajo, carro_taller, carro_estanteria, mesa_soldadura, armario."
 )
 
 
 class ExtractedRequest(BaseModel):
-    family: Optional[Literal["mesa_industrial", "estanteria", "puesto_trabajo", "armario"]] = None
+    family: Optional[Literal["mesa_industrial", "estanteria", "estanteria_bateria", "puesto_trabajo", "carro_taller",
+                             "carro_estanteria", "mesa_soldadura", "armario"]] = None
     LONGITUD: Optional[float] = Field(None, description="Longitud en mm")
     ANCHURA: Optional[float] = Field(None, description="Anchura o fondo en mm")
     ALTURA: Optional[float] = Field(None, description="Altura de trabajo en mm")
+    PROFUNDIDAD: Optional[float] = Field(None, description="Profundidad (fondo) de estantería en mm")
+    NUMERO_NIVELES: Optional[int] = Field(None, description="Niveles de bandejas de estantería")
+    NUMERO_MODULOS: Optional[int] = Field(None, description="Módulos contiguos de una estantería en batería")
+    CARGA_POR_NIVEL: Optional[float] = Field(None, description="Carga por nivel (o por bandeja en batería) en kg")
     CARGA_TOTAL: Optional[float] = Field(None, description="Carga distribuida sobre la encimera en kg")
     CARGA_BALDA: Optional[float] = Field(None, description="Carga sobre la balda inferior en kg")
     CARGA_PUNTUAL: Optional[float] = Field(None, description="Carga puntual en kg")

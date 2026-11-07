@@ -196,7 +196,8 @@ export function AlertsPanel({ design }: { design: Dict }) {
       </div>
       <p className="muted">{q.summary}</p>
       <div className="scroll-x"><table className="grid"><thead><tr><th>Nivel</th><th>Código</th><th>Descripción</th></tr></thead><tbody>
-        {[...design.design_notes.map((n: Dict) => ({ level: n.level, code: n.code, message: n.message })),
+        {[...design.design_notes.filter((n: Dict) => !q.items.some((i: Dict) => i.code === n.code && i.message === n.message))   // el QA ya repite errores y advertencias
+          .map((n: Dict) => ({ level: n.level, code: n.code, message: n.message })),
           ...q.items.filter((i: Dict) => i.level !== "ok"), ...q.items.filter((i: Dict) => i.level === "ok")].map((i: Dict, k: number) => (
           <tr key={k}><td><span className={`dot ${LV[i.level]}`} />{i.level}</td><td>{i.code}</td><td>{i.message}</td></tr>))}
       </tbody></table></div>

@@ -113,6 +113,7 @@ export function resolveAuto(family, params, autos, onProgress = null) {
   const sizeProfiles = () => {
     const idx = Object.fromEntries(profAutos.map((k) => [k, cands[k].includes(v[k]) ? cands[k].indexOf(v[k]) : 0]));
     for (const k of profAutos) ps.values[k] = cands[k][idx[k]];
+    if (fitLeg(family, ps, profAutos)) idx[family.leg_param] = cands[family.leg_param].indexOf(ps.values[family.leg_param]);
     let iterations = 0;
     for (iterations = 1; iterations <= 40; iterations++) {
       iterTotal++;
@@ -135,9 +136,12 @@ export function resolveAuto(family, params, autos, onProgress = null) {
       let bumped = false;
       for (const k of failing) if (idx[k] + 1 < cands[k].length) { idx[k]++; ps.values[k] = cands[k][idx[k]]; bumped = true; }
       const lp = family.leg_param;
-      if (profAutos.includes(lp))
+      if (profAutos.includes(lp)) {
         for (const k of family.frame_params)
           while (k in ps.values && C.profile(ps.values[k]).B > C.profile(ps.values[lp]).B && idx[lp] + 1 < cands[lp].length) { idx[lp]++; ps.values[lp] = cands[lp][idx[lp]]; }
+        fitLeg(family, ps, profAutos);
+        idx[lp] = cands[lp].indexOf(ps.values[lp]);
+      }
       if (!bumped) {
         notes.push({ level: "error", code: "DIM-PERFILES", message: "Se han agotado los perfiles candidatos sin verificar todas las comprobaciones: " + [...failing].sort().join(", ") });
         break;
@@ -148,10 +152,12 @@ export function resolveAuto(family, params, autos, onProgress = null) {
     notes.push({ level: "propuesta", code: "DIM-PERFILES", message: "Perfiles dimensionados por cálculo preliminar (sección mínima de la serie que verifica resistencia, "
       + "pandeo, flechas y soldaduras): " + profAutos.map((k) => `${k} = ${ps.values[k]}`).join(", "), iterations });
     plates();
+    fitLeg(family, ps, profAutos);
   };
   const runProfiles = !!(profAutos.length && (haveLoad || v.CARGA_HORIZONTAL));
   if (runProfiles) sizeProfiles();
   for (const k of Object.keys(ps.values)) if (ps.values[k] === AUTO && k in defaults) ps.values[k] = defaults[k];
+  fitLeg(family, ps, profAutos);
   if (footAuto && haveLoad) {
     for (let it = 0; it < 3; it++) {
       const before = ps.values[sp];
@@ -162,6 +168,18 @@ export function resolveAuto(family, params, autos, onProgress = null) {
     }
   }
   return [ps, notes, iterTotal];
+}
+
+/** Regla constructiva propia de la familia sobre la pata/montante (legFits): aumenta el perfil 'auto' de la serie hasta cumplirla. */
+function fitLeg(family, ps, profAutos) {
+  const lp = family.leg_param, series = family.candidates[lp];
+  if (!family.legFits || !profAutos.includes(lp) || !series.includes(ps.values[lp])) return false;
+  let changed = false;
+  while (!family.legFits(ps.values) && series.indexOf(ps.values[lp]) + 1 < series.length) {
+    ps.values[lp] = series[series.indexOf(ps.values[lp]) + 1];
+    changed = true;
+  }
+  return changed;
 }
 
 function selectFeet(family, ps, notes) {

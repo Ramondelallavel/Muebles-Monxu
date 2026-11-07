@@ -5,8 +5,8 @@ geométrica, mecánica y constructivamente: modelo B-rep real, cálculo, planos,
 BOM, optimización de corte y expediente de fabricación, todo derivado de una única fuente de
 parámetros.
 
-> **Estado:** núcleo funcional con seis familias completas (**mesa industrial**, **mesa de soldadura**,
-> **estantería industrial**, **puesto de trabajo**, **carro de taller** y **carro estantería**) y el caso de aceptación §23 superado por
+> **Estado:** núcleo funcional con siete familias completas (**mesa industrial**, **mesa de soldadura**,
+> **estantería industrial**, **estantería en batería**, **puesto de trabajo**, **carro de taller** y **carro estantería**) y el caso de aceptación §23 superado por
 > pruebas automáticas. Los armarios (puertas, cajones) están previstos en la arquitectura pero
 > **no implementados**.
 
@@ -47,8 +47,8 @@ python -m pytest -q
 | 4. Documentación | ✔ | 12 hojas de planos (conjunto, estructura, perfiles, chapa, desarrollos, pletinas, soldaduras con detalles, explosionado, montaje, despiece), STEP de conjunto y de cada pieza, STL, BREP, GLB, DXF, Excel con fórmulas, informe PDF |
 | 5. Fabricación | ✔ | Desarrollos con BA = π/2·(Ri+K·t), DFM (láser, plegadora, perfiles, soldadura, montaje), corte de barras hasta la cota inferior, anidado de chapa |
 | 6. Asistente IA | ✔ | Interpretación en español con evidencia, preguntas de datos faltantes, propuesta preliminar diferenciada de lo verificado |
-| 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) **carro de taller** (ruedas de espiga con freno; asa en uno, dos o ningún extremo) y **carro estantería** (N niveles sobre ruedas, asa opcional). Peto trasero opcional en mesa, puesto y carro. Armarios: sólo se identifican en el asistente |
-| 8. Validación | ✔ | 90 pruebas: unidades frente a soluciones analíticas y tablas, las cinco familias, QA, API, aceptación §23, validación cruzada navegador ↔ servidor, expediente del navegador y legibilidad de planos |
+| 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) **carro de taller** (ruedas de espiga con freno; asa en uno, dos o ningún extremo) **carro estantería** (N niveles sobre ruedas, asa opcional), **mesa de soldadura** (placa perforada de 10–20 mm) y **estantería en batería** (N módulos con montantes compartidos). Peto trasero opcional en mesa, puesto y carro. Armarios: sólo se identifican en el asistente |
+| 8. Validación | ✔ | 107 pruebas: unidades frente a soluciones analíticas y tablas, las siete familias, QA, API, aceptación §23, validación cruzada navegador ↔ servidor, expediente del navegador y legibilidad de planos |
 
 ### Verificaciones de la cadena (no simuladas)
 
@@ -193,6 +193,34 @@ El asistente reconoce «mesa de soldadura / para soldar / de calderería», «si
 Plantillas: 1.200 × 800 sistema 16, 2.000 × 1.000 sistema 28 con 1.000 kg y 1.500 × 1.000 de
 calderería con balda inferior.
 
+## Estantería en batería
+
+`estanteria_bateria` (`EB`) une de 2 a 8 módulos de estantería contiguos que **comparten los montantes
+intermedios**: con N módulos hay 2·(N + 1) montantes en lugar de 4·N. `ANCHURA` es la de cada módulo
+entre ejes de montantes, y la anchura total es `ANCHURA_TOTAL` = N · módulo + un montante.
+
+- **Bastidores por módulo y nivel:** los largueros van entre caras de montante. En el montante común,
+  cada módulo suelda su travesaño lateral a un lado del eje, dentro de la sección del tubo. Regla
+  constructiva: junta/2 + retranqueo + ancho del travesaño ≤ medio montante. El dimensionado sube
+  `PERFIL_MONTANTE` hasta cumplirla. Si el montante es fijo y no cabe, el error `DFM-BATERIA-MONTANTE`
+  es bloqueante.
+- **Bandejas iguales en todos los módulos** (una sola referencia), de eje a eje con 1 mm de junta.
+  Llevan escotaduras de medio montante en X y de montante completo en Y. Las pestañas laterales de dos
+  bandejas contiguas quedan enfrentadas a 1 mm, sin sitio para la cabeza de un tornillo. Por eso cada
+  bandeja se atornilla solo por las pestañas delantera y trasera, y las laterales solo posicionan. El
+  primer diseño atornillaba las cuatro pestañas y la detección de interferencias lo rechazó.
+- **Cálculo:** cada bandeja es una superficie con su carga (`CARGA_POR_NIVEL` es la de cada bandeja). El
+  FEM es el de la batería completa, con todos los montantes y pies, así que el montante común recibe
+  las reacciones de los dos módulos.
+- **Planos:** las cotas de niveles y travesaños se dan en el primer módulo, porque los demás son
+  iguales. Una estructura soldada de más de 3 m genera la advertencia `ERG-TRANSPORTE`.
+- **Asistente:** reconoce «estantería en batería», «batería de estanterías», «estantería de N módulos /
+  cuerpos / vanos» y «estantería modular». Entiende tanto «módulos de 1.000 mm» como un frente total
+  («4 m de largo», «3.600 de frente total»), que reparte entre los módulos o del que deduce cuántos hay.
+
+Plantillas: 3 × 1.000 mm con cinco niveles, pesada de 4 × 1.200 mm y archivo de 2 × 900 mm con seis
+niveles.
+
 ## Presupuesto estimado
 
 Cada diseño lleva un presupuesto unitario calculado desde el modelo y el plan de fabricación con
@@ -297,7 +325,9 @@ cd .. && python tools/webcheck/compare.py /tmp/webrun.mjs 60 11
 Con las 25 plantillas de las cinco familias, la aceptación 2000→2400, los dos diseños por defecto y
 30 casos aleatorios de todas las familias (59 casos) no hay ninguna diferencia, ni en el presupuesto.
 Los casos aleatorios incluyen peto, asas y carro estantería. Una segunda tanda de 66 casos (40
-aleatorios) tampoco tuvo diferencias. El aprovechamiento coincide exactamente en todas las
+aleatorios) tampoco tuvo diferencias. La mesa de soldadura sumó 72 casos sin diferencias. La
+estantería en batería, con sus 3 plantillas y 29 casos aleatorios (2 a 5 módulos, con y sin carga,
+anclada o no, travesaño fijo o 'auto'), tampoco tiene ninguna. El aprovechamiento coincide exactamente en todas las
 comprobaciones salvo el vuelco, donde el error relativo es ≤ 2,4·10⁻⁴ por el centro de gravedad
 calculado sobre los sólidos facetados.
 
@@ -306,7 +336,8 @@ calculado sobre los sólidos facetados.
 - **STEP:** reimportación con OpenCascade. Mesa de 2000 mm: 99/99 sólidos válidos y volumen a −0,07 % del B-rep;
   estantería de 2888 mm: 311/311. Puesto de trabajo de 1500 mm: 137 ocurrencias, 139/139 sólidos válidos
   (−0,08 %). Carro de 1200 mm: 81 ocurrencias, 95/95 sólidos válidos (−0,22 %). Carro estantería de picking
-  de 1200 mm: 126 ocurrencias, 140/140 sólidos válidos (−0,15 %). Cada rueda se compone de varios
+  de 1200 mm: 126 ocurrencias, 140/140 sólidos válidos (−0,15 %). Estantería en batería de 3 × 1.000 mm:
+  317/317 sólidos válidos (−0,08 %), BOM con 317 unidades como el servidor. Cada rueda se compone de varios
   cuerpos: horquilla, espiga, cabezal, rueda y pedal.
 - **PDF:** pdfplumber (hojas A3 con cajetín).
 - **Excel:** openpyxl (fórmulas, unidades y masa frente al BOM del servidor).
@@ -376,7 +407,13 @@ La comparación destapó dos fallos del motor de referencia, ya corregidos en am
   - los símbolos de soldadura fuera del marco o dentro de los detalles;
   - las filas de globos fuera del marco (ahora se compactan o se reparten en filas intercaladas).
 
-  Las 25 plantillas salen sin solapes de texto.
+  Las 31 plantillas salen sin solapes de texto, en los planos del servidor y en los del navegador.
+
+- **Alertas repetidas en el interfaz:** el panel de alertas juntaba las notas de diseño con el control de
+  calidad, que ya incluye las notas de error y advertencia, así que cada una aparecía dos veces.
+- **Asistente: fondo tomado como anchura.** En «estantería de 600 de fondo y 2000 de alto», el fondo se
+  asignaba también a la anchura de frente. Ahora la anchura queda por definir y se pregunta. Además se
+  reconoce «frente» («1800 de frente», «frente total de 3600»).
 
 ## Datos que quedan como hipótesis o pendientes
 

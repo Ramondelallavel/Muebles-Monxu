@@ -16,7 +16,8 @@ CT = {"LONGITUD": 1000, "ANCHURA": 600, "ALTURA": 900, "CARGA_TOTAL": 100, "NUME
 def test_registered_and_implemented():
     lib = {f["id"]: f["status"] for f in library()}
     assert lib["puesto_trabajo"] == "implementada" and lib["carro_taller"] == "implementada"
-    assert lib["carro_estanteria"] == "implementada"
+    assert lib["carro_estanteria"] == "implementada" and lib["mesa_soldadura"] == "implementada"
+    assert lib["estanteria_bateria"] == "implementada"
     assert lib["armario"] == "en_desarrollo"
 
 
@@ -270,3 +271,65 @@ def test_welding_table_dossier(tmp_path):
     res = generate_dossier(r, {"code": "P-MS", "revision": "A"}, tmp_path / "exp")
     assert res["qa"]["blocking"] == 0
     assert any(i["code"] == "EXP-STEP" and i["level"] == "ok" for i in res["qa"]["items"])
+
+
+# ---------------------------------------------------------------------------------------------- estantería en batería
+def test_battery_shelving_shares_uprights():
+    r = regenerate("estanteria_bateria", _tpl("estanteria_bateria", "EB-2x900-6-ARCHIVO"))
+    m = r.model
+    N, n = 2, 6
+    assert m.product_code == "EB2x900-400-2200"
+    assert len([i for i in m.instances if i.part.role == "montante"]) == 2 * (N + 1)
+    trays = [i for i in m.instances if i.part.role == "balda"]
+    assert len(trays) == N * n and len({i.part.key for i in trays}) == 1          # todas las bandejas iguales
+    a = catalog.profile(m.params.values["PERFIL_MONTANTE"]).B
+    assert m.dims["ANCHURA_TOTAL"] == pytest.approx(N * 900 + a)
+    assert len(m.structure["surfaces"]) == N * n and len(m.structure["supports"]) == 2 * (N + 1)
+    # el montante intermedio recibe los travesaños laterales de los dos módulos en cada nivel
+    onto_mid = [j for j in m.joints if j.id.startswith("J.EST.TRV_") and "EST.MONT.D1" in j.members]
+    assert len(onto_mid) == 2 * n
+    # pestañas laterales enfrentadas: sin taladros ni tornillos (no caben las cabezas en la junta de 1 mm)
+    spec = trays[0].part.spec
+    assert all(not f.holes for f in spec.flanges if f.edge in ("x0", "x1"))
+    assert all(f.holes for f in spec.flanges if f.edge in ("y0", "y1"))
+    assert r.interferences["interferences"] == [] and r.qa.result()["blocking"] == 0
+    assert r.eng["status"] != "NO_CUMPLE"
+    assert not [c for c in r.eng["checks"] if c["status"] == "NO_CUMPLE"]
+
+
+def test_battery_upright_sized_for_two_crossbars():
+    """Los dos travesaños laterales deben caber en el montante común: el dimensionado lo aumenta si es 'auto'."""
+    v = {"NUMERO_MODULOS": 2, "ANCHURA": 800.0, "PROFUNDIDAD": 400.0, "ALTURA": 1000.0, "NUMERO_NIVELES": 2,
+         "CARGA_POR_NIVEL": 40.0, "ANCLAJE": "al_suelo", "ESPESOR_BALDA": 3.0}
+    f = family("estanteria_bateria")
+    r = regenerate("estanteria_bateria", v)
+    assert f.leg_fits(r.model.params.values) and catalog.profile(r.model.params.values["PERFIL_MONTANTE"]).B >= 60
+    assert not any(n["code"] == "DFM-BATERIA-MONTANTE" for n in r.model.design_notes)
+    r2 = regenerate("estanteria_bateria", {**v, "PERFIL_MONTANTE": "SHS 50x50x2"})
+    assert any(i["code"] == "DFM-BATERIA-MONTANTE" and i["level"] == "bloqueante" for i in r2.qa.result()["items"])
+
+
+def test_assistant_battery_shelving():
+    from monxu.ai.interpreter import parse
+    p = parse("Estantería en batería de tres módulos de 1000 mm, 500 de fondo y 2 m de alto, 5 niveles con 100 kg por "
+              "bandeja, anclada al suelo")
+    assert p.family == "estanteria_bateria"
+    assert p.values == {"ANCHURA": 1000.0, "PROFUNDIDAD": 500.0, "ALTURA": 2000.0, "NUMERO_NIVELES": 5,
+                        "NUMERO_MODULOS": 3, "CARGA_POR_NIVEL": 100.0, "ANCLAJE": "al_suelo"}
+    p = parse("Batería de estanterías de 3 módulos, 3600 mm de frente total, 600 de fondo, 2000 de alto")
+    assert p.values["NUMERO_MODULOS"] == 3 and p.values["ANCHURA"] == 1200 and p.values["PROFUNDIDAD"] == 600
+    p = parse("Estantería en batería de 4 m de largo con módulos de 1 m, 400 de profundidad y seis niveles")
+    assert p.values["NUMERO_MODULOS"] == 4 and p.values["ANCHURA"] == 1000 and p.values["NUMERO_NIVELES"] == 6
+    # el fondo no se toma también como anchura de frente
+    assert "ANCHURA" not in parse("estantería de 600 de fondo y 2000 de alto").values
+    r = assistant.handle(assistant.new_state(), "Estantería en batería de 2 módulos de 900 mm, 400 de fondo, 2200 de alto")
+    assert r["state"]["family"] == "estanteria_bateria" and r["family_implemented"]
+
+
+@pytest.mark.slow
+def test_battery_shelving_dossier(tmp_path):
+    r = regenerate("estanteria_bateria", _tpl("estanteria_bateria", "EB-3x1000-5"))
+    res = generate_dossier(r, {"code": "P-EB", "revision": "A"}, tmp_path / "exp")
+    assert res["qa"]["blocking"] == 0
+    assert any(i["code"] == "EXP-STEP" and i["level"] == "ok" for i in res["qa"]["items"])
+    assert any(i["code"] == "PLANO-GEOMETRIA" and i["level"] == "ok" for i in res["qa"]["items"])

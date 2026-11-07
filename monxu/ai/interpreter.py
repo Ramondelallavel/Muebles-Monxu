@@ -19,6 +19,9 @@ UNIT = r"(?:(mm|milimetros?|cm|centimetros?|m|metros?)\b)"
 FAMILY_KEYWORDS = [
     ("mesa_soldadura", r"mesas? de sold|mesas? para soldar|bancos? de soldadura|mesas? de calderer|mesas? de amarre"),
     ("carro_estanteria", r"carros? (estanteria|de (baldas|bandejas|picking|estantes))|carros? de \d+ (niveles|baldas|bandejas|estantes)|estanterias? (con ruedas|movil|movible|rodante|sobre ruedas)"),
+    ("estanteria_bateria", r"estanterias? (?:\w+ ){0,3}en bateria|baterias? de (?:\w+ )?(?:estanterias|modulos)|"
+                           r"estanterias? (?:\w+ ){0,3}de \w+ (?:modulos|cuerpos|vanos)|\w+ (?:modulos|cuerpos|vanos) de estanteri|"
+                           r"estanterias? modular|estanterias? (?:corrida|continua)s?\b"),
     ("puesto_trabajo", r"puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion|embalaje)"),
     ("carro_taller", r"\bcarros?\b|\bcarritos?\b|carro de (taller|transporte)"),
     ("estanteria", r"estanteri"),
@@ -29,7 +32,9 @@ FAMILY_KEYWORDS = [
 SUPPORTED_BY = {("puesto_trabajo", "panel_trasero"): ("PANEL_HERRAMIENTAS", 1), ("carro_taller", "ruedas"): None,
                 ("carro_estanteria", "ruedas"): None}
 MESA_LIKE = ("mesa_industrial", "puesto_trabajo", "carro_taller", "mesa_soldadura")
-SHELF_LIKE = ("estanteria", "carro_estanteria")
+SHELF_LIKE = ("estanteria", "carro_estanteria", "estanteria_bateria")
+MODULE_WORDS = r"modulos|cuerpos|vanos"
+BAY_MAX = 2000.0          # anchura máxima de módulo (ParamSpec de ANCHURA en estanteria_bateria)
 
 UNSUPPORTED_ACCESSORIES = [
     ("cajones", r"cajon|cajonera", "Cajones / cajonera"),
@@ -109,7 +114,7 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
         it.family = "carro_taller"
         it.notes.append("Mesa sobre ruedas: se genera como carro de taller sin asa de empuje (mesa móvil).")
     for word, n in NUM_WORDS.items():
-        t = re.sub(rf"\b{word}\b(?=\s+(niveles|baldas|estantes|cajones|travesanos))", str(n), t)
+        t = re.sub(rf"\b{word}\b(?=\s+(niveles|baldas|estantes|cajones|travesanos|{MODULE_WORDS}))", str(n), t)
     # ------------------------------------------------------------- dimensiones
     m = re.search(rf"{NUM}\s*{UNIT}?\s*x\s*{NUM}\s*{UNIT}?\s*x\s*{NUM}\s*{UNIT}?", t)
     if m:
@@ -129,25 +134,32 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
             if mm:
                 it.set(param, to_mm(to_number(mm.group(1)), mm.group(2)), mm.group(0))
                 break
-    if it.family in SHELF_LIKE and "ANCHURA" in it.values:
+    if it.family in SHELF_LIKE:
         # en estanterías: anchura = frente, profundidad = fondo
         pm = re.search(rf"{NUM}\s*{UNIT}?\s*(?:de\s+)?(?:profundidad|fondo)", t)
         if pm:
             it.set("PROFUNDIDAD", to_mm(to_number(pm.group(1)), pm.group(2)), pm.group(0))
-        am = re.search(rf"{NUM}\s*{UNIT}?\s*(?:de\s+)?(?:ancho|anchura)", t)
+        am = (re.search(rf"{NUM}\s*{UNIT}?\s*(?:de\s+)?(?:ancho|anchura|frente)", t)
+              or re.search(rf"\bfrente\s*(?:total\s*)?(?:de|:|=)?\s*{NUM}\s*{UNIT}?", t))
         if am:
             it.set("ANCHURA", to_mm(to_number(am.group(1)), am.group(2)), am.group(0))
+        elif pm and it.evidence.get("ANCHURA") == pm.group(0):
+            it.values.pop("ANCHURA")          # el único dato era el fondo: la anchura de frente queda por definir
+            it.evidence.pop("ANCHURA")
     # ------------------------------------------------------------- niveles
     mm = re.search(r"(\d+)\s+(?:niveles|baldas|estantes)", t)
     if mm:
         it.set("NUMERO_NIVELES", int(mm.group(1)), mm.group(0))
+    mm = re.search(rf"(\d+)\s+(?:{MODULE_WORDS})", t)
+    if mm and it.family == "estanteria_bateria":
+        it.set("NUMERO_MODULOS", int(mm.group(1)), mm.group(0))
     # ------------------------------------------------------------- cargas
     for mm in re.finditer(rf"{NUM}\s*(kg|kilos?|kilogramos?)\b", t):
         val = to_number(mm.group(1))
         ctx = t[max(0, mm.start() - 60): mm.end() + 60]
         after = t[mm.end(): mm.end() + 40]
         before = t[max(0, mm.start() - 40): mm.start()]
-        if re.search(r"por nivel|cada nivel|por balda|cada balda|por estante", ctx):
+        if re.search(r"por nivel|cada nivel|por balda|cada balda|por estante|por bandeja|cada bandeja", ctx):
             it.set("CARGA_POR_NIVEL", val, mm.group(0) + " por nivel")
         elif (re.match(r"\s*(?:de\s+)?(?:carga\s+)?(?:puntual|concentrada)", after)
               or re.search(r"(?:puntual|concentrada)\s*(?:de|:|=)?\s*$", before)):     # pegado al valor
@@ -321,12 +333,39 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
             it.notes.append(f"Carga total repartida por igual entre los {n} niveles (hipótesis).")
         it.values.pop("NUMERO_BALDAS", None)
         it.notes = [n for n in it.notes if "total de la mesa" not in n]
+    if it.family == "estanteria_bateria":
+        _battery_width(it, t)
     return it
+
+
+def _battery_width(it: Interpretation, t: str) -> None:
+    """Estantería en batería: ANCHURA es la de cada módulo (entre ejes de montantes).
+
+    "módulos de 1.000 mm" fija el módulo; un frente mayor que el módulo máximo, o indicado como total/largo, se
+    reparte entre los módulos (y si no se dijo cuántos, se deduce del frente y del módulo)."""
+    mm = re.search(rf"(?:{MODULE_WORDS})\s+(?:de\s+|:\s*)?{NUM}(?![\d.,])\s*{UNIT}?(?!\s*(?:kg|kilos?|niveles|baldas|bandejas))", t)
+    mod_w = to_mm(to_number(mm.group(1)), mm.group(2)) if mm else None
+    front, n = it.values.get("ANCHURA"), it.values.get("NUMERO_MODULOS")
+    ev_front = it.evidence.get("ANCHURA", "")
+    if mod_w:
+        if front and front > mod_w * 1.5 and front != mod_w:
+            if not n:
+                n = max(2, round(front / mod_w))
+                it.set("NUMERO_MODULOS", n, ev_front)
+                it.notes.append(f"Frente total de {front:,.0f} mm con módulos de {mod_w:,.0f} mm: "
+                                f"{n} módulos.".replace(",", "."))
+        it.set("ANCHURA", mod_w, mm.group(0))
+    elif front and n and (front > BAY_MAX or re.search(r"\btotal|en total|de largo|longitud", t)):
+        m = round(front / n)
+        it.set("ANCHURA", float(m), ev_front)
+        it.notes.append(f"Frente total de {front:,.0f} mm repartido en {n} módulos de {m:,.0f} mm entre ejes de "
+                        f"montantes (anchura total = {n} × módulo + un montante).".replace(",", "."))
 
 
 LABELS = {"mesa_industrial": "Mesa industrial", "estanteria": "Estantería industrial",
           "puesto_trabajo": "Puesto de trabajo industrial", "carro_taller": "Carro de taller",
           "carro_estanteria": "Carro estantería", "mesa_soldadura": "Mesa de soldadura",
+          "estanteria_bateria": "Estantería en batería",
           "armario": "Armario / mobiliario auxiliar"}
 DIM_PROPOSAL = {"mesa_industrial": (1800.0, 800.0, 900.0), "puesto_trabajo": (1500.0, 750.0, 900.0),
                 "carro_taller": (1000.0, 600.0, 900.0), "mesa_soldadura": (1500.0, 1000.0, 850.0)}
@@ -401,8 +440,15 @@ def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = N
 def _missing_shelf(values: dict[str, Any], asked: set[str], family: str = "estanteria") -> list[Question]:
     q: list[Question] = []
     cart = family == "carro_estanteria"
-    for p, lbl, prop in (("ANCHURA", "anchura de frente", 1000.0 if cart else 1500.0),
-                         ("PROFUNDIDAD", "profundidad", 600.0), ("ALTURA", "altura total", 1400.0 if cart else 2000.0)):
+    bat = family == "estanteria_bateria"
+    if bat and "NUMERO_MODULOS" not in values:
+        q.append(Question("NUMERO_MODULOS", "¿Cuántos módulos contiguos tendrá la batería?",
+                          "Los módulos comparten los montantes intermedios; define la longitud total.",
+                          [{"label": f"{n} módulos", "value": n} for n in (2, 3, 4)], "generacion", 3))
+    for p, lbl, prop in (("ANCHURA", "anchura de cada módulo (entre ejes de montantes)" if bat else "anchura de frente",
+                          1000.0 if cart or bat else 1500.0),
+                         ("PROFUNDIDAD", "profundidad", 500.0 if bat else 600.0),
+                         ("ALTURA", "altura total", 1400.0 if cart else 2000.0)):
         if p not in values:
             q.append(Question(p, f"¿Qué {lbl} necesita (mm)?", "Dimensión principal necesaria para generar la geometría.",
                               blocking="generacion", proposal=prop))
@@ -412,7 +458,8 @@ def _missing_shelf(values: dict[str, Any], asked: set[str], family: str = "estan
                           [{"label": f"{n} niveles", "value": n} for n in opts[0]], "generacion", opts[1]))
     if values.get("CARGA_POR_NIVEL") is None:
         loads = (25, 40, 60) if cart else (80, 150, 250)
-        q.append(Question("CARGA_POR_NIVEL", "¿Qué carga soportará cada nivel (kg) y estará repartida (cajas) o "
+        q.append(Question("CARGA_POR_NIVEL", ("¿Qué carga soportará cada bandeja (cada módulo y nivel, kg)" if bat else
+                                              "¿Qué carga soportará cada nivel (kg)") + " y estará repartida (cajas) o "
                                              "concentrada (piezas pesadas)?",
                           "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.",
                           [{"label": f"{n} kg", "value": n} for n in loads], "verificacion"))
@@ -445,6 +492,8 @@ def proposal_for(family: str, values: dict[str, Any]) -> dict[str, Any]:
     if family in SHELF_LIKE:
         cart = family == "carro_estanteria"
         dims = ((("ANCHURA", 1000.0), ("PROFUNDIDAD", 600.0), ("ALTURA", 1400.0), ("NUMERO_NIVELES", 3)) if cart else
+                (("NUMERO_MODULOS", 3), ("ANCHURA", 1000.0), ("PROFUNDIDAD", 500.0), ("ALTURA", 2000.0),
+                 ("NUMERO_NIVELES", 5)) if family == "estanteria_bateria" else
                 (("ANCHURA", 1500.0), ("PROFUNDIDAD", 600.0), ("ALTURA", 2000.0), ("NUMERO_NIVELES", 5)))
         p = {k: v for k, v in dims if k not in values}
         for k in ("PERFIL_MONTANTE", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ESPESOR_BALDA") + \
@@ -481,17 +530,21 @@ def proposal_for(family: str, values: dict[str, Any]) -> dict[str, Any]:
 def describe(it: Interpretation) -> list[str]:
     v = it.values
     out = [f"Familia: {LABELS.get(it.family, 'no identificada')}."]
-    lab = {"LONGITUD": "Longitud", "ANCHURA": "Anchura (frente)" if it.family in SHELF_LIKE else "Anchura/fondo",
-           "PROFUNDIDAD": "Profundidad", "ALTURA": "Altura"}
+    bat = it.family == "estanteria_bateria"
+    lab = {"LONGITUD": "Longitud", "ANCHURA": "Anchura de módulo (entre ejes)" if bat else "Anchura (frente)"
+           if it.family in SHELF_LIKE else "Anchura/fondo", "PROFUNDIDAD": "Profundidad", "ALTURA": "Altura"}
     for k, l in lab.items():
         if k in v:
             out.append(f"{l}: {v[k]:,.0f} mm.".replace(",", "."))
+    if bat and "NUMERO_MODULOS" in v:
+        out.append(f"Módulos: {v['NUMERO_MODULOS']} (montantes intermedios compartidos).")
     if "NUMERO_NIVELES" in v:
         out.append(f"Niveles: {v['NUMERO_NIVELES']}.")
     if "CARGA_POR_NIVEL" in v:
-        out.append(f"Carga por nivel: {v['CARGA_POR_NIVEL']:g} kg.")
+        out.append(f"Carga por {'bandeja' if bat else 'nivel'}: {v['CARGA_POR_NIVEL']:g} kg.")
         if "NUMERO_NIVELES" in v:
-            out.append(f"Carga total nominal solicitada: {v['CARGA_POR_NIVEL'] * v['NUMERO_NIVELES']:g} kg.")
+            nb = v["NUMERO_NIVELES"] * (v.get("NUMERO_MODULOS", 1) if bat else 1)
+            out.append(f"Carga total nominal solicitada: {v['CARGA_POR_NIVEL'] * nb:g} kg.")
     if "CARGA_TOTAL" in v:
         out.append(f"Carga distribuida sobre encimera: {v['CARGA_TOTAL']:g} kg.")
     if "CARGA_BALDA" in v:
@@ -499,7 +552,7 @@ def describe(it: Interpretation) -> list[str]:
     if "CARGA_PUNTUAL" in v:
         out.append(f"Carga puntual: {v['CARGA_PUNTUAL']:g} kg.")
     out.append("Material: " + (v["MATERIAL_ESTRUCTURAL"] if "MATERIAL_ESTRUCTURAL" in v else "pendiente de selección") + ".")
-    if it.family == "estanteria":
+    if it.family in ("estanteria", "estanteria_bateria"):
         out.append("Anclaje: " + {"al_suelo": "al suelo", "ninguno": "sin anclaje"}.get(v.get("ANCLAJE"), "pendiente") + ".")
     if it.family in MESA_LIKE:
         out.append("Balda inferior: " + ("sí" if v.get("NUMERO_BALDAS", None) == 1 else
