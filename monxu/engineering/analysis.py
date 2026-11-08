@@ -22,7 +22,7 @@ OK, FAIL, PENDING, WARN = "CUMPLE", "NO_CUMPLE", "PENDIENTE", "ADVERTENCIA"
 G_ACC = 9.81
 MAX_ELEMENT = 100.0
 N_ZERO = 1e-3          # N: axil por debajo del cual la barra se considera sin compresión
-MASCULINE_WORDS = ("carro", "puesto")     # concordancia del texto de vuelco ("del carro vacío", "de la mesa vacía")
+MASCULINE_WORDS = ("carro", "puesto", "armario")     # concordancia del texto de vuelco ("del carro vacío", "de la mesa vacía")
 
 
 @dataclass
@@ -625,7 +625,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         "sections": sorted({(mm["profile"].code, round(mm["props"].A, 1), round(mm["props"].Iy / 1e4, 3),
                              round(mm["props"].Iz / 1e4, 3), round(mm["props"].Wpl_y / 1e3, 3),
                              round(mm["props"].Wpl_z / 1e3, 3)) for mm in sm.members.values()}),
-        "hypotheses": hyp + [
+        "hypotheses": list(dict.fromkeys(hyp)) + [          # sin repetir (p. ej. la de DC01, una por bandeja)
             "Apoyos: pies niveladores articulados con coacción horizontal isostática (un pie fijo en X-Y, otro "
             "deslizante en X que impide el giro en planta, y los demás sólo verticales); no se cuenta con el "
             "rozamiento.",

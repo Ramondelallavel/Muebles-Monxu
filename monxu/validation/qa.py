@@ -76,9 +76,15 @@ def model_checks(model, interf: dict, eng: dict, dfm: list, bom: dict) -> QA:
               "Dimensiones generales de la geometría coinciden con los parámetros (±0,01 mm).")
         blo, bhi = model.bounding_box()
         over = max(lo[0] - blo[0], lo[1] - blo[1], bhi[0] - hi[0], bhi[1] - hi[1])
-        if over > 0.5:
-            q.add(WARN, "GEO-SALIENTE", f"Elementos sobresalen {over:.1f} mm del contorno del producto (apoyos: "
-                                        "bases de pies o ruedas): considerar en implantación.")
+        if over > 0.5:      # qué sobresale (pies, ruedas, manetas...), no siempre los apoyos
+            names: list[str] = []
+            for i in model.instances:
+                b0, b1 = i.bbox
+                if max(lo[0] - b0[0], lo[1] - b0[1], b1[0] - hi[0], b1[1] - hi[1]) > 0.5 and i.part.name not in names:
+                    names.append(i.part.name)
+            q.add(WARN, "GEO-SALIENTE", f"Elementos sobresalen {over:.1f} mm del contorno del producto "
+                                        f"({'; '.join(names[:3])}{'…' if len(names) > 3 else ''}): considerar en "
+                                        "implantación.")
     # holguras
     g = model.ctx.derived.get("HOLGURA_ENC")
     r = model.ctx.derived.get("RADIO_ENC")

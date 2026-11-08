@@ -796,7 +796,7 @@ function planFlat(d, X, part, number) {
     if (ho.kind === "round") { const [cx, cy] = P(ho.x, ho.y); d.circle(cx, cy, Math.max(0.4, (ho.d / 2) * k)); }
     else { const [x0, y0] = P(ho.x - ho.w / 2, ho.y - ho.h / 2); d.rect(x0, y0, ho.w * k, ho.h * k); }
   }
-  const xs = [], ys = [];
+  const xs = [], ys = [], bendLabels = [];
   for (const b of fp.bends) {
     const p0 = P(...b.p0), p1 = P(...b.p1);
     d.line(p0, p1, LW_THIN, [6, 1.5, 1, 1.5]);
@@ -808,7 +808,7 @@ function planFlat(d, X, part, number) {
     // a continuación de los extremos de la línea de plegado (fuera de la chapa) cuando no cabe junto a ella
     if (horiz) for (const gx of [3, 8, 14]) bc.push([ox + w * k + gx, p0[1] - 1.1, "l", 0], [ox - gx, p0[1] - 1.1, "r", 0]);
     else for (const gy of [3, 8, 14]) bc.push([p0[0] + 1.1, oy + h * k + gy, "l", 90], [p0[0] + 1.1, oy - gy, "r", 90]);
-    d.group("note", () => d.placeText(`${b.direction} 90° Ri${fmt(b.radius)}`, 2.2, bc, { color: GREY }));
+    bendLabels.push([`${b.direction} 90° Ri${fmt(b.radius)}`, bc]);
     if (horiz) ys.push(b.p0[1]); else xs.push(b.p0[0]);
   }
   d.dimH(P(0, 0)[0], P(w, 0)[0], oy, oy, oy - 14, w, `${part.ref}_DESARROLLO_X`, "desarrollo");
@@ -817,6 +817,8 @@ function planFlat(d, X, part, number) {
   if (chain.length > 2) d.dimChain(true, chain.map((c) => P(c, 0)[0]), chain.slice(1).map((c, i) => c - chain[i]), oy, oy - 7);
   chain = [0, ...ys.sort((a, b) => a - b), h];
   if (chain.length > 2) d.dimChain(false, chain.map((c) => P(0, c)[1]), chain.slice(1).map((c, i) => c - chain[i]), ox, ox - 7);
+  // rótulos de plegado después de las cotas, para que no caigan sobre ellas (piezas estrechas: puertas)
+  for (const [s, bc] of bendLabels) d.group("note", () => d.placeText(s, 2.2, bc, { color: GREY }));
   const spec = part.spec;
   // perforaciones regulares (paneles): se acotan como patrón; en la tabla sólo los taladros sueltos
   const rects = fp.holes.filter((h) => h.kind === "rect");

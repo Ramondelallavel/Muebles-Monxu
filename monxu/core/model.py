@@ -244,7 +244,7 @@ class Instance:
 @dataclass
 class Joint:
     id: str
-    kind: str                       # soldadura | atornillada | roscada
+    kind: str                       # soldadura | atornillada | roscada | remachada
     members: tuple[str, ...]
     location: tuple[float, float, float]
     description: str = ""

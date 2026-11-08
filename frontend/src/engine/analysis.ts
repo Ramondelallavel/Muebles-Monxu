@@ -9,7 +9,7 @@ export const OK = "CUMPLE", FAIL = "NO_CUMPLE", PENDING = "PENDIENTE";
 export const G_ACC = 9.81;
 const MAX_ELEMENT = 100.0;
 const N_ZERO = 1e-3;   // N: axil por debajo del cual la barra se considera sin compresión
-const MASCULINE_WORDS = ["carro", "puesto"];     // concordancia del texto de vuelco ("del carro vacío", "de la mesa vacía")
+const MASCULINE_WORDS = ["carro", "puesto", "armario"];     // concordancia del texto de vuelco ("del carro vacío", "de la mesa vacía")
 
 const status = (u) => (u === null || u === undefined ? PENDING : u <= 1.0 + 1e-9 ? OK : FAIL);
 const check = (id, category, element, description, standard, value, limit, unit, utilization, st, combination = "", details = {}) =>
@@ -487,7 +487,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     materials: Object.values(mats).map((m) => ({ code: m.code, name: m.name, standard: m.standard, E: m.E, fy: m.fy, fu: m.fu, density: m.density,
       fy_guaranteed: m.fy_guaranteed, design_code: m.design_code })),
     sections: [...secSet.values()].sort((a, b) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1; return 0; }),
-    hypotheses: [...hyp,
+    hypotheses: [...new Set(hyp),     // sin repetir (p. ej. la de DC01, una por bandeja)
       "Apoyos: pies niveladores articulados con coacción horizontal isostática (un pie fijo en X-Y, otro deslizante en X que impide el giro en planta, y los demás sólo verticales); no se cuenta con el rozamiento.",
       "Cargas de superficie repartidas al emparrillado mediante la regla de 45° (áreas tributarias).",
       `Longitud de pandeo de patas: ${betaLeg}·L (pórtico traslacional, conservador).`,

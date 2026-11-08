@@ -1,6 +1,6 @@
 // Barrido aleatorio del motor del navegador: excepciones, valores no finitos, sólidos abiertos, interferencias y
 // fallos al generar el expediente completo (STEP, planos, montaje, Excel, DXF).
-// Uso: node fuzz.mjs N SEMILLA [cada_cuantos_expediente]
+// Uso: [FAMS=familia1,familia2] node fuzz.mjs N SEMILLA [cada_cuantos_expediente]
 import { REGISTRY } from "../../frontend/src/engine/families";
 import { regenerate } from "../../frontend/src/engine/pipeline";
 import { partGeometry } from "../../frontend/src/engine/geometry";
@@ -30,7 +30,8 @@ function sample(fam) {
   return v;
 }
 const out = { n: 0, ok: 0, param_errors: 0, crashes: [], nonfinite: [], open: [], interf: [], blocking: {}, dossier_fail: [], dossier_ok: 0, ms: [] };
-const fams = Object.keys(REGISTRY);
+// FAMS=familia1,familia2 limita el barrido a esas familias
+const fams = process.env.FAMS ? process.env.FAMS.split(",") : Object.keys(REGISTRY);
 for (let k = 0; k < N; k++) {
   const fid = pick(fams), vals = sample(REGISTRY[fid]);
   out.n++;

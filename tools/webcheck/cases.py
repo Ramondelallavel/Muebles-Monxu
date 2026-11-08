@@ -53,6 +53,13 @@ def random_case(rng: random.Random) -> tuple[str, dict]:
              "USO": rng.choice(["montaje", "trabajo_pesado", "inspeccion"]), "CARGA_HORIZONTAL": rng.choice([100, 200, 300]),
              "ANCLAJE": rng.choice(["ninguno", "al_suelo"]), "PETO_TRASERO": rng.choice([0, 0, 0, 40, 100]),
              "REPOSAPIES": rng.choice([0, 0, 1]), "ALTURA_REPOSAPIES": rng.choice([200, 250, 300])}
+    elif u >= 0.43 and u < 0.46:
+        fid = "armario"
+        H = rng.choice(range(1000, 2201, 100))
+        v = {"ANCHURA": rng.choice(range(500, 1201, 100)), "PROFUNDIDAD": rng.choice(range(400, 801, 50)), "ALTURA": H,
+             "NUMERO_NIVELES": rng.randint(3, 6 if H >= 1600 else 4), "CARGA_POR_NIVEL": rng.choice([None, 30, 60, 100]),
+             "NUMERO_PUERTAS": rng.choice(["auto", "auto", 0, 1, 2]), "ANCLAJE": "al_suelo" if H > 1300 else
+             rng.choice(["al_suelo", "ninguno"]), "CARGA_HORIZONTAL": rng.choice([60, 100, 150])}
     elif u >= 0.46 and u < 0.52:
         fid = "carro_plataforma"
         q = rng.choice([None, 100, 250, 400, 600, 800])
@@ -86,6 +93,8 @@ def random_case(rng: random.Random) -> tuple[str, dict]:
              "CARGA_POR_NIVEL": rng.choice([None, 50, 100, 150, 250, 400]), "ANCLAJE": rng.choice(["al_suelo", "ninguno"])}
     if fid in ("mesa_soldadura", "tarima") and m[0] != "S235JRH":
         m = MATS[0]                       # placa de acero soldada: estructura de acero al carbono
+    if fid == "armario" and m[1] == "S235JR":
+        m = MATS[2]                       # armario pintado: chapa DC01 (S235JR no existe en 1 mm)
     if fid == "carro_plataforma" and m[1] == "DC01":
         m = MATS[0]                       # plataforma de carga: chapa estructural, no DC01 (sin límite elástico garantizado)
     v.update({"MATERIAL_ESTRUCTURAL": m[0], "MATERIAL_CHAPA": m[1], "ACABADO": m[2]})

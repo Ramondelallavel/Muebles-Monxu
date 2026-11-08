@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026.11-4",
+    "version": "2026.11-5",
     "currency": "EUR",
     "note": "Tarifas orientativas de taller (España, 2026) para estimar el coste de fabricación. Deben ajustarse a los precios reales del taller y de los proveedores. No incluyen transporte, embalaje especial, diseño ni impuestos."
   },
@@ -14,6 +14,8 @@
     "S275J0H": 1.52, "1.4404": 6.20, "1.4016": 3.20
   },
   "components_eur": [
+    ["BISAGRA_PERNIO_80_INOX", 7.50], ["BISAGRA_PERNIO_80", 3.20], ["CERRADURA_MANETA_INOX", 24.00],
+    ["CERRADURA_MANETA", 12.50],
     ["PIE_NIV_M8", 2.10], ["PIE_NIV_M10", 2.60], ["PIE_NIV_M12_D80", 4.20], ["PIE_NIV_M12", 3.40],
     ["PIE_NIV_M16_D100", 8.90], ["PIE_NIV_M16", 6.80], ["PIE_NIV_M20", 11.50],
     ["RUEDA_ESP_M12_D80_FRENO", 9.50], ["RUEDA_ESP_M12_D80", 6.90], ["RUEDA_ESP_M12_D100_FRENO", 11.80],

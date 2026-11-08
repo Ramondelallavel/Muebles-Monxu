@@ -62,7 +62,14 @@ export function modelChecks(model, eng, dfm, bom, interf) {
       : "Dimensiones generales de la geometría coinciden con los parámetros (±0,01 mm).");
     const [blo, bhi] = modelBBox(model);
     const over = Math.max(lo[0] - blo[0], lo[1] - blo[1], bhi[0] - hi[0], bhi[1] - hi[1]);
-    if (over > 0.5) q.add(WARN, "GEO-SALIENTE", `Elementos sobresalen ${fx(over, 1)} mm del contorno del producto (apoyos: bases de pies o ruedas): considerar en implantación.`);
+    if (over > 0.5) {     // qué sobresale (pies, ruedas, manetas...), no siempre los apoyos
+      const names = [];
+      for (const i of model.instances) {
+        const [b0, b1] = instanceBBox(i);
+        if (Math.max(lo[0] - b0[0], lo[1] - b0[1], b1[0] - hi[0], b1[1] - hi[1]) > 0.5 && !names.includes(i.part.name)) names.push(i.part.name);
+      }
+      q.add(WARN, "GEO-SALIENTE", `Elementos sobresalen ${fx(over, 1)} mm del contorno del producto (${names.slice(0, 3).join("; ")}${names.length > 3 ? "…" : ""}): considerar en implantación.`);
+    }
   }
   const gD = model.ctx.derived.HOLGURA_ENC, rD = model.ctx.derived.RADIO_ENC;
   if (gD && rD && gD.value && rD.value) q.add(gD.value >= rD.value ? OKL : BLOCK, "GEO-HOLGURAS", gD.value >= rD.value

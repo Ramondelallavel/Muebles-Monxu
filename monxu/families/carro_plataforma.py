@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import math
 
-from ..core.params import ParamSpec
+from ..core.params import ParamError, ParamSpec
 from .base import register
 from .carro_taller import CANDIDATES as CT_CANDIDATES, CONSTRUCTIVE_DEFAULTS as CT_DEFAULTS, CarroTaller
 
@@ -121,6 +121,9 @@ class CarroPlataforma(CarroTaller):
         if d["z_tf"] - hb < d["z_leg0"] + FRAME_CLEARANCE - 1e-9:
             z_min = math.ceil((d["z_leg0"] + FRAME_CLEARANCE + hb + d["t"]) / 5) * 5
             code = ctx[self.support_param]
+            if d["z_tf"] - d["z_leg0"] < 1.0:      # pata de longitud nula o negativa: geometría imposible
+                raise ParamError(f"La plataforma ({H:g} mm) queda por debajo de la placa base de la rueda {code} "
+                                 f"({d['z_leg0']:g} mm desde el suelo): ALTURA de {z_min:g} mm como mínimo.")
             if ctx.params.sources.get("ALTURA") == "defecto" and z_min <= H_RANGE[1]:
                 model.rule_fixes["ALTURA"] = (
                     float(z_min), f"Plataforma a {z_min:g} mm (regla de diseño): a la altura por defecto, {H:g} mm, el "

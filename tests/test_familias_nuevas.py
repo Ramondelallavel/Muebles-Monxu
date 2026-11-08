@@ -18,7 +18,7 @@ def test_registered_and_implemented():
     assert lib["puesto_trabajo"] == "implementada" and lib["carro_taller"] == "implementada"
     assert lib["carro_estanteria"] == "implementada" and lib["mesa_soldadura"] == "implementada"
     assert lib["estanteria_bateria"] == "implementada" and lib["tarima"] == "implementada"
-    assert lib["armario"] == "en_desarrollo"
+    assert lib["carro_plataforma"] == "implementada" and lib["armario"] == "implementada"
 
 
 def test_notch_only_in_selected_corners():
@@ -455,10 +455,14 @@ def test_platform_height_rule_and_user_value():
     assert any(n["code"] == "REGLA-ALTURA" for n in m.design_notes)
     assert not any(n["code"] == "GEO-PLATAFORMA-BAJA" for n in m.design_notes)
     # un valor del usuario no se cambia: se informa la altura mínima
-    m2 = _build("carro_plataforma", {"LONGITUD": 1200, "ANCHURA": 800, "ALTURA": 250, "CARGA_TOTAL": 1000})
-    assert m2.params.values["ALTURA"] == 250.0
+    m2 = _build("carro_plataforma", {"LONGITUD": 1200, "ANCHURA": 800, "ALTURA": 280, "CARGA_TOTAL": 1000})
+    assert m2.params.values["ALTURA"] == 280.0
     err = next(n for n in m2.design_notes if n["code"] == "GEO-PLATAFORMA-BAJA")
     assert "335 mm como mínimo" in err["message"]
+    # por debajo de la placa base de la rueda la pata tendría longitud negativa: no se construye
+    from monxu.core.params import ParamError
+    with pytest.raises(ParamError, match="335 mm como mínimo"):
+        _build("carro_plataforma", {"LONGITUD": 1200, "ANCHURA": 800, "ALTURA": 250, "CARGA_TOTAL": 1000})
 
 
 def test_assistant_platform_and_lost_values():
@@ -504,3 +508,96 @@ def test_platform_dossier(tmp_path):
     res = generate_dossier(r, {"code": "P-CP", "revision": "A"}, tmp_path / "exp")
     assert res["qa"]["blocking"] == 0
     assert any(i["code"] == "EXP-STEP" and i["level"] == "ok" for i in res["qa"]["items"])
+
+
+# ------------------------------------------------------------------ armario
+@pytest.mark.parametrize("tid", [t["id"] for t in family("armario").templates()])
+def test_cabinet_templates_verify(tid):
+    from monxu.engineering.analysis import analyze
+    m = _build("armario", _tpl("armario", tid))
+    assert not [n for n in m.design_notes if n["level"] == "error"]
+    eng = analyze(m)
+    assert eng["status"] in ("CUMPLE", "PENDIENTE"), [c["id"] for c in eng["checks"] if c["status"] == "NO_CUMPLE"]
+    assert not any(c["status"] == "NO_CUMPLE" for c in eng["checks"])
+
+
+def test_cabinet_enclosure_doors_and_masses():
+    from monxu.engineering.analysis import analyze
+    m = _build("armario", {"ANCHURA": 1000, "PROFUNDIDAD": 500, "ALTURA": 1950, "NUMERO_NIVELES": 5, "CARGA_POR_NIVEL": 60})
+    ids = {i.id for i in m.instances}
+    assert {"PAN.LATERAL_I", "PAN.LATERAL_D", "PAN.FONDO", "PUE.PUERTA_I", "PUE.PUERTA_D"} <= ids
+    assert m.instance("PAN.LATERAL_I").part is m.instance("PAN.LATERAL_D").part          # mismo lateral a los dos lados
+    assert m.ctx.derived["N_PUERTAS"].value == 2 and m.ctx.derived["BISAGRAS_POR_PUERTA"].value == 4
+    hinges = [i for i in m.instances if i.part.role == "bisagra"]
+    assert len(hinges) == 8 and sum(i.part.role == "cerradura" for i in m.instances) == 1
+    # chapa DC01 por defecto: paneles y puertas de 1 mm; el S235JR no existe en 1 mm
+    assert m.instance("PAN.FONDO").part.t == 1.0 and m.instance("PUE.PUERTA_I").part.spec.t == 1.0
+    # los paneles alojan las cabezas de los tornillos de las bandejas (taladros mayores que los de fijación)
+    side = m.instance("PAN.LATERAL_I").part
+    assert {d for _, _, d in side.holes} == {6.6, 12.5}
+    # paneles, puertas y herrajes cuelgan de los montantes: el peso propio del cálculo los incluye
+    am = m.structure["attached_masses"]
+    enc = sum(i.part.mass for i in m.instances if i.group in ("PUE",) and i.part.role in ("puerta", "bisagra", "cerradura"))
+    enc += sum(i.part.mass for i in m.instances if i.id in ("PAN.LATERAL_I", "PAN.LATERAL_D", "PAN.FONDO"))
+    assert sum(a["mass_kg"] for a in am) == pytest.approx(enc, rel=1e-6)
+    eng = analyze(m)
+    st = next(c for c in eng["checks"] if c["id"] in ("E.VUELCO", "E.ANCLAJE"))
+    assert "armario" in st["description"] or st["id"] == "E.ANCLAJE"
+    # envolvente: laterales y fondo por fuera de los montantes y puertas superpuestas al frente
+    assert m.dims["envelope"]["dx"] == pytest.approx(1000 + 2 * (1.5 + 1.0))
+    assert m.dims["envelope"]["dy"] == pytest.approx(500 + 1.5 + 1.0 + 25.0)
+
+
+@pytest.mark.parametrize("width,doors", [(600, 1), (601, 2), (1200, 2)])
+def test_cabinet_auto_door_count(width, doors):
+    m = _build("armario", {"ANCHURA": width, "PROFUNDIDAD": 450, "ALTURA": 1200, "NUMERO_NIVELES": 3})
+    assert m.ctx.derived["N_PUERTAS"].value == doors
+    assert sum(i.part.role == "puerta" for i in m.instances) == doors
+
+
+def test_cabinet_without_doors_and_single_door_asymmetry():
+    m = _build("armario", {"ANCHURA": 800, "PROFUNDIDAD": 400, "ALTURA": 1500, "NUMERO_NIVELES": 4, "NUMERO_PUERTAS": 0})
+    assert not any(i.group == "PUE" for i in m.instances)
+    assert m.dims["envelope"]["dy"] == pytest.approx(400 + 1.5 + 1.0)
+
+
+def test_assistant_cabinet():
+    r = assistant.handle(assistant.new_state(), "armario de 1000x500x1950 con 4 baldas de 50 kg y dos puertas")
+    assert r["family"] == "armario" and r["family_implemented"] and r["ready_to_generate"]
+    p = r["parameters"]
+    assert p["NUMERO_NIVELES"] == 6 and p["NUMERO_PUERTAS"] == 2 and p["CARGA_POR_NIVEL"] == 50
+    r = assistant.handle(assistant.new_state(), "mesa con armario inferior 1500x700x900")
+    assert r["family"] == "mesa_industrial"
+
+
+@pytest.mark.slow
+def test_cabinet_dossier(tmp_path):
+    r = regenerate("armario", _tpl("armario", "AR-1000x500-1950"))
+    assert r.interferences["interferences"] == []
+    res = generate_dossier(r, {"code": "P-AR", "revision": "A"}, tmp_path / "exp")
+    assert res["qa"]["blocking"] == 0
+    assert any(i["code"] == "EXP-STEP" and i["level"] == "ok" for i in res["qa"]["items"])
+
+
+def test_crossbeams_that_do_not_fit_are_reported():
+    """Travesaños intermedios elegidos a mano que se solapan: antes se generaban sin aviso (interferencias)."""
+    import re
+    vals = {"ANCHURA": 1000, "PROFUNDIDAD": 500, "ALTURA": 1800, "NUMERO_NIVELES": 4, "PERFIL_TRAVESANO": "SHS 100x100x3",
+            "NUMERO_TRAVESANOS_BALDA": 10}
+    m = _build("estanteria", vals)
+    errs = [n for n in m.design_notes if n["code"] == "DFM-TRAVESANOS"]
+    assert len(errs) == 1 and errs[0]["level"] == "error"           # una sola nota aunque haya cuatro niveles
+    n_max = int(re.search(r"como máximo (\d+)", errs[0]["message"]).group(1))
+    assert 0 < n_max < 10
+    m2 = _build("estanteria", {**vals, "NUMERO_TRAVESANOS_BALDA": n_max})
+    assert not any(n["code"] == "DFM-TRAVESANOS" for n in m2.design_notes)
+
+
+def test_hot_dip_galvanizing_asks_for_vent_holes():
+    from monxu.manufacturing.plan import dfm_check, manufacturing_plan
+    m = _build("mesa_industrial", {"LONGITUD": 1500, "ANCHURA": 700, "ALTURA": 900, "CARGA_TOTAL": 200,
+                                   "ACABADO": "GALVANIZADO", "ENTORNO": "exterior"})
+    dfm = dfm_check(m, manufacturing_plan(m))
+    assert any(f["code"] == "GAL-VENTEO" and f["level"] == "advertencia" for f in dfm)
+    m2 = _build("mesa_industrial", {"LONGITUD": 1500, "ANCHURA": 700, "ALTURA": 900, "CARGA_TOTAL": 200})
+    assert not any(f["code"] == "GAL-VENTEO" for f in dfm_check(m2, manufacturing_plan(m2)))

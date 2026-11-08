@@ -280,8 +280,9 @@ export function dfmCheck(model, plan = null) {
       "Usar un perfil de pared ≤ 5,5 mm o fijación con tornillo pasante.");
     if (!(dd.screw_found ?? true)) add("error", "MON-TORNILLO", tray.ref, `Ningún tornillo ISO 7380 M6 del catálogo da 1·d de rosca útil con `
       + `${g(clamp)} mm de chapa + holgura sin sobrepasar la tuerca remachable.`, "Reducir holgura o espesor, o añadir longitudes de tornillo al catálogo.");
-    const holes = tray.spec.flanges.flatMap((fl) => fl.holes.map((h) => h[2]));
-    const hole = holes.length ? Math.max(...holes) : sc.clearance_hole;
+    // taladro de paso: el registrado por la familia (paneles lisos con otros taladros mayores) o el de las pestañas
+    const holes = dd.hole ? [] : tray.spec.flanges.flatMap((fl) => fl.holes.map((h) => h[2]));
+    const hole = dd.hole || (holes.length ? Math.max(...holes) : sc.clearance_hole);
     if (hole > sc.head_d - 2.0) add("error", "MON-APOYO-CABEZA", tray.ref, `Taladro Ø${g(hole)} demasiado grande para la cabeza Ø${g(sc.head_d)} del tornillo.`,
       "Usar arandela ancha ISO 7093 o tornillo de cabeza mayor.");
     if (rnd.head_h > dd.gap + 1e-9) add("error", "DFM-HOLGURA-REMACHABLE", tray.ref, "La cabeza de la tuerca remachable no cabe en la holgura.");
@@ -322,6 +323,12 @@ export function dfmCheck(model, plan = null) {
     + "cordón es en ángulo exterior/borde y debe amolarse antes de pintar.");
   add("advertencia", "SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: puntear en mesa plana con "
     + "escuadras, soldar en secuencia simétrica alterna y verificar planitud de la superficie de apoyo de la encimera (EN ISO 13920 clase F).");
+  // galvanizado en caliente: los tubos cerrados por soldadura necesitan venteo y drenaje (no modelados)
+  const galv = [...new Set(model.instances.filter((i) => i.part.kind === "perfil" && i.part.finish === "GALVANIZADO").map((i) => i.part.ref))].sort();
+  if (galv.length) add("advertencia", "GAL-VENTEO", "Perfiles huecos", `Galvanizado en caliente (EN ISO 1461) de ${galv.length} perfiles huecos cerrados por `
+    + "soldadura: necesitan taladros de venteo y drenaje en los dos extremos de cada tubo (EN ISO 14713-2), que no están modelados. Criterio orientativo: "
+    + "Ø ≥ 25 % de la dimensión interior y no menos de 10 mm, en caras opuestas. Las roscas de las tuercas soldadas se repasan después del galvanizado.",
+    "Añadir los taladros en los planos de taller antes de fabricar y consultarlos con el galvanizador.");
   if (plan) for (const n of plan.nesting) if (!n.feasible) add("error", "LAS-FORMATO", `Chapa ${n.material} ${n.thickness} mm`, n.reason ?? "",
     "Dividir la pieza en dos o seleccionar un formato mayor.");
   const grouped = new Map();

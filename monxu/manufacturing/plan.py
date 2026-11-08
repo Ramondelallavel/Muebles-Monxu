@@ -190,7 +190,8 @@ def dfm_check(model, plan: dict[str, Any] | None = None) -> list[dict[str, Any]]
             add("error", "MON-TORNILLO", tray.ref, f"Ningún tornillo ISO 7380 M6 del catálogo da 1·d de rosca útil con "
                 f"{clamp:g} mm de chapa + holgura sin sobrepasar la tuerca remachable.",
                 "Reducir holgura o espesor, o añadir longitudes de tornillo al catálogo.")
-        hole = max((h[2] for f in tray.spec.flanges for h in f.holes), default=sc["clearance_hole"])
+        # taladro de paso: el registrado por la familia (paneles lisos con otros taladros mayores) o el de las pestañas
+        hole = dd.get("hole") or max((h[2] for f in tray.spec.flanges for h in f.holes), default=sc["clearance_hole"])
         if hole > sc["head_d"] - 2.0:
             add("error", "MON-APOYO-CABEZA", tray.ref, f"Taladro Ø{hole:g} demasiado grande para la cabeza Ø{sc['head_d']:g} "
                 "del tornillo.", "Usar arandela ancha ISO 7093 o tornillo de cabeza mayor.")
@@ -240,6 +241,14 @@ def dfm_check(model, plan: dict[str, Any] | None = None) -> list[dict[str, Any]]
     add("advertencia", "SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: "
         "puntear en mesa plana con escuadras, soldar en secuencia simétrica alterna y verificar planitud de la "
         "superficie de apoyo de la encimera (EN ISO 13920 clase F).")
+    # galvanizado en caliente: los tubos cerrados por soldadura necesitan venteo y drenaje (no modelados)
+    galv = sorted({i.part.ref for i in model.instances if i.part.kind == "perfil" and i.part.finish == "GALVANIZADO"})
+    if galv:
+        add("advertencia", "GAL-VENTEO", "Perfiles huecos", f"Galvanizado en caliente (EN ISO 1461) de {len(galv)} perfiles "
+            "huecos cerrados por soldadura: necesitan taladros de venteo y drenaje en los dos extremos de cada tubo "
+            "(EN ISO 14713-2), que no están modelados. Criterio orientativo: Ø ≥ 25 % de la dimensión interior y no menos "
+            "de 10 mm, en caras opuestas. Las roscas de las tuercas soldadas se repasan después del galvanizado.",
+            "Añadir los taladros en los planos de taller antes de fabricar y consultarlos con el galvanizador.")
     if plan:
         for n in plan["nesting"]:
             if not n.get("feasible", False):

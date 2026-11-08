@@ -29,6 +29,7 @@ const pt = (p) => p.map(Number);
 // ============================================================================ base común (mesa)
 const FOOTREST_LOAD_N = 1000.0;     // apoyo del pie en el centro del reposapiés (criterio de ensayo habitual de 1 kN)
 const FOOT_CLEARANCE = 100.0;       // hueco libre mínimo sobre el reposapiés para apoyar el pie
+const CROSSBEAM_GAP = 5.0;          // hueco mínimo entre travesaños intermedios, y con las patas, para soldarlos
 /** Cota de balda compatible con el reposapiés: por debajo o por encima dejando el hueco para el pie; la más próxima. */
 function shelfClearOfFootrest(ctx, d, zr, fp) {
   const ts = d.z_shelf - d.z_lf, bas = d.bas, zs = d.z_shelf;
@@ -502,6 +503,19 @@ function frameLevel(model, d, level, z_top, prof_long, prof_end, inset, n_int, l
   }
   const xs = range(n_int).map((i) => x_l + ((i + 1) * (x_r - x_l)) / (n_int + 1));
   const yi0 = c + inset + prof_long.B, yi1 = W - c - inset - prof_long.B;
+  // los n travesaños no se solapan entre sí ni con las patas (si llegan a su altura en Y)
+  const fits = (n) => {
+    const pitch = (x_r - x_l) / (n + 1);
+    if (pitch - prof_end.B < CROSSBEAM_GAP - 1e-9) return false;
+    return !(inset + prof_long.B < a && x_l + pitch - prof_end.B / 2 < c + a + CROSSBEAM_GAP - 1e-9);
+  };
+  if (n_int && !fits(n_int)) {          // antes se generaban solapados sin aviso (sólo con valores manuales)
+    let nMax = 0;
+    for (let n = 0; n < n_int; n++) if (fits(n)) nMax = n;
+    const msg = `Los ${n_int} travesaños intermedios ${lab} de ${prof_end.code} no caben entre los travesaños extremos y las patas o montantes `
+      + `(se solapan o no dejan ${g(CROSSBEAM_GAP)} mm para soldar): como máximo ${nMax}.`;
+    if (!model.design_notes.some((x) => x.code === "DFM-TRAVESANOS" && x.message === msg)) model.note("error", "DFM-TRAVESANOS", msg);
+  }
   const int_ids = [];
   if (n_int) {
     const ip = profilePart(`travesano_int_${level.toLowerCase()}`, `Travesaño intermedio ${lab} ${prof_end.code}`, prof_end.code, yi1 - yi0, mat, fin);
@@ -598,8 +612,10 @@ class Estanteria extends MesaIndustrial {
       ctx.feature("F11", "Montantes, placas base y tuercas", () => {
         ctx.uses("LONGITUD_MONTANTE", "PERFIL_MONTANTE", "ANCHURA", "PROFUNDIDAD", "ESPESOR_PLACA_BASE", sp,
           "MATERIAL_ESTRUCTURAL", "ACABADO");
+        // montantes con taladros propios por esquina (paneles del armario) o una sola pieza común
+        const legDef = d.upright_holes ? (k) => ["montante", "Montante", H, d.upright_holes[k] ?? []] : null;
         legsAndPlates(model, d, legs, corners, cname, mat_s, fin, thread, nutCode, "montante", `Montante ${leg.code}`, "EST.MONT",
-          "Montante", "Placa base a montante", H);
+          "Montante", "Placa base a montante", H, legDef);
       });
       d.level_ids.forEach((lid, i0) => {
         const i = i0 + 1, z = d.z_levels[i0];
@@ -1069,6 +1085,206 @@ class CarroTaller extends MesaIndustrial {
   }
 }
 
+// ============================================================================ armario (port de armario.py)
+const DOOR_FLANGE = 20.0, DOOR_GAP = 5.0, DOOR_JOINT = 3.0, DOOR_REVEAL = 1.0, DOOR_END_GAP = 2.0, MAX_DOOR_W = 650.0, HEAD_CLEAR = 2.0;
+const hingeCount = (h) => (h <= 1200 ? 2 : h <= 1800 ? 3 : 4);
+const mrow = (x, y, z, rot) => [[...rot[0], x], [...rot[1], y], [...rot[2], z], [0, 0, 0, 1]];
+class Armario extends Estanteria {
+  constructor() { super("armario"); }
+  _deriveShelf(ctx, model) {
+    const d = super._deriveShelf(ctx, model);
+    const v = ctx.params.values, A = v.ANCHURA;
+    const { a, leg } = d;
+    ctx.feature("F05", "Cerramiento: paneles y puertas", () => {
+      const thin = C.sheetThicknesses(v.MATERIAL_CHAPA).filter((t) => t >= 1.0 - 1e-9);
+      const tmin = thin.length ? Math.min(...thin) : 1.5;
+      const tp = ctx.derive("ESP_PANEL", (p) => (p.get("ESPESOR_PANEL") === AUTO ? tmin : p.get("ESPESOR_PANEL")), "mm", "Espesor de laterales y fondo");
+      const td = ctx.derive("ESP_PUERTA", (p) => (p.get("ESPESOR_PUERTA") === AUTO ? tmin : p.get("ESPESOR_PUERTA")), "mm", "Espesor de chapa de puertas");
+      const selRn = C.selectRivetNut(leg.t);
+      const [codeRn, rnd] = selRn ?? ["TUERCA_REMACHABLE_M6", C.component("TUERCA_REMACHABLE_M6")];
+      const gp = +rnd.head_h;                    // la cabeza de la remachable queda entre panel y montante
+      const Hp = ctx.derive("ALTO_PANEL", (p) => p.get("ALTURA") - p.get("COTA_INICIO_MONTANTE"), "mm", "Altura de laterales y fondo");
+      ctx.derive("ANCHO_FONDO", (p) => p.get("ANCHURA") + 2 * (gp + p.get("ESP_PANEL")), "mm", "Anchura del fondo (cubre los cantos de los laterales)");
+      const pitch = ctx.get("PASO_FIJACIONES");
+      const nFix = Math.max(2, Math.ceil((Hp - 80) / pitch) + 1);
+      const zsSide = evenPositions(40.0, Hp - 40.0, nFix);
+      const step = (Hp - 80) / (nFix - 1);
+      // fondo: a media separación de los laterales (las remachables de dos caras no coinciden en el montante)
+      let zsBack = zsSide.slice(0, -1).map((z) => pyRound(z + step / 2, 3));
+      if (zsBack.length < 2) zsBack = evenPositions(60.0, Hp - 60.0, 2);
+      let n = ctx.get("NUMERO_PUERTAS");
+      if (n === AUTO) n = A <= 600 ? 1 : 2;
+      ctx.setDerived("N_PUERTAS", n, "ud", "Puertas batientes", ["NUMERO_PUERTAS", "ANCHURA"]);
+      const Wtot = A + 2 * (gp + tp);
+      const Hd = pyRound(Hp - 2 * DOOR_END_GAP, 3);
+      const Wd = n ? pyRound((Wtot - 2 * DOOR_REVEAL - (n - 1) * DOOR_JOINT) / n, 3) : 0.0;
+      if (n) {
+        ctx.setDerived("ANCHO_PUERTA", Wd, "mm", "Anchura de cada puerta", ["ANCHURA", "NUMERO_PUERTAS"]);
+        ctx.setDerived("ALTO_PUERTA", Hd, "mm", "Altura de puerta", ["ALTURA"]);
+        if (Wd > MAX_DOOR_W) model.note("advertencia", "DFM-PUERTA-ANCHA", `Puerta de ${fx(Wd)} mm de anchura: más de ${g(MAX_DOOR_W)} mm por hoja tiende a descolgarse; use dos puertas.`);
+      }
+      ctx.setDerived("BISAGRAS_POR_PUERTA", n ? hingeCount(Hd) : 0, "ud", "Bisagras por puerta", ["ALTURA"]);
+      const face = { DI: "-x", TI: "-x", DD: "+x", TD: "+x" };
+      const holes = Object.fromEntries(Object.keys(face).map((k) => [k, zsSide.map((z) => [face[k], z, 0.0, rnd.hole_d])]));
+      for (const k of ["TI", "TD"]) holes[k].push(...zsBack.map((z) => ["+y", z, 0.0, rnd.hole_d]));
+      d.upright_holes = holes;
+      Object.assign(d, { enc_tp: tp, enc_td: td, enc_gp: gp, enc_rn: [codeRn, rnd, selRn != null], enc_Hp: Hp, enc_zs_side: zsSide,
+        enc_zs_back: zsBack, enc_n_doors: n, enc_Wtot: Wtot, enc_Wd: Wd, enc_Hd: Hd });
+    });
+    return d;
+  }
+  /** Cabezas de los tornillos de las bandejas que asoman por cada cara exterior: {cara: [[u, z]]}. */
+  _trayScrewHeads(model, A, Pf) {
+    const out = { x0: [], x1: [], y1: [] };
+    for (const i of model.instances) {
+      if (i.group !== "BAL" || i.part.role !== "tornillo") continue;
+      const p = [i.T[0][3], i.T[1][3], i.T[2][3]], nz = [i.T[0][2], i.T[1][2], i.T[2][2]];
+      if (nz[0] < -0.9 && Math.abs(p[0]) < 1.0) out.x0.push([p[1], p[2]]);
+      else if (nz[0] > 0.9 && Math.abs(p[0] - A) < 1.0) out.x1.push([p[1], p[2]]);
+      else if (nz[1] > 0.9 && Math.abs(p[1] - Pf) < 1.0) out.y1.push([p[0], p[2]]);
+    }
+    return out;
+  }
+  _extras(model, ctx, d, legs, corners) {
+    const V = model.params.values, A = V.ANCHURA, Pf = V.PROFUNDIDAD;
+    const a = d.a, z0 = d.z_leg0, wall = d.leg.t, mat_c = V.MATERIAL_CHAPA, fin = V.ACABADO;
+    const tp = d.enc_tp, gp = d.enc_gp, Hp = d.enc_Hp;
+    const [codeRn, rnd, rnFound] = d.enc_rn;
+    const selSc = C.selectScrew(tp + gp, tp + gp + rnd.body_l);
+    const codeSc = selSc ? selSc[0] : "TORNILLO_ISO7380_M6x12";
+    const sc = C.component(codeSc);
+    const hd = flangeHoleD(mat_c, tp, sc);
+    const heads = this._trayScrewHeads(model, A, Pf);
+    const traySc = model.instances.find((i) => i.group === "BAL" && i.part.role === "tornillo")?.part.data ?? sc;
+    const hclear = pyRound(+traySc.head_d + HEAD_CLEAR, 2);
+    model.structure.attached_masses = model.structure.attached_masses ?? [];
+    const masses = model.structure.attached_masses;
+    const fix = (prefix, panelId, pts, nrm) => {
+      pts.forEach(([, pf], k) => {
+        const n = k + 1, pr = sub(pf, scale(nrm, tp + gp));
+        const rid = `${prefix}.TREM.${pad2(n)}`, sid = `${prefix}.TORN.${pad2(n)}`;
+        model.add(rid, `Tuerca remachable ${n}`, standardPart("tuerca_remachable", codeRn), frameZ(pr, nrm), "PAN", { tags: { explode_extra: scale(nrm, 30) } });
+        model.add(sid, `Tornillo ${n}`, standardPart("tornillo", codeSc), frameZ(pf, nrm), "PAN", { tags: { explode_extra: scale(nrm, 80) } });
+        model.joint({ id: `J.${sid}`, kind: "atornillada", members: [panelId, rid], location: pf, description: `Tornillo ${sc.thread} en tuerca remachable`,
+          fasteners: [sid, rid], data: { t_sheet: tp, gap: gp, wall, screw: codeSc, rivet: codeRn, rivet_found: rnFound, screw_found: selSc != null, hole: hd } });
+      });
+    };
+    const headHoles = (pts, du = 0.0) => {
+      const m = new Map();
+      for (const [u, z] of pts) { const q = [pyRound(u + du, 3), pyRound(z - z0, 3)]; m.set(`${q[0]}|${q[1]}`, q); }
+      return [...m.values()].sort((p, q) => p[0] - q[0] || p[1] - q[1]).map(([u, z]) => [u, z, hclear]);
+    };
+    const rho = C.material(mat_c).density;
+    model.addSub("PAN", "Laterales y fondo", { explode: [0, 0, 0], step: 4 });
+    ctx.feature("F37", "Laterales y fondo de chapa", () => {
+      ctx.uses("ESP_PANEL", "ANCHURA", "PROFUNDIDAD", "ALTURA", "ALTO_PANEL", "ANCHO_FONDO", "PERFIL_MONTANTE", "PASO_FIJACIONES", "MATERIAL_CHAPA", "ACABADO");
+      const zs = d.enc_zs_side;
+      // lateral: X local = Y (fondo), Y local = Z, espesor según +X; el izquierdo y el derecho son la misma pieza
+      const sideHoles = [...zs.map((z) => [a / 2, z, hd]), ...zs.map((z) => [Pf - a / 2, z, hd]), ...headHoles([...heads.x0, ...heads.x1])];
+      const side = platePart("lateral", `Lateral chapa ${g(tp)} mm`, Pf, Hp, tp, mat_c, fin, 0, sideHoles);
+      for (const [iid, x0, sgn, name, legsK] of [["PAN.LATERAL_I", -gp - tp, -1, "Lateral izquierdo", ["DI", "TI"]], ["PAN.LATERAL_D", A + gp, 1, "Lateral derecho", ["DD", "TD"]]]) {
+        model.add(iid, name, side, mrow(x0, 0, z0, [[0, 0, 1], [1, 0, 0], [0, 1, 0]]), "PAN", { tags: { explode_extra: [sgn * 260.0, 0, 0] } });
+        const xf = sgn < 0 ? x0 : x0 + tp;          // cara exterior del panel
+        const pts = [];
+        for (const k of legsK) for (const z of zs) pts.push([legs[k], [xf, model.instance(legs[k]).axis[0][1], z0 + z]]);
+        fix(iid, iid, pts, [sgn, 0, 0]);
+        const pm = side.mass;
+        for (const k of legsK) for (const z of zs) {
+          const ax = model.instance(legs[k]).axis[0];
+          masses.push({ member: legs[k], point: [ax[0], ax[1], z0 + z], mass_kg: pm / pts.length, label: name });
+        }
+      }
+      // fondo: X local = X, Y local = Z, espesor según -Y; cubre los cantos traseros de los laterales
+      const zb = d.enc_zs_back, Wb = A + 2 * (gp + tp);
+      const backHoles = [...zb.map((z) => [gp + tp + a / 2, z, hd]), ...zb.map((z) => [gp + tp + A - a / 2, z, hd]), ...headHoles(heads.y1, gp + tp)];
+      const back = platePart("fondo", `Fondo chapa ${g(tp)} mm`, Wb, Hp, tp, mat_c, fin, 0, backHoles);
+      model.add("PAN.FONDO", "Fondo", back, mrow(-gp - tp, Pf + gp + tp, z0, [[1, 0, 0], [0, 0, -1], [0, 1, 0]]), "PAN", { tags: { explode_extra: [0, 320.0, 0] } });
+      const pts = [];
+      for (const k of ["TI", "TD"]) for (const z of zb) pts.push([legs[k], [model.instance(legs[k]).axis[0][0], Pf + gp + tp, z0 + z]]);
+      fix("PAN.FONDO", "PAN.FONDO", pts, [0, 1, 0]);
+      const pm = back.mass;
+      for (const k of ["TI", "TD"]) for (const z of zb) {
+        const ax = model.instance(legs[k]).axis[0];
+        masses.push({ member: legs[k], point: [ax[0], ax[1], z0 + z], mass_kg: pm / pts.length, label: "Fondo" });
+      }
+    });
+    if (d.enc_n_doors) this._doors(model, ctx, d, legs, masses);
+  }
+  _doors(model, ctx, d, legs, masses) {
+    const V = model.params.values;
+    const z0 = d.z_leg0, gp = d.enc_gp, tp = d.enc_tp, n = d.enc_n_doors, Wd = d.enc_Wd, Hd = d.enc_Hd;
+    const mat_c = V.MATERIAL_CHAPA, fin = V.ACABADO;
+    const inox = C.material(V.MATERIAL_ESTRUCTURAL).family === "acero_inoxidable";
+    const hingeCode = inox ? "BISAGRA_PERNIO_80_INOX" : "BISAGRA_PERNIO_80", lockCode = inox ? "CERRADURA_MANETA_INOX" : "CERRADURA_MANETA";
+    const hinge = C.component(hingeCode), lock = C.component(lockCode);
+    model.addSub("PUE", "Puertas", { explode: [0, -380, 0], step: 5 });
+    ctx.feature("F38", "Puertas batientes de chapa plegada", () => {
+      ctx.uses("NUMERO_PUERTAS", "N_PUERTAS", "ESP_PUERTA", "ANCHO_PUERTA", "ALTO_PUERTA", "ANCHURA", "ALTURA", "MATERIAL_CHAPA", "ACABADO");
+      const t = d.enc_td;
+      const fam = C.material(mat_c).family;
+      const rmin = C.sheetData().press_brake.min_inner_radius_factor[fam] ?? 1.0;
+      const r = V.RADIO_PLEGADO === AUTO ? pyRound(Math.max(t, rmin * t), 2) : V.RADIO_PLEGADO;
+      const K = V.FACTOR_K === AUTO ? pyRound(C.din6935K(r, t), 4) : V.FACTOR_K;
+      // desarrollo con la altura según X: a lo largo de la chapa (pulido vertical en el inoxidable satinado, que no se gira al anidar)
+      const spec = makeSpec({ Lx: Hd, Ly: Wd, t, r, K, flanges: EDGES.map((e) => ({ edge: e, height: DOOR_FLANGE, direction: "down", holes: [] })) });
+      const door = sheetPart("puerta", `Puerta chapa ${g(t)} mm`, spec, mat_c, fin);
+      const yF = -(DOOR_GAP + DOOR_FLANGE), zd = z0 + DOOR_END_GAP, xLeft = -gp - tp + DOOR_REVEAL;
+      const nh = hingeCount(Hd);
+      const zh = evenPositions(150.0, Hd - 150.0, nh).map((z) => zd + z);
+      const leaves = [[n === 2 ? "PUE.PUERTA_I" : "PUE.PUERTA", xLeft, n === 2 ? "izquierda" : "", "DI"]];
+      if (n === 2) leaves.push(["PUE.PUERTA_D", xLeft + Wd + DOOR_JOINT, "derecha", "DD"]);
+      const zl = Hd > 400 ? zd + Math.min(Hd / 2, 1050.0 - zd) : zd + Hd / 2;     // maneta a ~1.050 mm o a media altura
+      const pm = door.mass;
+      leaves.forEach(([iid, x0, side, legK], k) => {
+        // X local = Z (altura), Y local = -X (anchura), Z local = -Y: pestañas hacia el armario
+        model.add(iid, `Puerta ${side}`.trim(), door, mrow(x0 + Wd, yF, zd, [[0, -1, 0], [0, 0, -1], [1, 0, 0]]), "PUE");
+        const hingeLeft = k === 0, xe = hingeLeft ? x0 : x0 + Wd;          // canto de giro
+        zh.forEach((z, j0) => {
+          const j = j0 + 1, hid = `${iid}.BISAGRA.${j}`;
+          model.add(hid, `Bisagra ${j} puerta ${side}`.replace("  ", " ").trim(), standardPart("bisagra", hingeCode),
+            mrow(xe, yF - hinge.dims[1] / 2, z - 40.0, [[1, 0, 0], [0, 1, 0], [0, 0, 1]]), "PUE");
+          model.joint({ id: `J.${hid}`, kind: "remachada", members: [iid, hid], location: [xe, yF, z], description: "Bisagra de pernio remachada a puerta y lateral (remaches no modelados)" });
+        });
+        const withLock = n === 1 || !hingeLeft;
+        if (withLock) {                                                     // maneta en el canto libre
+          const xl = hingeLeft ? x0 + Wd - 45.0 : x0 + 45.0, lid = `${iid}.MANETA`;
+          model.add(lid, `Maneta con cerradura puerta ${side}`.trim(), standardPart("cerradura", lockCode),
+            mrow(xl, yF - lock.dims[1] / 2, zl - 60.0, [[1, 0, 0], [0, 1, 0], [0, 0, 1]]), "PUE");
+          model.joint({ id: `J.${lid}`, kind: "remachada", members: [iid, lid], location: [xl, yF, zl], description: "Maneta con cerradura de cuarto de vuelta (montaje en taladro, no modelado)" });
+        }
+        // la puerta cuelga del montante del lado de las bisagras
+        const extra = nh * +hinge.mass_kg + (withLock ? +lock.mass_kg : 0.0);
+        const ax = model.instance(legs[legK]).axis[0];
+        for (const z of zh) masses.push({ member: legs[legK], point: [ax[0], ax[1], z], mass_kg: (pm + extra) / nh, label: `Puerta ${side}`.trim() });
+      });
+    });
+  }
+  _shelfStructure(model, d, legs) {
+    const st = super._shelfStructure(model, d, legs);
+    st.attached_masses = model.structure.attached_masses ?? [];
+    st.product_word = "armario";
+    const n = d.enc_n_doors;
+    st.assembly_texts = { ...(st.assembly_texts ?? {}),
+      PAN: "Presentar los laterales contra la cara exterior de los montantes y atornillarlos a las tuercas remachables M6 (8 N·m), de abajo arriba; "
+        + "después, el fondo, que cubre los cantos traseros de los laterales. Los taladros grandes de los paneles alojan las cabezas de los tornillos de las bandejas.",
+      PUE: n ? (n === 1 ? "Remachar las bisagras de pernio a la puerta y al lateral, con la puerta calzada a 2 mm del suelo del armario; comprobar el cierre y "
+        + "montar la maneta con cerradura en el canto libre." : "Remachar las bisagras de pernio a cada puerta y a su lateral, con las puertas calzadas a 2 mm del "
+        + "suelo del armario y 3 mm de holgura entre ellas; montar la maneta con cerradura en la puerta derecha.") : "Armario abierto: sin puertas." };
+    return st;
+  }
+  _extraDims(model, d) {
+    const V = model.params.values, A = V.ANCHURA, Pf = V.PROFUNDIDAD, H = V.ALTURA;
+    const gp = d.enc_gp, tp = d.enc_tp;
+    const dx = pyRound(A + 2 * (gp + tp), 3);
+    const yFront = d.enc_n_doors ? -(DOOR_GAP + DOOR_FLANGE) : 0.0;
+    const dy = pyRound(Pf + gp + tp - yFront, 3);
+    const ids = ["PAN.LATERAL_I", "PAN.LATERAL_D", "PAN.FONDO", ...model.instances.filter((i) => i.group === "PUE" && i.part.role === "puerta").map((i) => i.id)];
+    if (!d.enc_n_doors) ids.push(...range(d.z_levels.length).map((i) => `BAL.BANDEJA.${i + 1}`));
+    model.dims.ANCHURA_TOTAL = dx; model.dims.PROFUNDIDAD_TOTAL = dy;
+    model.dims.envelope = { ids, dx, dy, zmax: H, names: ["ANCHURA_TOTAL", "PROFUNDIDAD_TOTAL"] };
+  }
+}
+
 // ============================================================================ carro plataforma (port de carro_plataforma.py)
 const FRAME_CLEARANCE = 20.0;          // mm libres entre el bastidor y la placa base (como el bastidor de la balda)
 const PLATFORM_H_MAX = 500.0;          // altura máxima de la plataforma (ParamSpec de ALTURA)
@@ -1082,6 +1298,8 @@ class CarroPlataforma extends CarroTaller {
     if (d.z_tf - hb < d.z_leg0 + FRAME_CLEARANCE - 1e-9) {
       const zMin = Math.ceil((d.z_leg0 + FRAME_CLEARANCE + hb + d.t) / 5) * 5;
       const code = ctx.get(this.support_param);
+      if (d.z_tf - d.z_leg0 < 1.0)       // pata de longitud nula o negativa: geometría imposible
+        throw new ParamError(`La plataforma (${g(H)} mm) queda por debajo de la placa base de la rueda ${code} (${g(d.z_leg0)} mm desde el suelo): ALTURA de ${g(zMin)} mm como mínimo.`);
       if (ctx.params.sources.ALTURA === "defecto" && zMin <= PLATFORM_H_MAX)
         model.rule_fixes.ALTURA = [zMin, `Plataforma a ${g(zMin)} mm (regla de diseño): a la altura por defecto, ${g(H)} mm, el `
           + `bastidor de ${g(hb)} mm de canto no cabía sobre las placas base de la rueda ${code}.`];
@@ -1651,7 +1869,7 @@ class Tarima extends MesaSoldadura {
 
 export const REGISTRY = { mesa_industrial: new MesaIndustrial(), estanteria: new Estanteria(), puesto_trabajo: new PuestoTrabajo("puesto_trabajo"),
   carro_taller: new CarroTaller("carro_taller"), carro_estanteria: new CarroEstanteria(), mesa_soldadura: new MesaSoldadura(), estanteria_bateria: new EstanteriaBateria(),
-  tarima: new Tarima(), carro_plataforma: new CarroPlataforma() };
+  tarima: new Tarima(), carro_plataforma: new CarroPlataforma(), armario: new Armario() };
 export function family(fid) {
   const f = REGISTRY[fid];
   if (!f) {

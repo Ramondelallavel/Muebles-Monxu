@@ -197,7 +197,6 @@ class Estanteria(MesaIndustrial):
             with ctx.feature("F11", "Montantes, placas base y tuercas"):
                 ctx.uses("LONGITUD_MONTANTE", "PERFIL_MONTANTE", "ANCHURA", "PROFUNDIDAD", "ESPESOR_PLACA_BASE",
                          self.support_param, "MATERIAL_ESTRUCTURAL", "ACABADO")
-                leg_part = ProfilePart("montante", f"Montante {leg.code}", leg.code, d["leg_len"], mat_s, fin)
                 plate_mat = "S235JR" if catalog.material(mat_s).family == "acero_carbono" else mat_s
                 plate = PlatePart("placa_base", f"Placa base {a:.0f}x{a:.0f}x{d['tp']:.0f}", a, a, d["tp"], plate_mat,
                                   fin, corner_r=min(3.0, a / 10), holes=((a / 2, a / 2, thread + 1.0),))
@@ -205,7 +204,8 @@ class Estanteria(MesaIndustrial):
                 for k, (x, y) in corners.items():
                     iid = f"EST.MONT.{k}"
                     p0, p1 = np.array([x, y, d["z_leg0"]]), np.array([x, y, H])
-                    model.add(iid, f"Montante {cname[k]}", leg_part, G.axis_frame(p0, p1, (0, 1, 0)), "EST",
+                    model.add(iid, f"Montante {cname[k]}", self._upright_part(k, d, leg, mat_s, fin),
+                              G.axis_frame(p0, p1, (0, 1, 0)), "EST",
                               axis=(p0, p1), up=np.array([0, 1.0, 0]), structural=True)
                     legs[k] = iid
                     model.add(f"EST.PLACA.{k}", f"Placa base {cname[k]}", plate,
@@ -269,6 +269,11 @@ class Estanteria(MesaIndustrial):
         self._extra_dims(model, d)
         model.number_parts()
         return model
+
+    def _upright_part(self, corner: str, d: dict, leg, mat_s: str, fin) -> ProfilePart:
+        """Montante de cada esquina; las familias derivadas pueden darle taladros propios (``d["upright_holes"]``)."""
+        return ProfilePart("montante", f"Montante {leg.code}", leg.code, d["leg_len"], mat_s, fin,
+                           holes=d.get("upright_holes", {}).get(corner, ()))
 
     # ------------------------------------------------------------------ derivados
     def _derive_shelf(self, ctx: ParamContext, model: ProductModel) -> dict:

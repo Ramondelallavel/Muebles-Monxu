@@ -42,6 +42,10 @@ texts += [
     "mesa 1500x800x900 con balda de 80 kg y 200 kg en la encimera", "mesa 1800x800x900, 400 kg, balda de 100 kg",
     "mesa de 2000x800x900 con balda vacia y 300 kg sobre la encimera", "estanteria 1500x600x2000 5 baldas de 80 kg cada una",
     "carro estanteria de 4 bandejas de 30 kg", "estanteria de 1500x600x2000 con 5 niveles de 100 kg anclada al suelo",
+    "armario de 1000x500x1950 con 4 baldas de 50 kg y dos puertas", "armario metálico de una puerta 600x500x1800",
+    "armario de taller sin puertas de 1200 x 600 x 2000, 5 niveles de 100 kg", "mesa con armario inferior 1500x700x900",
+    "armario inoxidable de 800x400x1800 con puerta doble y 3 estantes de 30 kg cada uno",
+    "Un armario de herramientas con 4 puertas",
 ]
 js = json.loads(subprocess.run(["node", sys.argv[1]], input=json.dumps(texts), capture_output=True, text=True,
                                check=True).stdout)

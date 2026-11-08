@@ -5,11 +5,10 @@ geométrica, mecánica y constructivamente: modelo B-rep real, cálculo, planos,
 BOM, optimización de corte y expediente de fabricación, todo derivado de una única fuente de
 parámetros.
 
-> **Estado:** núcleo funcional con nueve familias completas (**mesa industrial**, **mesa de soldadura**,
+> **Estado:** núcleo funcional con diez familias completas (**mesa industrial**, **mesa de soldadura**,
 > **estantería industrial**, **estantería en batería**, **puesto de trabajo**, **carro de taller**, **carro estantería**,
-> **carro plataforma** y **tarima / plataforma de trabajo**) y el caso de aceptación §23 superado por
-> pruebas automáticas. Los armarios (puertas, cajones) están previstos en la arquitectura pero
-> **no implementados**.
+> **carro plataforma**, **tarima / plataforma de trabajo** y **armario industrial**) y el caso de aceptación §23 superado
+> por pruebas automáticas. Los cajones y las cajoneras **no están implementados**.
 
 ## Puesta en marcha
 
@@ -48,7 +47,7 @@ python -m pytest -q
 | 4. Documentación | ✔ | 12 hojas de planos (conjunto, estructura, perfiles, chapa, desarrollos, pletinas, soldaduras con detalles, explosionado, montaje, despiece), STEP de conjunto y de cada pieza, STL, BREP, GLB, DXF, Excel con fórmulas, informe PDF |
 | 5. Fabricación | ✔ | Desarrollos con BA = π/2·(Ri+K·t), DFM (láser, plegadora, perfiles, soldadura, montaje), corte de barras hasta la cota inferior, anidado de chapa |
 | 6. Asistente IA | ✔ | Interpretación en español con evidencia, preguntas de datos faltantes, propuesta preliminar diferenciada de lo verificado |
-| 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) **carro de taller** (ruedas de espiga con freno; asa en uno, dos o ningún extremo) **carro estantería** (N niveles sobre ruedas, asa opcional), **mesa de soldadura** (placa perforada de 10–20 mm), **estantería en batería** (N módulos con montantes compartidos), **tarima** (plataforma baja con cargas de EN ISO 14122-2) y **carro plataforma** (plataforma baja sobre ruedas con asa de empuje). Peto trasero opcional en mesa, puesto y carro. Armarios: sólo se identifican en el asistente |
+| 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) **carro de taller** (ruedas de espiga con freno; asa en uno, dos o ningún extremo) **carro estantería** (N niveles sobre ruedas, asa opcional), **mesa de soldadura** (placa perforada de 10–20 mm), **estantería en batería** (N módulos con montantes compartidos), **tarima** (plataforma baja con cargas de EN ISO 14122-2), **carro plataforma** (plataforma baja sobre ruedas con asa de empuje) y **armario industrial** (estructura tubular con laterales, fondo y puertas de chapa). Peto trasero opcional en mesa, puesto y carro. Cajoneras: sólo se identifican en el asistente |
 | 8. Validación | ✔ | 125 pruebas: unidades frente a soluciones analíticas y tablas, las ocho familias, QA, API, aceptación §23, validación cruzada navegador ↔ servidor, expediente del navegador y legibilidad de planos |
 
 ### Verificaciones de la cadena (no simuladas)
@@ -270,6 +269,54 @@ un extremo, en los dos o no existir (plataforma rodante). Las ruedas con freno v
 
 Plantillas: 1.000 × 600 mm (250 kg), 1.200 × 800 mm (500 kg), 1.600 × 800 mm con dos asas (600 kg),
 plataforma rodante sin asa de 1.200 × 800 mm (400 kg) y carro inoxidable de 800 × 500 mm.
+
+## Armario industrial
+
+`armario` (`AR`) es una estantería de cuatro montantes cerrada: las bandejas de chapa plegada son el
+suelo, las baldas y el techo del armario, y se añaden laterales, fondo y puertas.
+
+- **Laterales y fondo:** chapa lisa cortada por láser, atornillada con tornillos ISO 7380 a tuercas
+  remachables en la cara exterior de los montantes. Los montantes de cada esquina llevan sus propios
+  taladros. Los paneles tienen taladros de alojamiento donde asoman las cabezas de los tornillos de las
+  bandejas, y el fondo cubre los cantos traseros de los laterales.
+- **Puertas:** chapa plegada con pestañas de 20 mm, superpuestas al frente y separadas 5 mm de los
+  montantes. Por defecto ('auto') hay una puerta hasta 600 mm de anchura y dos por encima; también puede
+  no haber puertas. Llevan bisagras exteriores de pernio (2, 3 o 4 según la altura) y maneta con
+  cerradura en el canto libre; los herrajes son de inoxidable si la estructura lo es. Su desarrollo se
+  orienta con la altura a lo largo de la chapa: el pulido del inoxidable satinado queda vertical y una
+  puerta de 2 m cabe en el formato de 4.000 × 2.000.
+- **Material:** chapa DC01 por defecto, la habitual en armarios pintados. Los espesores de paneles y
+  puertas en 'auto' son la chapa más fina de 1 mm o más disponible en el material (en S235JR, 1,5 mm).
+- **Cálculo:** la estructura resiste como una estantería. Paneles, puertas y herrajes son masas colgadas
+  de los montantes (las puertas, del montante de las bisagras), sin función resistente. Por defecto se
+  ancla al suelo, con un empuje de 150 N en la parte superior.
+- **Asistente:** reconoce «armario» y el número de puertas («una puerta», «dos puertas», «puerta doble»,
+  «sin puertas»). «4 baldas» son baldas intermedias: con el suelo y el techo, 6 niveles de bandeja.
+  «Mesa con armario inferior» sigue siendo una mesa, con el armario como accesorio no soportado.
+
+Plantillas: armario de taller de dos puertas de 1.000 × 500 × 1.950 mm, de una puerta de 600 mm, de
+herramientas de 1.200 × 600 × 2.000 mm con 100 kg por balda, bajo de 1.000 mm sin anclar e inoxidable de
+800 × 400 × 1.800 mm.
+
+En el armario aparecieron tres fallos generales, corregidos en los dos motores:
+
+- La comprobación de tornillería suponía que la pieza atornillada era una chapa plegada; con una placa
+  lisa fallaba. Ahora usa el taladro de paso registrado por la familia.
+- El aviso `GEO-SALIENTE` decía siempre «bases de pies o ruedas». Ahora nombra las piezas que sobresalen
+  (por ejemplo, la maneta).
+- Las hipótesis del cálculo se repetían (la del DC01, una vez por bandeja).
+- En los desarrollos, los rótulos de plegado se colocaban antes que las cotas y podían caer encima de ellas
+  en piezas estrechas.
+- Con travesaños intermedios elegidos a mano (muchos o muy anchos), los travesaños se solapaban entre sí o con
+  las patas y montantes sin ningún aviso. La regla `DFM-TRAVESANOS` lo señala y da el número máximo que cabe
+  (mesas, puestos, carros, estanterías y armarios). La encontró el barrido aleatorio del motor del navegador
+  (`FAMS=armario,carro_plataforma node fuzz.mjs`).
+- Una plataforma más baja que la placa base de su rueda daba una pata de longitud negativa (sólido abierto).
+  Ahora se rechaza con la altura mínima.
+- El asistente avisa si se piden más de dos puertas en un armario.
+- Nueva advertencia `GAL-VENTEO`: con galvanizado en caliente (EN ISO 1461), los tubos cerrados por soldadura
+  necesitan taladros de venteo y drenaje (EN ISO 14713-2). No se modelan; el aviso da un criterio orientativo
+  y recuerda repasar las roscas de las tuercas soldadas.
 
 ## Depuración de lógica: invariantes
 
@@ -588,6 +635,9 @@ con cargas puntuales, taladro de Ø16 en placa de 20 mm, o un asa fijada contra 
   En el carro plataforma, 50 N en el asa. El vuelco se comprueba con el carro vacío en la dirección más
   desfavorable, que en carros estrechos es la lateral.
 - **DC01:** la norma no garantiza fy mínimo, así que se marca como hipótesis.
+- **Armario:** paneles y puertas no se cuentan como diafragma (del lado de la seguridad). No se comprueba el
+  vuelco con las puertas abiertas ni una carga sobre una puerta abierta. Las bisagras y la maneta se modelan
+  con su envolvente; sus remaches y taladros no se modelan.
 - **Gargantas a < 3 mm:** quedan fuera de EN 1993-1-8 §4.5.2 y requieren una WPS cualificada.
 
 ## Referencia MT-1800

@@ -25,10 +25,10 @@ const FAMILY_KEYWORDS = [
 ];
 /** Accesorios que sí implementa una familia (no se marcan como no soportados) y parámetro que activan. */
 const SUPPORTED_BY = { "puesto_trabajo|panel_trasero": ["PANEL_HERRAMIENTAS", 1], "carro_taller|ruedas": null, "carro_estanteria|ruedas": null,
-  "carro_plataforma|ruedas": null };
+  "carro_plataforma|ruedas": null, "armario|puertas": null };
 const CARTS = ["carro_taller", "carro_estanteria", "carro_plataforma"];
 export const MESA_LIKE = ["mesa_industrial", "puesto_trabajo", "carro_taller", "mesa_soldadura"];
-export const SHELF_LIKE = ["estanteria", "carro_estanteria", "estanteria_bateria"];
+export const SHELF_LIKE = ["estanteria", "carro_estanteria", "estanteria_bateria", "armario"];
 const MODULE_WORDS = "modulos|cuerpos|vanos";
 const BAY_MAX = 2000.0;          // anchura máxima de módulo (ParamSpec de ANCHURA en estanteria_bateria)
 const UNSUPPORTED = [
@@ -43,7 +43,7 @@ const UNSUPPORTED = [
 ];
 export const LABELS = { mesa_industrial: "Mesa industrial", estanteria: "Estantería industrial", puesto_trabajo: "Puesto de trabajo industrial",
   carro_taller: "Carro de taller", carro_estanteria: "Carro estantería", mesa_soldadura: "Mesa de soldadura", estanteria_bateria: "Estantería en batería", tarima: "Tarima / plataforma de trabajo",
-  carro_plataforma: "Carro plataforma", armario: "Armario / mobiliario auxiliar" };
+  carro_plataforma: "Carro plataforma", armario: "Armario industrial" };
 const DIM_PROPOSAL = { mesa_industrial: [1800.0, 800.0, 900.0], puesto_trabajo: [1500.0, 750.0, 900.0], carro_taller: [1000.0, 600.0, 900.0],
   mesa_soldadura: [1500.0, 1000.0, 850.0] };
 export const STRUCTURAL_KEYS = ["PROFUNDIDAD", "NUMERO_NIVELES", "CARGA_POR_NIVEL", "ALTURA_PRIMER_NIVEL", "DISTANCIA_BALDAS", "PERFIL_MONTANTE",
@@ -270,6 +270,7 @@ export function parse(text, pending = null) {
   }
   if (it.family === "estanteria_bateria") batteryWidth(it, t);
   if (it.family === "tarima") tarimaLoads(it, t);
+  if (it.family === "armario") cabinet(it, t);
   return it;
 }
 
@@ -301,6 +302,21 @@ const TARIMA_KN_M2 = 2.0;       // EN ISO 14122-2: carga repartida mínima de pl
 /** Carga repartida total (kg) equivalente a q kN/m² sobre la superficie L × W (mm). */
 export const tarimaLoadKg = (L, W, q = TARIMA_KN_M2) => Math.ceil((q * L * W * 1e-6) / 9.81e-3);
 /** Tarima: carga en kN/m² o kg/m² convertida a carga total; sin balda ni peto. */
+/** Puertas del armario y «N baldas» (baldas intermedias: las bandejas son además el suelo y el techo). */
+function cabinet(it, t) {
+  const one = t.match(/\b(?:una|1) puerta\b|\bpuerta (?:unica|sencilla)\b/);
+  const many = t.match(/\b([3-9]|tres|cuatro|cinco|seis) puertas/);
+  if (many) it.unsupported.push(`${many[1]} puertas (el armario admite hasta dos; para más, armarios contiguos)`);
+  else if (/sin puertas?|armario abierto/.test(t)) it.set("NUMERO_PUERTAS", 0, "sin puertas");
+  else if (/\b(?:dos|2) puertas|doble puerta|puertas? dobles?/.test(t)) it.set("NUMERO_PUERTAS", 2, "dos puertas");
+  else if (one) it.set("NUMERO_PUERTAS", 1, one[0]);
+  const mm = t.match(/(\d+)\s+(?:baldas|estantes|bandejas)/);
+  if (mm && it.evidence.NUMERO_NIVELES === mm[0]) {
+    const n = parseInt(mm[1], 10);
+    it.set("NUMERO_NIVELES", n + 2, mm[0]);
+    it.notes.push(`${n} baldas intermedias más el suelo y el techo del armario: ${n + 2} niveles de bandeja.`);
+  }
+}
 function tarimaLoads(it, t) {
   const mm = t.match(R(String.raw`${NUM}\s*(kn|kg)\s*/\s*m(?:2|²|\s*cuadrado)`));
   if (mm) {
@@ -386,22 +402,26 @@ export function missingData(family, values, asked = new Set()) {
 }
 function missingShelf(values, asked, family = "estanteria") {
   const q = [];
-  const cart = family === "carro_estanteria", bat = family === "estanteria_bateria";
+  const cart = family === "carro_estanteria", bat = family === "estanteria_bateria", cab = family === "armario";
   if (bat && !("NUMERO_MODULOS" in values)) q.push(Q("NUMERO_MODULOS", "¿Cuántos módulos contiguos tendrá la batería?",
     "Los módulos comparten los montantes intermedios; define la longitud total.", [2, 3, 4].map((n) => ({ label: `${n} módulos`, value: n })), "generacion", 3));
-  for (const [p, lbl, prop] of [["ANCHURA", bat ? "anchura de cada módulo (entre ejes de montantes)" : "anchura de frente", cart || bat ? 1000.0 : 1500.0],
-    ["PROFUNDIDAD", "profundidad", bat ? 500.0 : 600.0], ["ALTURA", "altura total", cart ? 1400.0 : 2000.0]])
+  for (const [p, lbl, prop] of [["ANCHURA", bat ? "anchura de cada módulo (entre ejes de montantes)" : "anchura de frente", cart || bat || cab ? 1000.0 : 1500.0],
+    ["PROFUNDIDAD", "profundidad", bat || cab ? 500.0 : 600.0], ["ALTURA", "altura total", cart ? 1400.0 : cab ? 1950.0 : 2000.0]])
     if (!(p in values)) q.push(Q(p, `¿Qué ${lbl} necesita (mm)?`, "Dimensión principal necesaria para generar la geometría.", [], "generacion", prop));
-  if (!("NUMERO_NIVELES" in values)) { const [ns, def] = cart ? [[3, 4], 3] : [[4, 5], 5];
-    q.push(Q("NUMERO_NIVELES", "¿Cuántos niveles de bandejas?", "Define el número de bastidores y bandejas.", ns.map((n) => ({ label: `${n} niveles`, value: n })), "generacion", def)); }
+  if (!("NUMERO_NIVELES" in values)) { const [ns, def] = cart ? [[3, 4], 3] : cab ? [[4, 5, 6], 5] : [[4, 5], 5];
+    q.push(Q("NUMERO_NIVELES", cab ? "¿Cuántos niveles de bandeja (suelo, baldas y techo)?" : "¿Cuántos niveles de bandejas?", "Define el número de bastidores y bandejas.",
+      ns.map((n) => ({ label: `${n} niveles`, value: n })), "generacion", def)); }
+  if (cab && !("NUMERO_PUERTAS" in values) && !asked.has("NUMERO_PUERTAS")) q.push(Q("NUMERO_PUERTAS", "¿Una o dos puertas? Propuesta: una hasta 600 mm de anchura y dos por encima.",
+    "Define las hojas, las bisagras y la maneta con cerradura.", [{ label: "Una puerta", value: 1 }, { label: "Dos puertas", value: 2 }, { label: "Sin puertas (abierto)", value: 0 }],
+    "confirmacion", "auto"));
   if (values.CARGA_POR_NIVEL == null) q.push(Q("CARGA_POR_NIVEL", (bat ? "¿Qué carga soportará cada bandeja (cada módulo y nivel, kg)" : "¿Qué carga soportará cada nivel (kg)")
     + " y estará repartida (cajas) o concentrada (piezas pesadas)?",
-    "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.", (cart ? [25, 40, 60] : [80, 150, 250]).map((n) => ({ label: `${n} kg`, value: n }))));
+    "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.", (cart ? [25, 40, 60] : cab ? [30, 60, 100] : [80, 150, 250]).map((n) => ({ label: `${n} kg`, value: n }))));
   if (cart && !("CARGA_HORIZONTAL" in values) && !asked.has("CARGA_HORIZONTAL")) q.push(Q("CARGA_HORIZONTAL",
     "¿Qué fuerza de maniobra tendrá el carro (empuje con las ruedas frenadas o contra un obstáculo)?", "Es la acción que puede volcar el carro; un carro no se ancla.",
     [{ label: "Ligera (50 N)", value: 50 }, { label: "Normal (100 N)", value: 100 }], "verificacion", 100.0));
-  if (!cart && !("ANCLAJE" in values) && !asked.has("ANCLAJE")) q.push(Q("ANCLAJE", "¿Se anclará la estantería al suelo o a la pared?",
-    "Una estantería alta y estrecha sin anclaje puede volcar con un empuje moderado.", [{ label: "Anclada al suelo", value: "al_suelo" }, { label: "Sin anclaje", value: "ninguno" }],
+  if (!cart && !("ANCLAJE" in values) && !asked.has("ANCLAJE")) q.push(Q("ANCLAJE", `¿Se anclará ${cab ? "el armario" : "la estantería"} al suelo o a la pared?`,
+    `${cab ? "Un armario alto y estrecho" : "Una estantería alta y estrecha"} sin anclaje puede volcar con un empuje moderado.`, [{ label: "Anclada al suelo", value: "al_suelo" }, { label: "Sin anclaje", value: "ninguno" }],
     "verificacion", "al_suelo"));
   if (!("MATERIAL_ESTRUCTURAL" in values) && !asked.has("MATERIAL_ESTRUCTURAL")) q.push(Q("MATERIAL_ESTRUCTURAL", "¿Material y acabado? Propuesta: acero S235 con pintura en polvo RAL 7035.",
     "Determina propiedades mecánicas, espesores comerciales y acabado.", [{ label: "Acero S235 pintado RAL 7035", value: "S235JRH" }, { label: "Acero inoxidable AISI 304", value: "1.4301" }],
@@ -432,6 +452,7 @@ export function proposalFor(family, values) {
     const cart = family === "carro_estanteria";
     const p = {};
     const dims = cart ? [["ANCHURA", 1000.0], ["PROFUNDIDAD", 600.0], ["ALTURA", 1400.0], ["NUMERO_NIVELES", 3]]
+      : family === "armario" ? [["ANCHURA", 1000.0], ["PROFUNDIDAD", 500.0], ["ALTURA", 1950.0], ["NUMERO_NIVELES", 5]]
       : family === "estanteria_bateria" ? [["NUMERO_MODULOS", 3], ["ANCHURA", 1000.0], ["PROFUNDIDAD", 500.0], ["ALTURA", 2000.0], ["NUMERO_NIVELES", 5]]
         : [["ANCHURA", 1500.0], ["PROFUNDIDAD", 600.0], ["ALTURA", 2000.0], ["NUMERO_NIVELES", 5]];
     for (const [k, v] of dims) if (!(k in values)) p[k] = v;
@@ -474,7 +495,12 @@ export function describe(it) {
   if ("CARGA_PUNTUAL" in v && v.CARGA_PUNTUAL != null) out.push(`Carga puntual: ${g(v.CARGA_PUNTUAL)} kg.`);
   out.push("Material: " + ("MATERIAL_ESTRUCTURAL" in v ? v.MATERIAL_ESTRUCTURAL : "pendiente de selección") + ".");
   if (it.family === "tarima") out.push("Superficie: chapa de acero soldada al bastidor (antideslizante a prever); cargas de EN ISO 14122-2.");
-  if (it.family === "estanteria" || it.family === "estanteria_bateria" || it.family === "tarima") out.push("Anclaje: " + ({ al_suelo: "al suelo", ninguno: "sin anclaje" }[v.ANCLAJE] ?? "pendiente") + ".");
+  if (it.family === "armario") {
+    out.push("Puertas: " + ({ 0: "sin puertas (armario abierto)", 1: "una", 2: "dos" }[v.NUMERO_PUERTAS] ?? "una hasta 600 mm de anchura y dos por encima (propuesta)")
+      + ", con bisagras de pernio y maneta con cerradura.");
+    out.push("Cerramiento: laterales y fondo de chapa atornillados a los montantes; la bandeja superior es el techo.");
+  }
+  if (["estanteria", "estanteria_bateria", "tarima", "armario"].includes(it.family)) out.push("Anclaje: " + ({ al_suelo: "al suelo", ninguno: "sin anclaje" }[v.ANCLAJE] ?? "pendiente") + ".");
   if (MESA_LIKE.includes(it.family)) {
     out.push("Balda inferior: " + (v.NUMERO_BALDAS === 1 ? "sí" : v.NUMERO_BALDAS === 0 ? "no" : "no indicada") + ".");
     out.push("Tipo de estructura: tubular soldada" + (it.accessories.includes("estructura tubular") ? " (indicada)." : " (propuesta)."));

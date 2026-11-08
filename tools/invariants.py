@@ -90,7 +90,8 @@ def check_case(fid: str, values: dict) -> list[str]:
             out.append(f"CHECK {c['id']}: CUMPLE con aprovechamiento {u}")
     # simetría izquierda-derecha de las reacciones verticales (sin accesorios asimétricos)
     asym = (v.get("ASA_EMPUJE") == "un_extremo" or fid in ("puesto_trabajo",)
-            or (fid in ("carro_taller", "carro_estanteria") and v.get("ASA_EMPUJE") != "dos_extremos"))
+            or (fid in ("carro_taller", "carro_estanteria", "carro_plataforma") and v.get("ASA_EMPUJE") != "dos_extremos")
+            or any(i.id == "PUE.PUERTA" for i in m.instances))          # armario de una puerta: cuelga de un lado
     sups = m.structure.get("supports", [])
     if sups and not asym and "ELS-1" in combos:
         xs = [s["point"][0] for s in sups]

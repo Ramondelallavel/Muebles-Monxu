@@ -55,6 +55,7 @@ CANDIDATES = {
 }
 FOOTREST_LOAD_N = 1000.0     # apoyo del pie en el centro del reposapiés (criterio de ensayo habitual de 1 kN)
 FOOT_CLEARANCE = 100.0       # hueco libre mínimo sobre el reposapiés para apoyar el pie
+CROSSBEAM_GAP = 5.0          # hueco mínimo entre travesaños intermedios, y con las patas, para soldarlos
 CONSTRUCTIVE_DEFAULTS = {"PERFIL_PATA": "SHS 40x40x2", "PERFIL_LARGUERO": "RHS 60x40x2",
                          "PERFIL_TRAVESANO": "RHS 40x20x2", "PERFIL_BASTIDOR": "RHS 40x20x2",
                          "PERFIL_REPOSAPIES": "RHS 40x20x2",
@@ -820,6 +821,19 @@ class MesaIndustrial(ProductFamily):
         # ---- travesaños intermedios
         xs = [x_l + i * (x_r - x_l) / (n_int + 1) for i in range(1, n_int + 1)]
         yi0, yi1 = c + inset + prof_long.B, W - c - inset - prof_long.B
+
+        def fits(n):
+            """Los n travesaños no se solapan entre sí ni con las patas (si llegan a su altura en Y)."""
+            pitch = (x_r - x_l) / (n + 1)
+            if pitch - prof_end.B < CROSSBEAM_GAP - 1e-9:
+                return False
+            return not (inset + prof_long.B < a and x_l + pitch - prof_end.B / 2 < c + a + CROSSBEAM_GAP - 1e-9)
+        if n_int and not fits(n_int):        # antes se generaban solapados sin aviso (sólo con valores manuales)
+            n_max = max((n for n in range(n_int) if fits(n)), default=0)
+            msg = (f"Los {n_int} travesaños intermedios {lab} de {prof_end.code} no caben entre los travesaños extremos "
+                   f"y las patas o montantes (se solapan o no dejan {CROSSBEAM_GAP:g} mm para soldar): como máximo {n_max}.")
+            if not any(n["code"] == "DFM-TRAVESANOS" and n["message"] == msg for n in model.design_notes):
+                model.note("error", "DFM-TRAVESANOS", msg)
         int_ids = []
         if n_int:
             ip = ProfilePart(f"travesano_int_{level.lower()}", f"Travesaño intermedio {lab} {prof_end.code}",

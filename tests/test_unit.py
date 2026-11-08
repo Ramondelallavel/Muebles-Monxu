@@ -187,8 +187,10 @@ def test_assistant_asks_and_flags_unsupported():
     assert any("Cajones" in u for u in r["state"]["unsupported"])
     r2 = assistant.handle(r["state"], "La balda llevará 100 kg")
     assert r2["parameters"]["CARGA_BALDA"] == 100
+    # el armario ya está implementado, pero con hasta dos puertas: las cuatro pedidas se señalan
     r3 = assistant.handle(assistant.new_state(), "Un armario de herramientas con 4 puertas")
-    assert not r3["family_implemented"] and not r3["ready_to_generate"]
+    assert r3["family_implemented"] and not r3["ready_to_generate"]          # faltan las dimensiones
+    assert any("4 puertas" in u for u in r3["state"]["unsupported"]) and "NUMERO_PUERTAS" not in r3["parameters"]
 
 
 def test_llm_adapter_merges_without_overriding_rules():

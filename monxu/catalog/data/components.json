@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026.11-5",
+    "version": "2026.11-6",
     "note": "Componentes normalizados y comerciales. Las capacidades de carga de componentes comerciales (pies, ruedas) son datos de catálogo de referencia genéricos y DEBEN confirmarse con la ficha técnica del proveedor seleccionado; el informe de cálculo las marca como tales. Masas de tornillería: valores típicos de catálogo (orientativos)."
   },
   "components": {
@@ -574,6 +574,38 @@
       "rated_load_kg": 300,
       "rated_load_source": "catalogo_generico",
       "mass_kg": 3.35
+    },
+    "BISAGRA_PERNIO_80": {
+      "category": "herrajes",
+      "name": "Bisagra exterior de pernio 80 mm, acero zincado",
+      "standard": "Comercial",
+      "dims": [20, 8, 80],
+      "mass_kg": 0.08,
+      "note": "Envolvente simplificada; se remacha a la puerta y al lateral (remaches no modelados)."
+    },
+    "BISAGRA_PERNIO_80_INOX": {
+      "category": "herrajes",
+      "name": "Bisagra exterior de pernio 80 mm, inoxidable AISI 304",
+      "standard": "Comercial",
+      "dims": [20, 8, 80],
+      "mass_kg": 0.08,
+      "note": "Envolvente simplificada; se remacha a la puerta y al lateral (remaches no modelados)."
+    },
+    "CERRADURA_MANETA": {
+      "category": "herrajes",
+      "name": "Maneta con cerradura de cuarto de vuelta y llave, zamak",
+      "standard": "Comercial",
+      "dims": [25, 30, 120],
+      "mass_kg": 0.22,
+      "note": "Envolvente simplificada; taladro de montaje en la puerta no modelado."
+    },
+    "CERRADURA_MANETA_INOX": {
+      "category": "herrajes",
+      "name": "Maneta con cerradura de cuarto de vuelta y llave, inoxidable",
+      "standard": "Comercial",
+      "dims": [25, 30, 120],
+      "mass_kg": 0.25,
+      "note": "Envolvente simplificada; taladro de montaje en la puerta no modelado."
     }
   },
   "consumables": {
