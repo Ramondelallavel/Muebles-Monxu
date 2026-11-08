@@ -117,6 +117,15 @@ class CarroTaller(MesaIndustrial):
                         "CARGA_TOTAL": 50.0, "NUMERO_BALDAS": 1, "CARGA_BALDA": 40.0,
                         "MATERIAL_ESTRUCTURAL": "1.4301", "MATERIAL_CHAPA": "1.4301", "ACABADO": "INOX_SATINADO",
                         "ENTORNO": "alimentario", "USO": "inspeccion", "CARGA_HORIZONTAL": 50.0}},
+            {"id": "CT-1000-ALU", "name": "Carro de aluminio ligero 1.000 mm", "family": self.id,
+             "values": {"LONGITUD": 1000.0, "ANCHURA": 600.0, "ALTURA": 900.0, "ALTURA_ASA": 1000.0,
+                        "CARGA_TOTAL": 60.0, "NUMERO_BALDAS": 1, "CARGA_BALDA": 40.0,
+                        "MATERIAL_ESTRUCTURAL": "EN AW-6082 T6", "MATERIAL_CHAPA": "EN AW-5754 H22",
+                        "ACABADO": "ANODIZADO_NATURAL", "USO": "inspeccion", "CARGA_HORIZONTAL": 30.0}},
+            {"id": "MM-1500-TALLER", "name": "Mesa móvil de taller 1.500 mm (sin asa, trabajo pesado)", "family": self.id,
+             "values": {"LONGITUD": 1500.0, "ANCHURA": 750.0, "ALTURA": 900.0, "CARGA_TOTAL": 200.0,
+                        "NUMERO_BALDAS": 1, "CARGA_BALDA": 100.0, "ASA_EMPUJE": "ninguna", "USO": "trabajo_pesado",
+                        "CARGA_HORIZONTAL": 100.0, "ACABADO": "RAL7016_POLVO"}},
         ]
 
     # ------------------------------------------------------------------ ganchos de la mesa
@@ -156,7 +165,7 @@ class CarroTaller(MesaIndustrial):
                 d["z_asa"] = za
                 if za < H + 80:
                     model.note("error", "GEO-ASA-BAJA", f"El asa ({za:g} mm) debe quedar al menos 80 mm por encima de "
-                               f"la encimera ({H:g} mm) para poder agarrarla.")
+                               f"la {self.top_label.lower()} ({H:g} mm) para poder agarrarla.")
                 if asa.B > d["a"]:
                     model.note("error", "DFM-ASA-ANCHO", f"El perfil del asa {asa.code} es más ancho que el montante.")
             c = catalog.component(ctx["RUEDA"])

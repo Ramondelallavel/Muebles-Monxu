@@ -81,6 +81,14 @@ class EstanteriaBateria(Estanteria):
              "family": self.id,
              "values": {"NUMERO_MODULOS": 2, "ANCHURA": 900.0, "PROFUNDIDAD": 400.0, "ALTURA": 2200.0,
                         "NUMERO_NIVELES": 6, "CARGA_POR_NIVEL": 60.0, "ANCLAJE": "al_suelo"}},
+            {"id": "EB-5x1000-5", "name": "Estantería en batería de 5 módulos de 1.000 mm, cinco niveles", "family": self.id,
+             "values": {"NUMERO_MODULOS": 5, "ANCHURA": 1000.0, "PROFUNDIDAD": 500.0, "ALTURA": 2000.0,
+                        "NUMERO_NIVELES": 5, "CARGA_POR_NIVEL": 120.0, "ANCLAJE": "al_suelo",
+                        "ACABADO": "RAL7035_POLVO"}},
+            {"id": "EB-2x1500-4", "name": "Estantería en batería de 2 módulos de 1.500 mm (200 kg por bandeja)", "family": self.id,
+             "values": {"NUMERO_MODULOS": 2, "ANCHURA": 1500.0, "PROFUNDIDAD": 600.0, "ALTURA": 2000.0,
+                        "NUMERO_NIVELES": 4, "CARGA_POR_NIVEL": 200.0, "ANCLAJE": "al_suelo",
+                        "ACABADO": "RAL5010_POLVO"}},
         ]
 
     # ------------------------------------------------------------------ regla de montante común (dimensionado)

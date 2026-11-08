@@ -61,7 +61,7 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
       }
     }
   }
-  const label = { encimera: "la encimera", balda: "la balda inferior", estante: "el estante superior" }[surface] ?? `la bandeja (${surface})`;
+  const label = tgt.label ?? { encimera: "la encimera", balda: "la balda inferior", estante: "el estante superior" }[surface] ?? `la bandeja (${surface})`;
   if (!alternatives.length) {
     const fixed = [[t_param, autoT], [n_param, autoN]].filter(([, a]) => !a).map(([p]) => p);
     const maxT = tOpts.length ? Math.max(...tOpts) : 0;
@@ -211,7 +211,8 @@ function fitLeg(family, ps, profAutos) {
 function selectFeet(family, ps, notes) {
   const m = family.construct(ps);
   const rep = analyze(m, false, false);
-  const rz = rep.reactions.filter((r) => r.combination === "ELS-1").map((r) => r.Rz_N);
+  const grav = new Set(Object.entries(rep.combinations.ELS).filter(([, f]) => "G" in f).map(([c]) => c));
+  const rz = rep.reactions.filter((r) => grav.has(r.combination)).map((r) => r.Rz_N);
   if (!rz.length) return;
   const need = Math.max(...rz) / G_ACC;
   const sp = family.support_param ?? "PIE_NIVELADOR", cat = family.support_category ?? "patas";

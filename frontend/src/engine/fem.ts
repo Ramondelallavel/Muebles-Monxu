@@ -225,14 +225,21 @@ const GX = [-0.9324695142031519, -0.6612093864662645, -0.2386191860831969, 0.238
 const GW = [0.17132449237917027, 0.3607615730481387, 0.46791393457269104, 0.46791393457269104, 0.3607615730481387, 0.17132449237917027];
 
 /** Cargas nodales equivalentes (funciones de forma lineales) de una densidad p(s) en [s0, s1]. */
-export function lineLoadToNodes(sNodes, p, s0, s1) {
+/** breaks: quiebros de p (regla de 45°); la integración se parte en ellos para que la cuadratura sea exacta. */
+export function lineLoadToNodes(sNodes, p, s0, s1, breaks = []) {
   const out = new Float64Array(sNodes.length);
+  const kinks = [...breaks].sort((x, y) => x - y);
   const integrate = (a, b, fn) => {
     if (b <= a) return 0.0;
-    const xm = (a + b) / 2, xr = (b - a) / 2;
-    let s = 0;
-    for (let i = 0; i < 6; i++) s += GW[i] * fn(xm + xr * GX[i]);
-    return s * xr;
+    const pts = [a, ...kinks.filter((k) => a < k && k < b), b];
+    let total = 0;
+    for (let j = 0; j < pts.length - 1; j++) {
+      const lo = pts[j], hi = pts[j + 1], xm = (lo + hi) / 2, xr = (hi - lo) / 2;
+      let s = 0;
+      for (let i = 0; i < 6; i++) s += GW[i] * fn(xm + xr * GX[i]);
+      total += s * xr;
+    }
+    return total;
   };
   const lo = sNodes[0], hi = sNodes.at(-1);
   out[0] += integrate(s0, Math.min(s1, lo), p);

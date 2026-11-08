@@ -128,6 +128,17 @@ class PuestoTrabajo(MesaIndustrial):
                         "CARGA_TOTAL": 500.0, "CARGA_PUNTUAL": 100.0, "NUMERO_BALDAS": 1, "CARGA_BALDA": 150.0,
                         "CARGA_ESTANTE": 80.0, "ESPESOR_CHAPA": 3.0, "USO": "trabajo_pesado", "ANCLAJE": "al_suelo",
                         "ACABADO": "RAL5010_POLVO"}},
+            {"id": "PT-1500-LAB-INOX", "name": "Puesto de laboratorio inoxidable 1.500 mm con estante y peto", "family": self.id,
+             "values": {"LONGITUD": 1500.0, "ANCHURA": 750.0, "ALTURA": 900.0, "ALTURA_TOTAL": 1700.0,
+                        "CARGA_TOTAL": 150.0, "CARGA_ESTANTE": 30.0, "PANEL_HERRAMIENTAS": 0, "PETO_TRASERO": 60.0,
+                        "MATERIAL_ESTRUCTURAL": "1.4301", "MATERIAL_CHAPA": "1.4301", "ACABADO": "INOX_SATINADO",
+                        "ENTORNO": "alimentario", "USO": "inspeccion", "CARGA_HORIZONTAL": 150.0,
+                        "ANCLAJE": "al_suelo"}},
+            {"id": "PT-1200-SENTADO", "name": "Puesto de montaje sentado 1.200 mm con reposapiés", "family": self.id,
+             "values": {"LONGITUD": 1200.0, "ANCHURA": 700.0, "ALTURA": 750.0, "ALTURA_TOTAL": 1600.0,
+                        "CARGA_TOTAL": 100.0, "CARGA_ESTANTE": 20.0, "REPOSAPIES": 1, "ALTURA_REPOSAPIES": 200.0,
+                        "NUMERO_BALDAS": 0, "CARGA_HORIZONTAL": 150.0, "ANCLAJE": "al_suelo",
+                        "USO": "montaje_ligero"}},
         ]
 
     # ------------------------------------------------------------------ ganchos de la mesa

@@ -47,13 +47,15 @@ class MesaIndustrial {
       candidates: d.candidates, constructive_defaults: d.constructive_defaults, leg_param: d.leg_param,
       frame_params: d.frame_params, auto_in_construct: d.auto_in_construct, verification_inputs: d.verification_inputs,
       support_param: "PIE_NIVELADOR", support_category: "patas", support_group: ["APO", "Apoyos niveladores"],
-      top_iid: "ENC.BANDEJA", top_label: "Encimera" });
+      top_iid: "ENC.BANDEJA", top_label: "Encimera", min_clear_height: 600.0 });
   }
   specs() { return this.def.params; }
   templates() { return this.def.templates; }
   describe() { const { templates, candidates, constructive_defaults, leg_param, frame_params, auto_in_construct, ...r } = this.def; return r; }
   newParams(values = {}, sources = {}) { return newParams(this.specs(), values, sources); }
 
+  /** ¿Lleva balda inferior? (las familias sin balda no tienen los parámetros de la balda). */
+  _hasShelf(ctx) { return ctx.get("NUMERO_BALDAS") >= 1; }
   /** Perfil de las vigas que forman pórtico con las patas en la dirección X (largueros) o Y (travesaños). */
   swayBeamParam(axis) { return axis === 0 ? "PERFIL_LARGUERO" : "PERFIL_TRAVESANO"; }
   /** Retranqueo bastidor–cara exterior para una chapa plegada: espesor + holgura (igual que en la derivación). */
@@ -189,11 +191,11 @@ class MesaIndustrial {
   _topFrameUses() { return ["PASO_FIJACIONES", "ALA_ENCIMERA"]; }
   /** Superficie de trabajo: encimera de chapa plegada atornillada al bastidor superior. */
   _buildTop(model, ctx, d, H, mat_c, fin) {
-    ctx.feature("F20", "Encimera de chapa plegada", () => {
+    ctx.feature("F20", `${this.top_label} de chapa plegada`, () => {
       ctx.uses("LONGITUD", "ANCHURA", "ALTURA", "ESP_ENC", "RADIO_ENC", "K_ENC", "ALA_ENCIMERA", "MATERIAL_CHAPA",
         "PASO_FIJACIONES", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ACABADO", "PETO_TRASERO");
       const spec = d.top_spec;
-      model.add("ENC.BANDEJA", "Encimera", sheetPart("encimera", `Encimera chapa ${g(spec.t)} mm`, spec, mat_c, fin), translation(0, 0, H), "ENC");
+      model.add("ENC.BANDEJA", this.top_label, sheetPart("encimera", `${this.top_label} chapa ${g(spec.t)} mm`, spec, mat_c, fin), translation(0, 0, H), "ENC");
       fasteners(model, d.fix_top, "ENC");
     });
   }
@@ -226,7 +228,8 @@ class MesaIndustrial {
         + `${pyStr(r)} mm: las aristas del bastidor interfieren con el pliegue de la encimera.`);
       const c = ctx.derive("RETRANQUEO", (p) => p.get("ESP_ENC") + p.get("HOLGURA_ENC"), "mm", "Retranqueo de la estructura respecto al canto exterior");
       const leg = C.profile(ctx.get("PERFIL_PATA")), rail = C.profile(ctx.get("PERFIL_LARGUERO"));
-      const trv = C.profile(ctx.get("PERFIL_TRAVESANO")), bas = C.profile(ctx.get("PERFIL_BASTIDOR"));
+      const trv = C.profile(ctx.get("PERFIL_TRAVESANO"));
+      const bas = "PERFIL_BASTIDOR" in v ? C.profile(ctx.get("PERFIL_BASTIDOR")) : null;     // sin balda: no existe
       if (leg.B !== leg.H) throw new Error("Las patas deben ser de tubo cuadrado");
       const a = leg.B;
       ctx.setDerived("SECCION_PATA", `${g(leg.B)}x${g(leg.H)}`, "mm", "Sección de pata", ["PERFIL_PATA"]);
@@ -253,7 +256,7 @@ class MesaIndustrial {
       ctx.setDerived("N_TRAVESANOS_INT", n_top, "ud", "Travesaños intermedios", ["NUMERO_TRAVESANOS", "SEPARACION_MAX_APOYOS", "LONGITUD"]);
       ctx.setDerived("VANO_ENCIMERA", pyRound((xe1 - xe0) / (n_top + 1), 2), "mm", "Vano entre apoyos de encimera",
         ["LONGITUD", "NUMERO_TRAVESANOS", "PERFIL_TRAVESANO", "RETRANQUEO"]);
-      const shelf = ctx.get("NUMERO_BALDAS") >= 1;
+      const shelf = this._hasShelf(ctx);
       Object.assign(d, { Lx: L, Ly: W, leg, rail, trv, bas, a, c, t, r, K, hn, tp, z_tf, z_leg0, leg_len, n_top, xe: [xe0, xe1], shelf });
       const rn = C.component("TUERCA_REMACHABLE_M6");
       const sc = C.component("TORNILLO_ISO7380_M6x12");
@@ -277,7 +280,7 @@ class MesaIndustrial {
       d.fix_top = fix_top;
       d.skirt = ctx.get("ALA_ENCIMERA");
       if (shelf) this._deriveShelf(ctx, model, d);
-      if (H - ctx.get("ALA_ENCIMERA") < 600) model.note("advertencia", "ERG-ALTURA", "Altura libre bajo encimera inferior a 600 mm.");
+      if (this.min_clear_height && H - ctx.get("ALA_ENCIMERA") < this.min_clear_height) model.note("advertencia", "ERG-ALTURA", `Altura libre bajo encimera inferior a ${g(this.min_clear_height)} mm.`);
       this._deriveFootrest(ctx, model, d);
     });
     return d;
@@ -1012,7 +1015,7 @@ class CarroTaller extends MesaIndustrial {
         const za = ctx.derive("COTA_ASA", (p) => p.get("ALTURA_ASA"), "mm", "Cota superior del asa");
         ctx.derive("LONGITUD_MONTANTE_ASA", (p) => p.get("ALTURA_ASA") - p.get("COTA_INICIO_PATA"), "mm", "Longitud de corte de los montantes del asa");
         d.z_asa = za;
-        if (za < H + 80) model.note("error", "GEO-ASA-BAJA", `El asa (${g(za)} mm) debe quedar al menos 80 mm por encima de la encimera (${g(H)} mm) para poder agarrarla.`);
+        if (za < H + 80) model.note("error", "GEO-ASA-BAJA", `El asa (${g(za)} mm) debe quedar al menos 80 mm por encima de la ${this.top_label.toLowerCase()} (${g(H)} mm) para poder agarrarla.`);
         if (asa.B > d.a) model.note("error", "DFM-ASA-ANCHO", `El perfil del asa ${asa.code} es más ancho que el montante.`);
       }
       ctx.setDerived("DIAMETRO_RUEDA", C.component(ctx.get("RUEDA")).wheel_d, "mm", "Diámetro de rueda", ["RUEDA"]);
@@ -1063,6 +1066,56 @@ class CarroTaller extends MesaIndustrial {
     Object.assign(model.dims, {
       envelope: { ids: ["ENC.BANDEJA", ...d.asa_corners.map((k) => `EST.PATA.${k}`)], dx: V.LONGITUD, dy: V.ANCHURA, zmax, names: ["LONGITUD", "ANCHURA"] },
       levels, drawing_expected: Object.fromEntries(levels.map((_, k) => [`DIST_NIVEL_${k + 1}`, zs[k + 1] - zs[k]])) });
+  }
+}
+
+// ============================================================================ carro plataforma (port de carro_plataforma.py)
+const FRAME_CLEARANCE = 20.0;          // mm libres entre el bastidor y la placa base (como el bastidor de la balda)
+const PLATFORM_H_MAX = 500.0;          // altura máxima de la plataforma (ParamSpec de ALTURA)
+class CarroPlataforma extends CarroTaller {
+  constructor() { super("carro_plataforma"); Object.assign(this, { top_label: "Plataforma", min_clear_height: null }); }
+  plateTargets(v) { return super.plateTargets(v).map((t) => ({ ...t, label: "la plataforma" })); }
+  _hasShelf(ctx) { return false; }
+  _derive(ctx, model) {
+    const d = super._derive(ctx, model);
+    const H = ctx.get("ALTURA"), hb = Math.max(d.rail.H, d.trv.H);
+    if (d.z_tf - hb < d.z_leg0 + FRAME_CLEARANCE - 1e-9) {
+      const zMin = Math.ceil((d.z_leg0 + FRAME_CLEARANCE + hb + d.t) / 5) * 5;
+      const code = ctx.get(this.support_param);
+      if (ctx.params.sources.ALTURA === "defecto" && zMin <= PLATFORM_H_MAX)
+        model.rule_fixes.ALTURA = [zMin, `Plataforma a ${g(zMin)} mm (regla de diseño): a la altura por defecto, ${g(H)} mm, el `
+          + `bastidor de ${g(hb)} mm de canto no cabía sobre las placas base de la rueda ${code}.`];
+      model.note("error", "GEO-PLATAFORMA-BAJA", `La plataforma (${g(H)} mm) está demasiado baja para la rueda ${code} (${g(d.hn)} mm) `
+        + `y el bastidor de ${g(hb)} mm de canto: ALTURA de ${g(zMin)} mm como mínimo.`);
+    }
+    return d;
+  }
+  _structure(model, d, legs) {
+    const st = super._structure(model, d, legs);
+    const mode = d.asa_mode;
+    st.product_word = mode !== "ninguna" ? "carro" : "plataforma";
+    if (mode !== "ninguna") {     // se empuja por el asa (la del extremo izquierdo si hay dos)
+      st.push_points = ["DI", "TI"].map((k) => ({ member: legs[k], z: d.z_asa - d.asa.H / 2 }));
+      st.push_height = st.sway_height = d.z_asa;
+      st.push_label = "Fuerza de maniobra en el asa (direcciones X e Y)";
+      st.push_where = "en el asa";
+    } else {
+      st.push_label = "Empuje horizontal en el plano de la plataforma (direcciones X e Y)";
+      st.push_where = "en el plano de la plataforma";
+    }
+    st.push_note = "hipótesis por defecto de empuje o tirón con las ruedas frenadas o bloqueadas por un obstáculo; debe confirmarse según el uso real del carro.";
+    const brake = mode === "un_extremo" ? "Las ruedas con freno van en el extremo del asa." : "Las ruedas con freno van en el extremo izquierdo (X = 0).";
+    const notch = { un_extremo: ", con las escotaduras alrededor de los montantes del asa,", dos_extremos: ", con las escotaduras alrededor de los montantes de las asas,", ninguna: "" }[mode];
+    st.assembly_texts = {
+      RUE: `Roscar las ruedas de espiga en las tuercas soldadas de las placas base hasta el tope y bloquearlas con su contratuerca. ${brake}`,
+      ENC: `Colocar la plataforma sobre el bastidor${notch} y fijarla con tornillos ISO 7380 M6 (8 N·m).` };
+    return st;
+  }
+  _extraDims(model, d) {
+    super._extraDims(model, d);
+    // la cota de la superficie se nombra como plataforma (la de la mesa es ALTURA_ENCIMERA)
+    model.dims.levels = model.dims.levels.map((x) => (x[0] === "ALTURA_ENCIMERA" ? ["ALTURA_PLATAFORMA", ...x.slice(1)] : x));
+    if ("ALTURA_ENCIMERA" in model.dims) { model.dims.ALTURA_PLATAFORMA = model.dims.ALTURA_ENCIMERA; delete model.dims.ALTURA_ENCIMERA; }
   }
 }
 
@@ -1442,7 +1495,7 @@ class MesaSoldadura extends MesaIndustrial {
       ctx.setDerived("N_TRAVESANOS_INT", n_top, "ud", "Travesaños intermedios", ["NUMERO_TRAVESANOS", "SEPARACION_MAX_APOYOS", "LONGITUD"]);
       ctx.setDerived("VANO_ENCIMERA", pyRound((xe1 - xe0) / (n_top + 1), 2), "mm", "Vano entre apoyos de la placa",
         ["LONGITUD", "NUMERO_TRAVESANOS", "PERFIL_TRAVESANO", "RETRANQUEO"]);
-      const shelf = ctx.get("NUMERO_BALDAS") >= 1;
+      const shelf = this._hasShelf(ctx);
       Object.assign(d, { Lx: L, Ly: W, leg, rail, trv, bas, a, c, t, hn, tp, z_tf, z_leg0, leg_len, n_top, xe: [xe0, xe1], shelf, peto: 0.0 });
       // ---- placa y retícula de amarre
       const system = v.SISTEMA_TALADROS;
@@ -1598,7 +1651,7 @@ class Tarima extends MesaSoldadura {
 
 export const REGISTRY = { mesa_industrial: new MesaIndustrial(), estanteria: new Estanteria(), puesto_trabajo: new PuestoTrabajo("puesto_trabajo"),
   carro_taller: new CarroTaller("carro_taller"), carro_estanteria: new CarroEstanteria(), mesa_soldadura: new MesaSoldadura(), estanteria_bateria: new EstanteriaBateria(),
-  tarima: new Tarima() };
+  tarima: new Tarima(), carro_plataforma: new CarroPlataforma() };
 export function family(fid) {
   const f = REGISTRY[fid];
   if (!f) {

@@ -9,6 +9,7 @@ export const OK = "CUMPLE", FAIL = "NO_CUMPLE", PENDING = "PENDIENTE";
 export const G_ACC = 9.81;
 const MAX_ELEMENT = 100.0;
 const N_ZERO = 1e-3;   // N: axil por debajo del cual la barra se considera sin compresión
+const MASCULINE_WORDS = ["carro", "puesto"];     // concordancia del texto de vuelco ("del carro vacío", "de la mesa vacía")
 
 const status = (u) => (u === null || u === undefined ? PENDING : u <= 1.0 + 1e-9 ? OK : FAIL);
 const check = (id, category, element, description, standard, value, limit, unit, utilization, st, combination = "", details = {}) =>
@@ -84,10 +85,10 @@ export class StructuralModel {
       const k0 = argmin((k) => P[k][0] + P[k][1]);
       const dd = P.map((p) => vsub(p, P[k0]));
       const kx = argmax((k) => Math.abs(dd[k][0]) - Math.abs(dd[k][1]));
-      const ky = argmax((k) => Math.abs(dd[k][1]) - Math.abs(dd[k][0]));
+      // tres coacciones en planta (isostáticas): un pie fijo en X-Y y otro, alejado en X, deslizante en X
       sups.forEach((sup, k) => {
         const n = this.frame.node(sup.point);
-        const fxr = k === k0 || k === ky, fyr = k === k0 || k === kx;
+        const fxr = k === k0, fyr = k === k0 || k === kx;
         this.frame.support(n, [fxr, fyr, true, false, false, false]);
         sup.node = n;
         sup.restraint = (fxr ? "X" : "") + (fyr ? "Y" : "") + "Z";
@@ -108,10 +109,10 @@ export class StructuralModel {
     }
     return total;
   }
-  lineLoad(c, member, p, s0g, s1g, axis) {
+  lineLoad(c, member, p, s0g, s1g, axis, breaks = []) {
     const chain = this.chains[member];
     const pairs = chain.map(([, n]) => [this.frame.nodes[n][axis], n]).sort((a, b) => a[0] - b[0]);
-    const F = lineLoadToNodes(pairs.map((x) => x[0]), p, s0g, s1g);
+    const F = lineLoadToNodes(pairs.map((x) => x[0]), p, s0g, s1g, breaks);
     let tot = 0;
     pairs.forEach(([, n], k) => { this.frame.addNodalLoad(c, n, [0, 0, -F[k]]); tot += F[k]; });
     return tot;
@@ -123,8 +124,10 @@ export class StructuralModel {
     let total = 0.0;
     for (let k = 0; k < gx.length - 1; k++) {
       const x0 = gx[k], x1 = gx[k + 1], a = x1 - x0;
-      for (const mem of level.long) total += this.lineLoad(c, mem, (s) => q * Math.min(s - x0, x1 - s, b / 2), x0, x1, 0);
-      for (const mem of [xm[k], xm[k + 1]]) total += this.lineLoad(c, mem, (s) => q * Math.min(s - yf, yb - s, a / 2), yf, yb, 1);
+      for (const mem of level.long) total += this.lineLoad(c, mem, (s) => q * Math.min(s - x0, x1 - s, b / 2), x0, x1, 0,
+        [x0 + b / 2, x1 - b / 2, (x0 + x1) / 2]);
+      for (const mem of [xm[k], xm[k + 1]]) total += this.lineLoad(c, mem, (s) => q * Math.min(s - yf, yb - s, a / 2), yf, yb, 1,
+        [yf + a / 2, yb - a / 2, (yf + yb) / 2]);
     }
     return total;
   }
@@ -227,17 +230,18 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   }
   const H_N = ps.CARGA_HORIZONTAL || 0.0;
   const topNodes = [];
-  if (H_N && top) {
-    for (const lid of st.leg_ids) {
-      const chain = sm.chains[lid];
-      const zt = top.z - model.instance(top.long[0]).part.profile.H / 2;
-      let best = chain[0];
-      for (const c of chain) if (Math.abs(fr.nodes[c[1]][2] - zt) < Math.abs(fr.nodes[best[1]][2] - zt)) best = c;
-      topNodes.push(best[1]);
-    }
+  const push = st.push_points;      // puntos de empuje propios (p. ej. el asa de un carro): [{member, z}]
+  const nearest = (chain, zt) => {
+    let best = chain[0];
+    for (const c of chain) if (Math.abs(fr.nodes[c[1]][2] - zt) < Math.abs(fr.nodes[best[1]][2] - zt)) best = c;
+    return best[1];
+  };
+  if (H_N && (push?.length || top)) {
+    if (push?.length) for (const pp of push) topNodes.push(nearest(sm.chains[pp.member], pp.z));
+    else for (const lid of st.leg_ids) topNodes.push(nearest(sm.chains[lid], top.z - model.instance(top.long[0]).part.profile.H / 2));
     for (const n of topNodes) { fr.addNodalLoad("HX", n, [H_N / topNodes.length, 0, 0]); fr.addNodalLoad("HY", n, [0, H_N / topNodes.length, 0]); }
-    cases.push({ id: "HX/HY", label: "Empuje horizontal en el plano de la encimera (direcciones X e Y)", value: `${g(H_N)} N`, total_N: H_N });
-    if (model.params.sources.CARGA_HORIZONTAL === "defecto") hyp.push(`Empuje horizontal de ${g(H_N)} N: ${crit.horizontal_service_load_note}`);
+    cases.push({ id: "HX/HY", label: st.push_label ?? "Empuje horizontal en el plano de la encimera (direcciones X e Y)", value: `${g(H_N)} N`, total_N: H_N });
+    if (model.params.sources.CARGA_HORIZONTAL === "defecto") hyp.push(`Empuje horizontal de ${g(H_N)} N: ${st.push_note ?? crit.horizontal_service_load_note}`);
   }
   const gG = pf.gamma_G, gQ = pf.gamma_Q, psi = pf.psi0_Q;
   const uls = { "ELU-1": { G: gG } };
@@ -318,7 +322,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   // ---------------------------------------------------------------- desplome
   if (U["ELS-3"] && topNodes.length) {
     const r = crit.deflection_limits.sway_height_ratio;
-    const lim = st.worktop_height / r;
+    const lim = (st.sway_height ?? st.worktop_height) / r;     // altura del punto de empuje (encimera o asa)
     for (const [cname, comp] of [["ELS-3", 0], ["ELS-4", 1]]) {
       const dx = Math.max(...topNodes.map((n) => Math.abs(U[cname][6 * n + comp])));
       checks.push(check(`S.${cname}`, "deformacion", "Estructura", `Desplome horizontal en dirección ${comp === 0 ? "X" : "Y"} bajo empuje de servicio`,
@@ -340,11 +344,14 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     const comp = C.component(sups[0].component);
     const cap = comp.rated_load_kg * G_ACC;
     const supWord = comp.category.startsWith("ruedas") ? "Ruedas" : "Pies niveladores";
-    if (sls["ELS-1"]) {
-      const rmax = Math.max(...reactions.filter((r) => r.combination === "ELS-1").map((r) => r.Rz_N));
+    // peor reacción de servicio con gravedad (uniforme, carga puntual, reposapiés...), no sólo ELS-1
+    let rmax = -Infinity, slsV = null;
+    for (const cname of Object.keys(sls).filter((c) => "G" in sls[c]))
+      for (const r of reactions) if (r.combination === cname && r.Rz_N > rmax) { rmax = r.Rz_N; slsV = cname; }
+    if (slsV) {
       checks.push(check("A.PIES", "apoyos", supWord, `Reacción máxima de servicio frente a la capacidad nominal de ${comp.name}`,
         "Dato de catálogo genérico — confirmar con la ficha técnica del proveedor", pyRound(rmax, 1), pyRound(cap, 1), "N", pyRound(rmax / cap, 4),
-        status(rmax / cap), "ELS-1", { fuente_capacidad: comp.rated_load_source ?? null }));
+        status(rmax / cap), slsV, { fuente_capacidad: comp.rated_load_source ?? null }));
       if (comp.rated_load_source === "catalogo_generico") hyp.push(`Capacidad de ${comp.name}: ${comp.rated_load_kg} kg (catálogo genérico de referencia, `
         + "debe confirmarse con la ficha técnica del proveedor).");
     } else checks.push(check("A.PIES", "apoyos", supWord, `Capacidad de los ${supWord.toLowerCase()}`, "—", null, cap, "N", null, PENDING, "", {}));
@@ -439,7 +446,8 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     if (H_N) {
       const Mstb = pf.gamma_G_stb * Wtot * lev, Mdst = pf.gamma_Q_dst * H_N * hgt;
       const ratio = Mstb > 0 ? Mdst / Mstb : Infinity;
-      const what = st.product_word ?? "mesa";
+      const w = st.product_word ?? "mesa";
+      const what = MASCULINE_WORDS.includes(w) ? `del ${w} vacío` : `de la ${w} vacía`;
       // empuje de servicio que el conjunto vacío resiste sin anclaje (EQU): γQ·H·h = γG,stb·W·brazo
       const det = { peso_N: Wtot, cdg_mm: cog.map((v) => pyRound(v, 1)), brazo_mm: lev, empuje_admisible_N: Math.floor(Mstb / (pf.gamma_Q_dst * hgt)) };
       if (ps.ANCLAJE === "al_suelo") {
@@ -451,7 +459,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
           + "soporte no está verificada (depende del taco y del suelo).");
         checks.push(check("E.ANCLAJE", "estabilidad", "Anclajes", `Vuelco impedido por anclaje al suelo: tracción de cálculo por anclaje bajo empuje de ${g(H_N)} N `
           + `(dirección ${dirn})`, "EN 1990 EQU + EN 1992-4 (anclajes, no evaluado)", pyRound(T / nA, 1), null, "N", null, PENDING, "EQU", det));
-      } else checks.push(check("E.VUELCO", "estabilidad", "Conjunto", `Vuelco de la ${what} vacía bajo empuje horizontal de ${g(H_N)} N en la parte superior `
+      } else checks.push(check("E.VUELCO", "estabilidad", "Conjunto", `Vuelco ${what} bajo empuje horizontal de ${g(H_N)} N ${st.push_where ?? "en la parte superior"} `
         + `(dirección ${dirn})`, "EN 1990 EQU (γG,stb = 0,9; γQ = 1,5)", pyRound(Mdst / 1e3, 2), pyRound(Mstb / 1e3, 2), "N·m", pyRound(ratio, 4), status(ratio), "EQU", det));
     }
     stability = { weight_N: Wtot, cog, levers };
@@ -480,7 +488,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
       fy_guaranteed: m.fy_guaranteed, design_code: m.design_code })),
     sections: [...secSet.values()].sort((a, b) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1; return 0; }),
     hypotheses: [...hyp,
-      "Apoyos: pies niveladores articulados con coacción horizontal isostática (un pie fijo en X-Y, uno deslizante en X, uno deslizante en Y y el cuarto sólo vertical); no se cuenta con el rozamiento.",
+      "Apoyos: pies niveladores articulados con coacción horizontal isostática (un pie fijo en X-Y, otro deslizante en X que impide el giro en planta, y los demás sólo verticales); no se cuenta con el rozamiento.",
       "Cargas de superficie repartidas al emparrillado mediante la regla de 45° (áreas tributarias).",
       `Longitud de pandeo de patas: ${betaLeg}·L (pórtico traslacional, conservador).`,
       `Curva de pandeo '${crit.buckling_curve_cold_formed_hollow}' para perfiles huecos conformados en frío (EN 1993-1-1 tabla 6.2).`],

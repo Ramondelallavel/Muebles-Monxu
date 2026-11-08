@@ -407,3 +407,100 @@ def test_tarima_dossier(tmp_path):
     res = generate_dossier(r, {"code": "P-TA", "revision": "A"}, tmp_path / "exp")
     assert res["qa"]["blocking"] == 0
     assert any(i["code"] == "EXP-STEP" and i["level"] == "ok" for i in res["qa"]["items"])
+
+
+# ------------------------------------------------------------------ carro plataforma
+def _build(fid, values):
+    from monxu.families import REGISTRY
+    fam = REGISTRY[fid]
+    ps = fam.new_params()
+    ps.update(values, "usuario")
+    return fam.build(ps)
+
+
+@pytest.mark.parametrize("tid", [t["id"] for t in family("carro_plataforma").templates()])
+def test_platform_templates_verify(tid):
+    from monxu.engineering.analysis import analyze
+    m = _build("carro_plataforma", _tpl("carro_plataforma", tid))
+    assert not [n for n in m.design_notes if n["level"] == "error"]
+    eng = analyze(m)
+    assert eng["status"] == "CUMPLE", [c["id"] for c in eng["checks"] if c["status"] != "CUMPLE"]
+    assert not any(n["code"] == "ERG-ALTURA" for n in m.design_notes)     # no hay puesto de trabajo bajo la plataforma
+    assert "BAL" not in m.subassemblies and not any(i.part.role == "balda" for i in m.instances)
+
+
+def test_platform_push_is_applied_at_the_handle():
+    from monxu.engineering.analysis import analyze
+    vals = {"LONGITUD": 1000, "ANCHURA": 600, "ALTURA": 300, "ALTURA_ASA": 950, "CARGA_TOTAL": 250,
+            "CARGA_HORIZONTAL": 50}
+    m = _build("carro_plataforma", vals)
+    eng = analyze(m)
+    st = next(c for c in eng["checks"] if c["id"] == "E.VUELCO")
+    assert "del carro vacío" in st["description"] and "en el asa" in st["description"]
+    assert st["value"] == pytest.approx(1.5 * 50 * 950 / 1e3, abs=0.01)        # γQ·H·h con h = altura del asa
+    hx = next(c for c in eng["load_cases"] if c["id"] == "HX/HY")
+    assert "asa" in hx["label"]
+    sway = next(c for c in eng["checks"] if c["id"] == "S.ELS-3")
+    assert sway["limit"] == pytest.approx(950 / 150, abs=1e-3)               # desplome referido a la altura del asa
+    # sin asa: empuje en el plano de la plataforma
+    eng2 = analyze(_build("carro_plataforma", {**vals, "ASA_EMPUJE": "ninguna"}))
+    st2 = next(c for c in eng2["checks"] if c["id"] == "E.VUELCO")
+    assert "de la plataforma vacía" in st2["description"] and st2["value"] == pytest.approx(1.5 * 50 * 300 / 1e3, abs=0.01)
+
+
+def test_platform_height_rule_and_user_value():
+    m = _build("carro_plataforma", {"LONGITUD": 1200, "ANCHURA": 800, "CARGA_TOTAL": 1000, "USO": "trabajo_pesado"})
+    v, src = m.params.values, m.params.sources
+    assert v["RUEDA"] == "RUEDA_ESP_M20_D200" and src["ALTURA"] == "regla_diseno" and v["ALTURA"] == 335.0
+    assert any(n["code"] == "REGLA-ALTURA" for n in m.design_notes)
+    assert not any(n["code"] == "GEO-PLATAFORMA-BAJA" for n in m.design_notes)
+    # un valor del usuario no se cambia: se informa la altura mínima
+    m2 = _build("carro_plataforma", {"LONGITUD": 1200, "ANCHURA": 800, "ALTURA": 250, "CARGA_TOTAL": 1000})
+    assert m2.params.values["ALTURA"] == 250.0
+    err = next(n for n in m2.design_notes if n["code"] == "GEO-PLATAFORMA-BAJA")
+    assert "335 mm como mínimo" in err["message"]
+
+
+def test_assistant_platform_and_lost_values():
+    r = assistant.handle(assistant.new_state(), "carro plataforma de 1200x800 para 500 kg con asa a 950 mm y peto de 50 mm")
+    assert r["family"] == "carro_plataforma" and r["ready_to_generate"]
+    p = r["parameters"]
+    assert p["LONGITUD"] == 1200 and p["ANCHURA"] == 800 and p["CARGA_TOTAL"] == 500
+    assert p["ALTURA_ASA"] == 950 and p["PETO_TRASERO"] == 50 and "ALTURA" not in p
+    # antes se perdían los datos interpretados que no estaban en una lista fija (asas, peto, reposapiés)
+    r = assistant.handle(assistant.new_state(), "carro de taller 1000x600x900 con dos asas y peto de 60 mm, 150 kg, reposapies")
+    p = r["parameters"]
+    assert p["ASA_EMPUJE"] == "dos_extremos" and p["PETO_TRASERO"] == 60 and p["REPOSAPIES"] == 1
+    # plataforma de trabajo para un operario: tarima (las ruedas no se generan)
+    r = assistant.handle(assistant.new_state(), "plataforma de trabajo con ruedas para un operario 1500x800")
+    assert r["family"] == "tarima"
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("mesa 1800x800x900 400 kg en la encimera y 100 kg en la balda",
+     {"ALTURA": 900.0, "CARGA_TOTAL": 400.0, "CARGA_BALDA": 100.0}),          # antes: 900.400 mm y kg
+    ("mesa 1800x800x950 400 kg", {"ALTURA": 950.0, "CARGA_TOTAL": 400.0}),     # antes: 50.400 kg
+    ("mesa de 1.500 x 800 x 900 con 1 500 kg", {"LONGITUD": 1500.0, "CARGA_TOTAL": 1500.0}),
+    ("mesa 1800x800x900, 400 kg, balda de 100 kg", {"CARGA_TOTAL": 400.0, "CARGA_BALDA": 100.0}),
+    ("mesa 1500x800x900 con balda de 80 kg y 200 kg en la encimera", {"CARGA_TOTAL": 200.0, "CARGA_BALDA": 80.0}),
+    ("estanteria de 1500x600x2000 con 5 niveles de 100 kg", {"CARGA_POR_NIVEL": 100.0}),   # no 100 kg en total
+    ("estanteria 1500x600x2000 5 baldas de 80 kg cada una", {"CARGA_POR_NIVEL": 80.0}),
+    ("carro estanteria de 4 bandejas de 30 kg", {"NUMERO_NIVELES": 4, "CARGA_POR_NIVEL": 30.0}),
+    ("plataforma con ruedas 1000x600, 300 kg, dos asas", {"LONGITUD": 1000.0, "ANCHURA": 600.0, "ASA_EMPUJE": "dos_extremos"}),
+    ("plataforma rodante sin asa de 1200 x 800, 400 kg", {"LONGITUD": 1200.0, "ASA_EMPUJE": "ninguna"}),
+])
+def test_interpreter_numbers_and_loads(text, expected):
+    from monxu.ai.interpreter import parse
+    it = parse(text)
+    for k, v in expected.items():
+        assert it.values.get(k) == v, (k, it.values)
+    if "sin asa" in text:
+        assert "ALTURA_ASA" not in it.values
+
+
+@pytest.mark.slow
+def test_platform_dossier(tmp_path):
+    r = regenerate("carro_plataforma", _tpl("carro_plataforma", "CP-1200x800-500"))
+    res = generate_dossier(r, {"code": "P-CP", "revision": "A"}, tmp_path / "exp")
+    assert res["qa"]["blocking"] == 0
+    assert any(i["code"] == "EXP-STEP" and i["level"] == "ok" for i in res["qa"]["items"])

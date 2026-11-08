@@ -8,3 +8,4 @@ from . import carro_estanteria  # noqa: F401
 from . import mesa_soldadura  # noqa: F401
 from . import estanteria_bateria  # noqa: F401
 from . import tarima  # noqa: F401
+from . import carro_plataforma  # noqa: F401

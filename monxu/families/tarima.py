@@ -120,6 +120,12 @@ class Tarima(MesaSoldadura):
              "family": self.id,
              "values": {"LONGITUD": 3000.0, "ANCHURA": 1200.0, "ALTURA": 450.0, "CARGA_TOTAL": 1100.0,
                         "CARGA_PUNTUAL": 250.0, "ANCLAJE": "al_suelo"}},
+            {"id": "TA-800x600-150", "name": "Tarima pequeña de operario 800 × 600 mm, 150 mm de altura", "family": self.id,
+             "values": {"LONGITUD": 800.0, "ANCHURA": 600.0, "ALTURA": 150.0, "CARGA_TOTAL": 100.0,
+                        "CARGA_PUNTUAL": 153.0}},
+            {"id": "TA-2400x1200-500", "name": "Plataforma de trabajo 2.400 × 1.200 mm, 500 mm (anclada)", "family": self.id,
+             "values": {"LONGITUD": 2400.0, "ANCHURA": 1200.0, "ALTURA": 500.0, "CARGA_TOTAL": 590.0,
+                        "CARGA_PUNTUAL": 153.0, "ANCLAJE": "al_suelo"}},
         ]
 
     # ------------------------------------------------------------------ derivados

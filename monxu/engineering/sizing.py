@@ -77,8 +77,8 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
                 alternatives.append({"t": t, "n": n, "vano": round(a, 1), "masa_kg": round(sheet + cross, 2),
                                      "sigma": round(ru["sigma"], 1), "w": round(rs["w"], 2)})
                 break
-    label = {"encimera": "la encimera", "balda": "la balda inferior", "estante": "el estante superior"}.get(
-        surface, f"la bandeja ({surface})")
+    label = tgt.get("label") or {"encimera": "la encimera", "balda": "la balda inferior",
+                                 "estante": "el estante superior"}.get(surface, f"la bandeja ({surface})")
     if not alternatives:
         fixed = [p for p, a in ((t_param, auto_t), (n_param, auto_n)) if not a]
         P_kg = ps.values.get("CARGA_PUNTUAL") if surface == "encimera" else None
@@ -266,10 +266,12 @@ def _fit_leg(family, ps: ParameterSet, prof_autos) -> bool:
 
 
 def _select_feet(family, ps: ParameterSet, notes: list) -> None:
-    """Pie nivelador de menor capacidad nominal que soporta la reacción vertical de servicio (ELS-1)."""
+    """Pie nivelador de menor capacidad nominal que soporta la peor reacción vertical de servicio (combinaciones con
+    peso propio: carga uniforme, puntual, reposapiés...)."""
     m = family.construct(ps)
     rep = analyze(m, include_stability=False, include_welds=False)
-    rz = [r["Rz_N"] for r in rep["reactions"] if r["combination"] == "ELS-1"]
+    grav = {c for c, f in rep["combinations"]["ELS"].items() if "G" in f}
+    rz = [r["Rz_N"] for r in rep["reactions"] if r["combination"] in grav]
     if not rz:
         return
     need = max(rz) / G_ACC

@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026.11-4",
+    "version": "2026.11-5",
     "note": "Componentes normalizados y comerciales. Las capacidades de carga de componentes comerciales (pies, ruedas) son datos de catálogo de referencia genéricos y DEBEN confirmarse con la ficha técnica del proveedor seleccionado; el informe de cálculo las marca como tales. Masas de tornillería: valores típicos de catálogo (orientativos)."
   },
   "components": {
@@ -510,6 +510,70 @@
       "rated_load_kg": 150,
       "rated_load_source": "catalogo_generico",
       "mass_kg": 1.5
+    },
+    "RUEDA_ESP_M20_D160": {
+      "category": "ruedas_espiga",
+      "name": "Rueda giratoria Ø160 con espiga roscada M20, carga pesada",
+      "standard": "EN 12532",
+      "thread": "M20",
+      "wheel_d": 160,
+      "wheel_w": 50,
+      "head_d": 70,
+      "stem_len": 40,
+      "nominal_height": 200,
+      "adjust": 0,
+      "brake": false,
+      "rated_load_kg": 200,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 2.2
+    },
+    "RUEDA_ESP_M20_D160_FRENO": {
+      "category": "ruedas_espiga",
+      "name": "Rueda giratoria Ø160 con espiga roscada M20 y freno, carga pesada",
+      "standard": "EN 12532",
+      "thread": "M20",
+      "wheel_d": 160,
+      "wheel_w": 50,
+      "head_d": 70,
+      "stem_len": 40,
+      "nominal_height": 200,
+      "adjust": 0,
+      "brake": true,
+      "rated_load_kg": 200,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 2.35
+    },
+    "RUEDA_ESP_M20_D200": {
+      "category": "ruedas_espiga",
+      "name": "Rueda giratoria Ø200 con espiga roscada M20, carga pesada",
+      "standard": "EN 12532",
+      "thread": "M20",
+      "wheel_d": 200,
+      "wheel_w": 50,
+      "head_d": 76,
+      "stem_len": 40,
+      "nominal_height": 245,
+      "adjust": 0,
+      "brake": false,
+      "rated_load_kg": 300,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 3.2
+    },
+    "RUEDA_ESP_M20_D200_FRENO": {
+      "category": "ruedas_espiga",
+      "name": "Rueda giratoria Ø200 con espiga roscada M20 y freno, carga pesada",
+      "standard": "EN 12532",
+      "thread": "M20",
+      "wheel_d": 200,
+      "wheel_w": 50,
+      "head_d": 76,
+      "stem_len": 40,
+      "nominal_height": 245,
+      "adjust": 0,
+      "brake": true,
+      "rated_load_kg": 300,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 3.35
     }
   },
   "consumables": {

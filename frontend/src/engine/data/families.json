@@ -3,7 +3,7 @@
   "materials": "2026.11-2",
   "profiles": "2026.11-2",
   "sheets": "2026.11-3",
-  "components": "2026.11-4",
+  "components": "2026.11-5",
   "standards": "2026.11-2",
   "criteria": "2026.11-2"
  },
@@ -104,6 +104,18 @@
     "Tarima de operario",
     "Plataforma frente a máquina",
     "Podio de trabajo"
+   ]
+  },
+  {
+   "id": "carro_plataforma",
+   "name": "Carro plataforma",
+   "category": "D",
+   "description": "Plataforma baja de chapa plegada sobre bastidor soldado y cuatro ruedas giratorias de espiga roscada (con freno en el lado del asa), con asa de empuje soldada en un extremo, en los dos o sin asa. Transporte interno de cargas de hasta 1.000 kg, comprobado frente al vuelco sin anclaje.",
+   "status": "implementada",
+   "configurations": [
+    "Carro plataforma",
+    "Carro plataforma de dos asas",
+    "Plataforma rodante sin asa"
    ]
   },
   {
@@ -1289,6 +1301,74 @@
       "CARGA_BALDA": 150.0,
       "ANCLAJE": "al_suelo"
      }
+    },
+    {
+     "id": "MI-3000-LINEA",
+     "name": "Mesa de línea 3.000 mm con balda (anclada)",
+     "family": "mesa_industrial",
+     "values": {
+      "LONGITUD": 3000.0,
+      "ANCHURA": 800.0,
+      "ALTURA": 900.0,
+      "CARGA_TOTAL": 500.0,
+      "NUMERO_BALDAS": 1,
+      "CARGA_BALDA": 150.0,
+      "CARGA_HORIZONTAL": 300.0,
+      "ANCLAJE": "al_suelo",
+      "ACABADO": "RAL7035_POLVO"
+     }
+    },
+    {
+     "id": "MI-1200-ALU",
+     "name": "Mesa de aluminio 1.200 mm para sala limpia",
+     "family": "mesa_industrial",
+     "values": {
+      "LONGITUD": 1200.0,
+      "ANCHURA": 700.0,
+      "ALTURA": 900.0,
+      "CARGA_TOTAL": 100.0,
+      "NUMERO_BALDAS": 1,
+      "CARGA_BALDA": 40.0,
+      "MATERIAL_ESTRUCTURAL": "EN AW-6082 T6",
+      "MATERIAL_CHAPA": "EN AW-5754 H22",
+      "ACABADO": "ANODIZADO_NATURAL",
+      "ENTORNO": "sala_limpia",
+      "USO": "inspeccion",
+      "CARGA_HORIZONTAL": 40.0
+     }
+    },
+    {
+     "id": "MI-1000-MAQUINA",
+     "name": "Mesa soporte de máquina 1.000 mm (anclada, con carga puntual)",
+     "family": "mesa_industrial",
+     "values": {
+      "LONGITUD": 1000.0,
+      "ANCHURA": 700.0,
+      "ALTURA": 800.0,
+      "CARGA_TOTAL": 300.0,
+      "CARGA_PUNTUAL": 150.0,
+      "NUMERO_BALDAS": 0,
+      "USO": "trabajo_pesado",
+      "ANCLAJE": "al_suelo",
+      "CARGA_HORIZONTAL": 300.0,
+      "ACABADO": "RAL7016_POLVO"
+     }
+    },
+    {
+     "id": "MI-1600-SENTADO",
+     "name": "Mesa de montaje sentado 1.600 mm con reposapiés",
+     "family": "mesa_industrial",
+     "values": {
+      "LONGITUD": 1600.0,
+      "ANCHURA": 800.0,
+      "ALTURA": 750.0,
+      "CARGA_TOTAL": 150.0,
+      "NUMERO_BALDAS": 0,
+      "REPOSAPIES": 1,
+      "ALTURA_REPOSAPIES": 200.0,
+      "CARGA_HORIZONTAL": 120.0,
+      "ACABADO": "RAL7035_POLVO"
+     }
     }
    ],
    "candidates": {
@@ -2160,6 +2240,34 @@
       "CARGA_POR_NIVEL": 80.0,
       "ANCLAJE": "al_suelo",
       "ACABADO": "RAL7035_POLVO"
+     }
+    },
+    {
+     "id": "ES-1000-3-LIGERA",
+     "name": "Estantería ligera de tres niveles 1.000 mm",
+     "family": "estanteria",
+     "values": {
+      "ANCHURA": 1000.0,
+      "PROFUNDIDAD": 400.0,
+      "ALTURA": 1500.0,
+      "NUMERO_NIVELES": 3,
+      "CARGA_POR_NIVEL": 50.0,
+      "ANCLAJE": "al_suelo",
+      "ACABADO": "RAL7035_POLVO"
+     }
+    },
+    {
+     "id": "ES-1800-5-ANCLADA",
+     "name": "Estantería de almacén de cinco niveles 1.800 mm (200 kg por nivel)",
+     "family": "estanteria",
+     "values": {
+      "ANCHURA": 1800.0,
+      "PROFUNDIDAD": 500.0,
+      "ALTURA": 2000.0,
+      "NUMERO_NIVELES": 5,
+      "CARGA_POR_NIVEL": 200.0,
+      "ANCLAJE": "al_suelo",
+      "ACABADO": "RAL5010_POLVO"
      }
     }
    ],
@@ -3556,6 +3664,47 @@
       "ANCLAJE": "al_suelo",
       "ACABADO": "RAL5010_POLVO"
      }
+    },
+    {
+     "id": "PT-1500-LAB-INOX",
+     "name": "Puesto de laboratorio inoxidable 1.500 mm con estante y peto",
+     "family": "puesto_trabajo",
+     "values": {
+      "LONGITUD": 1500.0,
+      "ANCHURA": 750.0,
+      "ALTURA": 900.0,
+      "ALTURA_TOTAL": 1700.0,
+      "CARGA_TOTAL": 150.0,
+      "CARGA_ESTANTE": 30.0,
+      "PANEL_HERRAMIENTAS": 0,
+      "PETO_TRASERO": 60.0,
+      "MATERIAL_ESTRUCTURAL": "1.4301",
+      "MATERIAL_CHAPA": "1.4301",
+      "ACABADO": "INOX_SATINADO",
+      "ENTORNO": "alimentario",
+      "USO": "inspeccion",
+      "CARGA_HORIZONTAL": 150.0,
+      "ANCLAJE": "al_suelo"
+     }
+    },
+    {
+     "id": "PT-1200-SENTADO",
+     "name": "Puesto de montaje sentado 1.200 mm con reposapiés",
+     "family": "puesto_trabajo",
+     "values": {
+      "LONGITUD": 1200.0,
+      "ANCHURA": 700.0,
+      "ALTURA": 750.0,
+      "ALTURA_TOTAL": 1600.0,
+      "CARGA_TOTAL": 100.0,
+      "CARGA_ESTANTE": 20.0,
+      "REPOSAPIES": 1,
+      "ALTURA_REPOSAPIES": 200.0,
+      "NUMERO_BALDAS": 0,
+      "CARGA_HORIZONTAL": 150.0,
+      "ANCLAJE": "al_suelo",
+      "USO": "montaje_ligero"
+     }
     }
    ],
    "candidates": {
@@ -4485,7 +4634,9 @@
       "RUEDA_ESP_M12_D80",
       "RUEDA_ESP_M12_D100",
       "RUEDA_ESP_M16_D125",
-      "RUEDA_ESP_M16_D160"
+      "RUEDA_ESP_M16_D160",
+      "RUEDA_ESP_M20_D160",
+      "RUEDA_ESP_M20_D200"
      ],
      "allow_auto": true,
      "nullable": false,
@@ -4869,6 +5020,42 @@
       "ENTORNO": "alimentario",
       "USO": "inspeccion",
       "CARGA_HORIZONTAL": 50.0
+     }
+    },
+    {
+     "id": "CT-1000-ALU",
+     "name": "Carro de aluminio ligero 1.000 mm",
+     "family": "carro_taller",
+     "values": {
+      "LONGITUD": 1000.0,
+      "ANCHURA": 600.0,
+      "ALTURA": 900.0,
+      "ALTURA_ASA": 1000.0,
+      "CARGA_TOTAL": 60.0,
+      "NUMERO_BALDAS": 1,
+      "CARGA_BALDA": 40.0,
+      "MATERIAL_ESTRUCTURAL": "EN AW-6082 T6",
+      "MATERIAL_CHAPA": "EN AW-5754 H22",
+      "ACABADO": "ANODIZADO_NATURAL",
+      "USO": "inspeccion",
+      "CARGA_HORIZONTAL": 30.0
+     }
+    },
+    {
+     "id": "MM-1500-TALLER",
+     "name": "Mesa móvil de taller 1.500 mm (sin asa, trabajo pesado)",
+     "family": "carro_taller",
+     "values": {
+      "LONGITUD": 1500.0,
+      "ANCHURA": 750.0,
+      "ALTURA": 900.0,
+      "CARGA_TOTAL": 200.0,
+      "NUMERO_BALDAS": 1,
+      "CARGA_BALDA": 100.0,
+      "ASA_EMPUJE": "ninguna",
+      "USO": "trabajo_pesado",
+      "CARGA_HORIZONTAL": 100.0,
+      "ACABADO": "RAL7016_POLVO"
      }
     }
    ],
@@ -5593,7 +5780,9 @@
       "RUEDA_ESP_M12_D80",
       "RUEDA_ESP_M12_D100",
       "RUEDA_ESP_M16_D125",
-      "RUEDA_ESP_M16_D160"
+      "RUEDA_ESP_M16_D160",
+      "RUEDA_ESP_M20_D160",
+      "RUEDA_ESP_M20_D200"
      ],
      "allow_auto": true,
      "nullable": false,
@@ -5834,6 +6023,38 @@
       "ACABADO": "INOX_SATINADO",
       "ENTORNO": "interior_humedo",
       "CARGA_HORIZONTAL": 50.0
+     }
+    },
+    {
+     "id": "CE-1000-4-PESADO",
+     "name": "Carro estantería de cuatro niveles 1.000 mm (80 kg por nivel)",
+     "family": "carro_estanteria",
+     "values": {
+      "ANCHURA": 1000.0,
+      "PROFUNDIDAD": 600.0,
+      "ALTURA": 1600.0,
+      "NUMERO_NIVELES": 4,
+      "CARGA_POR_NIVEL": 80.0,
+      "ASA_EMPUJE": "un_extremo",
+      "ALTURA_ASA": 1000.0,
+      "CARGA_HORIZONTAL": 60.0,
+      "ACABADO": "RAL7016_POLVO"
+     }
+    },
+    {
+     "id": "CE-700-4-COMPACTO",
+     "name": "Carro de bandejas compacto de cuatro niveles 700 mm",
+     "family": "carro_estanteria",
+     "values": {
+      "ANCHURA": 700.0,
+      "PROFUNDIDAD": 450.0,
+      "ALTURA": 1200.0,
+      "NUMERO_NIVELES": 4,
+      "CARGA_POR_NIVEL": 20.0,
+      "ASA_EMPUJE": "un_extremo",
+      "ALTURA_ASA": 1000.0,
+      "CARGA_HORIZONTAL": 30.0,
+      "ACABADO": "RAL5010_POLVO"
      }
     }
    ],
@@ -6981,6 +7202,46 @@
       "ALTURA_BALDA": 250.0,
       "CARGA_HORIZONTAL": 300.0
      }
+    },
+    {
+     "id": "MS-2400-28",
+     "name": "Mesa de soldadura 2.400 × 1.200 mm, sistema 28 (carga 1.500 kg)",
+     "family": "mesa_soldadura",
+     "values": {
+      "LONGITUD": 2400.0,
+      "ANCHURA": 1200.0,
+      "ALTURA": 850.0,
+      "CARGA_TOTAL": 1500.0,
+      "SISTEMA_TALADROS": "D28_P100",
+      "CARGA_HORIZONTAL": 500.0,
+      "ANCLAJE": "ninguno"
+     }
+    },
+    {
+     "id": "MS-1000x1000-16",
+     "name": "Mesa de soldadura compacta 1.000 × 1.000 mm, sistema 16",
+     "family": "mesa_soldadura",
+     "values": {
+      "LONGITUD": 1000.0,
+      "ANCHURA": 1000.0,
+      "ALTURA": 900.0,
+      "CARGA_TOTAL": 300.0,
+      "SISTEMA_TALADROS": "D16_P50",
+      "CARGA_HORIZONTAL": 200.0
+     }
+    },
+    {
+     "id": "MS-3000-28-PESADA",
+     "name": "Mesa de soldadura pesada 3.000 × 1.500 mm, sistema 28 (carga 2.000 kg)",
+     "family": "mesa_soldadura",
+     "values": {
+      "LONGITUD": 3000.0,
+      "ANCHURA": 1500.0,
+      "ALTURA": 850.0,
+      "CARGA_TOTAL": 2000.0,
+      "SISTEMA_TALADROS": "D28_P100",
+      "CARGA_HORIZONTAL": 500.0
+     }
     }
    ],
    "candidates": {
@@ -7829,6 +8090,36 @@
       "CARGA_POR_NIVEL": 60.0,
       "ANCLAJE": "al_suelo"
      }
+    },
+    {
+     "id": "EB-5x1000-5",
+     "name": "Estantería en batería de 5 módulos de 1.000 mm, cinco niveles",
+     "family": "estanteria_bateria",
+     "values": {
+      "NUMERO_MODULOS": 5,
+      "ANCHURA": 1000.0,
+      "PROFUNDIDAD": 500.0,
+      "ALTURA": 2000.0,
+      "NUMERO_NIVELES": 5,
+      "CARGA_POR_NIVEL": 120.0,
+      "ANCLAJE": "al_suelo",
+      "ACABADO": "RAL7035_POLVO"
+     }
+    },
+    {
+     "id": "EB-2x1500-4",
+     "name": "Estantería en batería de 2 módulos de 1.500 mm (200 kg por bandeja)",
+     "family": "estanteria_bateria",
+     "values": {
+      "NUMERO_MODULOS": 2,
+      "ANCHURA": 1500.0,
+      "PROFUNDIDAD": 600.0,
+      "ALTURA": 2000.0,
+      "NUMERO_NIVELES": 4,
+      "CARGA_POR_NIVEL": 200.0,
+      "ANCLAJE": "al_suelo",
+      "ACABADO": "RAL5010_POLVO"
+     }
     }
    ],
    "candidates": {
@@ -8532,6 +8823,31 @@
       "CARGA_PUNTUAL": 250.0,
       "ANCLAJE": "al_suelo"
      }
+    },
+    {
+     "id": "TA-800x600-150",
+     "name": "Tarima pequeña de operario 800 × 600 mm, 150 mm de altura",
+     "family": "tarima",
+     "values": {
+      "LONGITUD": 800.0,
+      "ANCHURA": 600.0,
+      "ALTURA": 150.0,
+      "CARGA_TOTAL": 100.0,
+      "CARGA_PUNTUAL": 153.0
+     }
+    },
+    {
+     "id": "TA-2400x1200-500",
+     "name": "Plataforma de trabajo 2.400 × 1.200 mm, 500 mm (anclada)",
+     "family": "tarima",
+     "values": {
+      "LONGITUD": 2400.0,
+      "ANCHURA": 1200.0,
+      "ALTURA": 500.0,
+      "CARGA_TOTAL": 590.0,
+      "CARGA_PUNTUAL": 153.0,
+      "ANCLAJE": "al_suelo"
+     }
     }
    ],
    "candidates": {
@@ -8587,6 +8903,1019 @@
     "FACTOR_K",
     "NUMERO_TRAVESANOS",
     "NUMERO_TRAVESANOS_BALDA",
+    "HOLGURA_ENCIMERA"
+   ]
+  },
+  "carro_plataforma": {
+   "id": "carro_plataforma",
+   "name": "Carro plataforma",
+   "prefix": "CP",
+   "category": "D",
+   "description": "Plataforma baja de chapa plegada sobre bastidor soldado y cuatro ruedas giratorias de espiga roscada (con freno en el lado del asa), con asa de empuje soldada en un extremo, en los dos o sin asa. Transporte interno de cargas de hasta 1.000 kg, comprobado frente al vuelco sin anclaje.",
+   "status": "implementada",
+   "configurations": [
+    "Carro plataforma",
+    "Carro plataforma de dos asas",
+    "Plataforma rodante sin asa"
+   ],
+   "groups": [
+    {
+     "id": "dimensiones",
+     "label": "Configuración dimensional"
+    },
+    {
+     "id": "materiales",
+     "label": "Materiales y acabados"
+    },
+    {
+     "id": "construccion",
+     "label": "Configuración constructiva"
+    },
+    {
+     "id": "accesorios",
+     "label": "Accesorios"
+    },
+    {
+     "id": "cargas",
+     "label": "Cargas y condiciones de trabajo"
+    }
+   ],
+   "params": [
+    {
+     "name": "LONGITUD",
+     "label": "Longitud",
+     "type": "float",
+     "default": 1000.0,
+     "unit": "mm",
+     "group": "dimensiones",
+     "min": 600,
+     "max": 2000,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "ANCHURA",
+     "label": "Anchura (fondo)",
+     "type": "float",
+     "default": 600.0,
+     "unit": "mm",
+     "group": "dimensiones",
+     "min": 400,
+     "max": 1000,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "ALTURA",
+     "label": "Altura de la plataforma (cara superior)",
+     "type": "float",
+     "default": 300.0,
+     "unit": "mm",
+     "group": "dimensiones",
+     "min": 200.0,
+     "max": 500.0,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": false,
+     "help": "Cota de la cara superior desde el suelo. Debe dejar sitio al bastidor sobre las placas base de las ruedas: con el valor por defecto se eleva si la rueda no cabe.",
+     "advanced": false
+    },
+    {
+     "name": "ALTURA_ASA",
+     "label": "Altura del asa de empuje",
+     "type": "float",
+     "default": 950.0,
+     "unit": "mm",
+     "group": "dimensiones",
+     "min": 800,
+     "max": 1150,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": false,
+     "help": "Cota superior del asa desde el suelo (sin efecto si el carro no lleva asa).",
+     "advanced": false
+    },
+    {
+     "name": "MATERIAL_ESTRUCTURAL",
+     "label": "Material de la estructura",
+     "type": "choice",
+     "default": "S235JRH",
+     "unit": null,
+     "group": "materiales",
+     "min": null,
+     "max": null,
+     "choices": [
+      "S235JRH",
+      "S355J2H",
+      "1.4301",
+      "1.4404",
+      "EN AW-6082 T6",
+      "S275J0H",
+      "EN AW-6060 T66"
+     ],
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "MATERIAL_CHAPA",
+     "label": "Material de chapa",
+     "type": "choice",
+     "default": "S235JR",
+     "unit": null,
+     "group": "materiales",
+     "min": null,
+     "max": null,
+     "choices": [
+      "S235JR",
+      "DC01",
+      "1.4301",
+      "1.4404",
+      "EN AW-5754 H22",
+      "S275JR",
+      "S355JR",
+      "S250GD+Z",
+      "DX51D+Z",
+      "1.4016"
+     ],
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "ESPESOR_CHAPA",
+     "label": "Espesor de chapa de la plataforma",
+     "type": "float",
+     "default": "auto",
+     "unit": "mm",
+     "group": "materiales",
+     "min": 0.8,
+     "max": 6,
+     "choices": null,
+     "allow_auto": true,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "ESPESOR_PLACA_BASE",
+     "label": "Espesor de placa base",
+     "type": "float",
+     "default": 5.0,
+     "unit": "mm",
+     "group": "materiales",
+     "min": 3,
+     "max": 12,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "ACABADO",
+     "label": "Acabado",
+     "type": "choice",
+     "default": "RAL7035_POLVO",
+     "unit": null,
+     "group": "materiales",
+     "min": null,
+     "max": null,
+     "choices": [
+      "ANODIZADO_NATURAL",
+      "CATAFORESIS_POLVO",
+      "GALVANIZADO",
+      "INOX_PULIDO",
+      "INOX_SATINADO",
+      "RAL1023_POLVO",
+      "RAL2004_POLVO",
+      "RAL3020_POLVO",
+      "RAL5010_POLVO",
+      "RAL5015_POLVO",
+      "RAL6011_POLVO",
+      "RAL7012_POLVO",
+      "RAL7016_POLVO",
+      "RAL7035_POLVO",
+      "RAL7040_POLVO",
+      "RAL9005_POLVO",
+      "RAL9010_POLVO",
+      "SIN_ACABADO",
+      "ZINCADO_CONTINUO"
+     ],
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "PERFIL_PATA",
+     "label": "Perfil de patas",
+     "type": "choice",
+     "default": "auto",
+     "unit": null,
+     "group": "construccion",
+     "min": null,
+     "max": null,
+     "choices": [
+      "SHS 20x20x1.5",
+      "SHS 20x20x2",
+      "SHS 25x25x1.5",
+      "SHS 25x25x2",
+      "SHS 30x30x1.5",
+      "SHS 30x30x2",
+      "SHS 30x30x3",
+      "SHS 40x40x1.5",
+      "SHS 40x40x2",
+      "SHS 40x40x3",
+      "SHS 40x40x4",
+      "SHS 50x50x2",
+      "SHS 50x50x3",
+      "SHS 50x50x4",
+      "SHS 50x50x5",
+      "SHS 60x60x2",
+      "SHS 60x60x3",
+      "SHS 60x60x4",
+      "SHS 60x60x5",
+      "SHS 70x70x3",
+      "SHS 70x70x4",
+      "SHS 70x70x5",
+      "SHS 80x80x3",
+      "SHS 80x80x4",
+      "SHS 80x80x5",
+      "SHS 90x90x3",
+      "SHS 90x90x4",
+      "SHS 100x100x3",
+      "SHS 100x100x4",
+      "SHS 100x100x5",
+      "SHS 120x120x4",
+      "SHS 120x120x5"
+     ],
+     "allow_auto": true,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "PERFIL_LARGUERO",
+     "label": "Perfil de largueros superiores",
+     "type": "choice",
+     "default": "auto",
+     "unit": null,
+     "group": "construccion",
+     "min": null,
+     "max": null,
+     "choices": [
+      "RHS 30x20x2",
+      "RHS 40x20x2",
+      "RHS 50x25x2",
+      "RHS 50x30x2",
+      "RHS 50x30x3",
+      "RHS 60x30x2",
+      "RHS 60x30x3",
+      "RHS 60x40x2",
+      "RHS 60x40x3",
+      "RHS 60x40x4",
+      "RHS 80x40x2",
+      "RHS 80x40x3",
+      "RHS 80x40x4",
+      "RHS 80x60x3",
+      "RHS 80x60x4",
+      "RHS 100x40x3",
+      "RHS 100x40x4",
+      "RHS 100x50x3",
+      "RHS 100x50x4",
+      "RHS 100x50x5",
+      "RHS 100x60x3",
+      "RHS 100x60x4",
+      "RHS 120x60x4",
+      "RHS 120x60x5",
+      "RHS 120x80x4",
+      "RHS 120x80x5",
+      "SHS 20x20x1.5",
+      "SHS 20x20x2",
+      "SHS 25x25x1.5",
+      "SHS 25x25x2",
+      "SHS 30x30x1.5",
+      "SHS 30x30x2",
+      "SHS 30x30x3",
+      "SHS 40x40x1.5",
+      "SHS 40x40x2",
+      "SHS 40x40x3",
+      "SHS 40x40x4",
+      "SHS 50x50x2",
+      "SHS 50x50x3",
+      "SHS 50x50x4",
+      "SHS 50x50x5",
+      "SHS 60x60x2",
+      "SHS 60x60x3",
+      "SHS 60x60x4",
+      "SHS 60x60x5",
+      "SHS 70x70x3",
+      "SHS 70x70x4",
+      "SHS 70x70x5",
+      "SHS 80x80x3",
+      "SHS 80x80x4",
+      "SHS 80x80x5",
+      "SHS 90x90x3",
+      "SHS 90x90x4",
+      "SHS 100x100x3",
+      "SHS 100x100x4",
+      "SHS 100x100x5",
+      "SHS 120x120x4",
+      "SHS 120x120x5"
+     ],
+     "allow_auto": true,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "PERFIL_TRAVESANO",
+     "label": "Perfil de travesaños superiores",
+     "type": "choice",
+     "default": "auto",
+     "unit": null,
+     "group": "construccion",
+     "min": null,
+     "max": null,
+     "choices": [
+      "RHS 30x20x2",
+      "RHS 40x20x2",
+      "RHS 50x25x2",
+      "RHS 50x30x2",
+      "RHS 50x30x3",
+      "RHS 60x30x2",
+      "RHS 60x30x3",
+      "RHS 60x40x2",
+      "RHS 60x40x3",
+      "RHS 60x40x4",
+      "RHS 80x40x2",
+      "RHS 80x40x3",
+      "RHS 80x40x4",
+      "RHS 80x60x3",
+      "RHS 80x60x4",
+      "RHS 100x40x3",
+      "RHS 100x40x4",
+      "RHS 100x50x3",
+      "RHS 100x50x4",
+      "RHS 100x50x5",
+      "RHS 100x60x3",
+      "RHS 100x60x4",
+      "RHS 120x60x4",
+      "RHS 120x60x5",
+      "RHS 120x80x4",
+      "RHS 120x80x5",
+      "SHS 20x20x1.5",
+      "SHS 20x20x2",
+      "SHS 25x25x1.5",
+      "SHS 25x25x2",
+      "SHS 30x30x1.5",
+      "SHS 30x30x2",
+      "SHS 30x30x3",
+      "SHS 40x40x1.5",
+      "SHS 40x40x2",
+      "SHS 40x40x3",
+      "SHS 40x40x4",
+      "SHS 50x50x2",
+      "SHS 50x50x3",
+      "SHS 50x50x4",
+      "SHS 50x50x5",
+      "SHS 60x60x2",
+      "SHS 60x60x3",
+      "SHS 60x60x4",
+      "SHS 60x60x5",
+      "SHS 70x70x3",
+      "SHS 70x70x4",
+      "SHS 70x70x5",
+      "SHS 80x80x3",
+      "SHS 80x80x4",
+      "SHS 80x80x5",
+      "SHS 90x90x3",
+      "SHS 90x90x4",
+      "SHS 100x100x3",
+      "SHS 100x100x4",
+      "SHS 100x100x5",
+      "SHS 120x120x4",
+      "SHS 120x120x5"
+     ],
+     "allow_auto": true,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "NUMERO_TRAVESANOS",
+     "label": "Travesaños intermedios bajo encimera",
+     "type": "int",
+     "default": "auto",
+     "unit": "ud",
+     "group": "construccion",
+     "min": 0,
+     "max": 20,
+     "choices": null,
+     "allow_auto": true,
+     "nullable": false,
+     "help": "'auto': mínimo número que verifica la chapa (o la separación máxima si no hay carga definida).",
+     "advanced": false
+    },
+    {
+     "name": "SEPARACION_MAX_APOYOS",
+     "label": "Separación máxima entre apoyos de chapa (regla constructiva)",
+     "type": "float",
+     "default": 600.0,
+     "unit": "mm",
+     "group": "construccion",
+     "min": 150,
+     "max": 1200,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": true
+    },
+    {
+     "name": "ALA_ENCIMERA",
+     "label": "Altura de pestaña de la plataforma",
+     "type": "float",
+     "default": 40.0,
+     "unit": "mm",
+     "group": "construccion",
+     "min": 20,
+     "max": 100,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "RADIO_PLEGADO",
+     "label": "Radio interior de plegado",
+     "type": "float",
+     "default": "auto",
+     "unit": "mm",
+     "group": "construccion",
+     "min": 0.5,
+     "max": 20,
+     "choices": null,
+     "allow_auto": true,
+     "nullable": false,
+     "help": "",
+     "advanced": true
+    },
+    {
+     "name": "FACTOR_K",
+     "label": "Factor K",
+     "type": "float",
+     "default": "auto",
+     "unit": null,
+     "group": "construccion",
+     "min": 0.2,
+     "max": 0.5,
+     "choices": null,
+     "allow_auto": true,
+     "nullable": false,
+     "help": "'auto': DIN 6935.",
+     "advanced": true
+    },
+    {
+     "name": "HOLGURA_ENCIMERA",
+     "label": "Holgura estructura–pestaña",
+     "type": "float",
+     "default": "auto",
+     "unit": "mm",
+     "group": "construccion",
+     "min": 0.5,
+     "max": 5,
+     "choices": null,
+     "allow_auto": true,
+     "nullable": false,
+     "help": "'auto': máx(radio interior de plegado, cabeza de tuerca remachable). Con holgura menor que el radio, las aristas vivas del bastidor interfieren con la zona de plegado.",
+     "advanced": true
+    },
+    {
+     "name": "HOLGURA_ESCOTADURA",
+     "label": "Holgura de escotadura de balda",
+     "type": "float",
+     "default": 2.0,
+     "unit": "mm",
+     "group": "construccion",
+     "min": 1,
+     "max": 6,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": true
+    },
+    {
+     "name": "PASO_FIJACIONES",
+     "label": "Paso máximo de fijaciones",
+     "type": "float",
+     "default": 400.0,
+     "unit": "mm",
+     "group": "construccion",
+     "min": 150,
+     "max": 800,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": true
+    },
+    {
+     "name": "FIJACION_ENCIMERA",
+     "label": "Fijación de chapas",
+     "type": "choice",
+     "default": "atornillada",
+     "unit": null,
+     "group": "construccion",
+     "min": null,
+     "max": null,
+     "choices": [
+      "atornillada"
+     ],
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "PERFIL_ASA",
+     "label": "Perfil del asa",
+     "type": "choice",
+     "default": "auto",
+     "unit": null,
+     "group": "construccion",
+     "min": null,
+     "max": null,
+     "choices": [
+      "RHS 30x20x2",
+      "RHS 40x20x2",
+      "RHS 50x25x2",
+      "RHS 50x30x2",
+      "RHS 50x30x3",
+      "RHS 60x30x2",
+      "RHS 60x30x3",
+      "RHS 60x40x2",
+      "RHS 60x40x3",
+      "RHS 60x40x4",
+      "RHS 80x40x2",
+      "RHS 80x40x3",
+      "RHS 80x40x4",
+      "RHS 80x60x3",
+      "RHS 80x60x4",
+      "RHS 100x40x3",
+      "RHS 100x40x4",
+      "RHS 100x50x3",
+      "RHS 100x50x4",
+      "RHS 100x50x5",
+      "RHS 100x60x3",
+      "RHS 100x60x4",
+      "RHS 120x60x4",
+      "RHS 120x60x5",
+      "RHS 120x80x4",
+      "RHS 120x80x5",
+      "SHS 20x20x1.5",
+      "SHS 20x20x2",
+      "SHS 25x25x1.5",
+      "SHS 25x25x2",
+      "SHS 30x30x1.5",
+      "SHS 30x30x2",
+      "SHS 30x30x3",
+      "SHS 40x40x1.5",
+      "SHS 40x40x2",
+      "SHS 40x40x3",
+      "SHS 40x40x4",
+      "SHS 50x50x2",
+      "SHS 50x50x3",
+      "SHS 50x50x4",
+      "SHS 50x50x5",
+      "SHS 60x60x2",
+      "SHS 60x60x3",
+      "SHS 60x60x4",
+      "SHS 60x60x5",
+      "SHS 70x70x3",
+      "SHS 70x70x4",
+      "SHS 70x70x5",
+      "SHS 80x80x3",
+      "SHS 80x80x4",
+      "SHS 80x80x5",
+      "SHS 90x90x3",
+      "SHS 90x90x4",
+      "SHS 100x100x3",
+      "SHS 100x100x4",
+      "SHS 100x100x5",
+      "SHS 120x120x4",
+      "SHS 120x120x5"
+     ],
+     "allow_auto": true,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "TIPO_APOYO",
+     "label": "Tipo de apoyo",
+     "type": "choice",
+     "default": "ruedas",
+     "unit": null,
+     "group": "accesorios",
+     "min": null,
+     "max": null,
+     "choices": [
+      "ruedas"
+     ],
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "RUEDA",
+     "label": "Rueda giratoria (espiga roscada)",
+     "type": "choice",
+     "default": "auto",
+     "unit": null,
+     "group": "accesorios",
+     "min": null,
+     "max": null,
+     "choices": [
+      "RUEDA_ESP_M12_D80",
+      "RUEDA_ESP_M12_D100",
+      "RUEDA_ESP_M16_D125",
+      "RUEDA_ESP_M16_D160",
+      "RUEDA_ESP_M20_D160",
+      "RUEDA_ESP_M20_D200"
+     ],
+     "allow_auto": true,
+     "nullable": false,
+     "help": "'auto': la de menor capacidad nominal que soporta la reacción de servicio por rueda. Las del extremo izquierdo (lado del asa) se montan con freno.",
+     "advanced": false
+    },
+    {
+     "name": "ASA_EMPUJE",
+     "label": "Asa de empuje",
+     "type": "choice",
+     "default": "un_extremo",
+     "unit": null,
+     "group": "accesorios",
+     "min": null,
+     "max": null,
+     "choices": [
+      "un_extremo",
+      "dos_extremos",
+      "ninguna"
+     ],
+     "allow_auto": false,
+     "nullable": false,
+     "help": "un_extremo: asa en el extremo izquierdo. dos_extremos: asa en ambos extremos (se maniobra desde cualquier lado). ninguna: mesa móvil sin asa.",
+     "advanced": false
+    },
+    {
+     "name": "PETO_TRASERO",
+     "label": "Peto trasero (altura sobre la plataforma)",
+     "type": "float",
+     "default": 0.0,
+     "unit": "mm",
+     "group": "accesorios",
+     "min": 0,
+     "max": 200,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": false,
+     "help": "Borde elevado en el lado largo trasero (Y = ANCHURA) que retiene la carga.",
+     "advanced": false
+    },
+    {
+     "name": "TOLERANCIAS",
+     "label": "Tolerancias generales",
+     "type": "choice",
+     "default": "ISO 2768-mK",
+     "unit": null,
+     "group": "construccion",
+     "min": null,
+     "max": null,
+     "choices": [
+      "ISO 2768-mK",
+      "ISO 2768-fH",
+      "ISO 2768-cL"
+     ],
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": true
+    },
+    {
+     "name": "CLASE_EJECUCION",
+     "label": "Clase de ejecución (EN 1090-2)",
+     "type": "choice",
+     "default": "EXC1",
+     "unit": null,
+     "group": "construccion",
+     "min": null,
+     "max": null,
+     "choices": [
+      "EXC1",
+      "EXC2"
+     ],
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": true
+    },
+    {
+     "name": "CARGA_TOTAL",
+     "label": "Carga distribuida sobre la plataforma",
+     "type": "float",
+     "default": null,
+     "unit": "kg",
+     "group": "cargas",
+     "min": 0,
+     "max": 1000,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": true,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "CARGA_PUNTUAL",
+     "label": "Carga puntual sobre la plataforma",
+     "type": "float",
+     "default": null,
+     "unit": "kg",
+     "group": "cargas",
+     "min": 0,
+     "max": 1000,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": true,
+     "help": "Aplicada sobre una huella cuadrada de 100 mm en la posición más desfavorable.",
+     "advanced": false
+    },
+    {
+     "name": "CARGA_HORIZONTAL",
+     "label": "Fuerza de maniobra en el asa",
+     "type": "float",
+     "default": 50.0,
+     "unit": "N",
+     "group": "cargas",
+     "min": 0,
+     "max": 1000,
+     "choices": null,
+     "allow_auto": false,
+     "nullable": false,
+     "help": "Empuje o tirón horizontal con las ruedas frenadas o bloqueadas por un obstáculo, en la dirección más desfavorable. Se aplica en el asa (sin asa, en el plano de la plataforma) y es la acción que puede volcar el carro vacío.",
+     "advanced": false
+    },
+    {
+     "name": "USO",
+     "label": "Uso previsto",
+     "type": "choice",
+     "default": "montaje",
+     "unit": null,
+     "group": "cargas",
+     "min": null,
+     "max": null,
+     "choices": [
+      "montaje_ligero",
+      "montaje",
+      "trabajo_pesado",
+      "inspeccion",
+      "laboratorio",
+      "embalaje"
+     ],
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "FRECUENCIA",
+     "label": "Frecuencia de trabajo",
+     "type": "choice",
+     "default": "diaria",
+     "unit": null,
+     "group": "cargas",
+     "min": null,
+     "max": null,
+     "choices": [
+      "ocasional",
+      "diaria",
+      "intensiva"
+     ],
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "ENTORNO",
+     "label": "Entorno",
+     "type": "choice",
+     "default": "interior_seco",
+     "unit": null,
+     "group": "cargas",
+     "min": null,
+     "max": null,
+     "choices": [
+      "interior_seco",
+      "interior_humedo",
+      "exterior",
+      "alimentario",
+      "sala_limpia"
+     ],
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "TIPO_SUELO",
+     "label": "Tipo de suelo",
+     "type": "choice",
+     "default": "nivelado",
+     "unit": null,
+     "group": "cargas",
+     "min": null,
+     "max": null,
+     "choices": [
+      "nivelado",
+      "irregular"
+     ],
+     "allow_auto": false,
+     "nullable": false,
+     "help": "",
+     "advanced": false
+    },
+    {
+     "name": "ANCLAJE",
+     "label": "Anclaje al suelo",
+     "type": "choice",
+     "default": "ninguno",
+     "unit": null,
+     "group": "cargas",
+     "min": null,
+     "max": null,
+     "choices": [
+      "ninguno"
+     ],
+     "allow_auto": false,
+     "nullable": false,
+     "help": "Un carro no se ancla: la estabilidad se comprueba sin anclaje.",
+     "advanced": false
+    }
+   ],
+   "verification_inputs": [
+    "CARGA_TOTAL"
+   ],
+   "templates": [
+    {
+     "id": "CP-1000x600",
+     "name": "Carro plataforma 1.000 × 600 mm (250 kg)",
+     "family": "carro_plataforma",
+     "values": {
+      "LONGITUD": 1000.0,
+      "ANCHURA": 600.0,
+      "ALTURA": 300.0,
+      "ALTURA_ASA": 950.0,
+      "CARGA_TOTAL": 250.0,
+      "CARGA_HORIZONTAL": 50.0,
+      "ACABADO": "RAL5010_POLVO"
+     }
+    },
+    {
+     "id": "CP-1200x800-500",
+     "name": "Carro plataforma 1.200 × 800 mm (500 kg)",
+     "family": "carro_plataforma",
+     "values": {
+      "LONGITUD": 1200.0,
+      "ANCHURA": 800.0,
+      "ALTURA": 320.0,
+      "ALTURA_ASA": 950.0,
+      "CARGA_TOTAL": 500.0,
+      "USO": "trabajo_pesado",
+      "CARGA_HORIZONTAL": 60.0,
+      "ACABADO": "RAL7016_POLVO"
+     }
+    },
+    {
+     "id": "CP-1600x800-2ASAS",
+     "name": "Carro plataforma de dos asas 1.600 × 800 mm (600 kg)",
+     "family": "carro_plataforma",
+     "values": {
+      "LONGITUD": 1600.0,
+      "ANCHURA": 800.0,
+      "ALTURA": 350.0,
+      "ALTURA_ASA": 950.0,
+      "ASA_EMPUJE": "dos_extremos",
+      "CARGA_TOTAL": 600.0,
+      "USO": "trabajo_pesado",
+      "CARGA_HORIZONTAL": 60.0,
+      "ACABADO": "RAL7016_POLVO"
+     }
+    },
+    {
+     "id": "PR-1200x800",
+     "name": "Plataforma rodante sin asa 1.200 × 800 mm (400 kg)",
+     "family": "carro_plataforma",
+     "values": {
+      "LONGITUD": 1200.0,
+      "ANCHURA": 800.0,
+      "ALTURA": 300.0,
+      "ASA_EMPUJE": "ninguna",
+      "CARGA_TOTAL": 400.0,
+      "CARGA_HORIZONTAL": 100.0,
+      "ACABADO": "RAL7035_POLVO"
+     }
+    },
+    {
+     "id": "CP-800x500-INOX",
+     "name": "Carro plataforma inoxidable 800 × 500 mm (alimentario)",
+     "family": "carro_plataforma",
+     "values": {
+      "LONGITUD": 800.0,
+      "ANCHURA": 500.0,
+      "ALTURA": 300.0,
+      "ALTURA_ASA": 900.0,
+      "CARGA_TOTAL": 120.0,
+      "MATERIAL_ESTRUCTURAL": "1.4301",
+      "MATERIAL_CHAPA": "1.4301",
+      "ACABADO": "INOX_SATINADO",
+      "ENTORNO": "alimentario",
+      "CARGA_HORIZONTAL": 30.0
+     }
+    }
+   ],
+   "candidates": {
+    "PERFIL_PATA": [
+     "SHS 40x40x2",
+     "SHS 40x40x3",
+     "SHS 50x50x2",
+     "SHS 50x50x3",
+     "SHS 60x60x3",
+     "SHS 70x70x3",
+     "SHS 80x80x3",
+     "SHS 80x80x4",
+     "SHS 90x90x4",
+     "SHS 100x100x4",
+     "SHS 100x100x5",
+     "SHS 120x120x4",
+     "SHS 120x120x5"
+    ],
+    "PERFIL_LARGUERO": [
+     "RHS 40x20x2",
+     "RHS 50x30x2",
+     "RHS 60x30x2",
+     "RHS 60x40x2",
+     "RHS 80x40x2",
+     "RHS 60x40x3",
+     "RHS 80x40x3",
+     "RHS 100x50x3",
+     "RHS 100x50x4",
+     "RHS 120x60x4"
+    ],
+    "PERFIL_TRAVESANO": [
+     "RHS 40x20x2",
+     "RHS 50x30x2",
+     "RHS 60x30x2",
+     "RHS 60x40x2",
+     "RHS 80x40x2"
+    ],
+    "PERFIL_ASA": [
+     "RHS 40x20x2",
+     "RHS 50x30x2",
+     "RHS 60x30x2",
+     "RHS 60x40x2"
+    ]
+   },
+   "constructive_defaults": {
+    "PERFIL_PATA": "SHS 40x40x2",
+    "PERFIL_LARGUERO": "RHS 60x40x2",
+    "PERFIL_TRAVESANO": "RHS 40x20x2",
+    "ESPESOR_CHAPA": 2.0,
+    "PERFIL_ASA": "RHS 40x20x2",
+    "RUEDA": "RUEDA_ESP_M12_D100"
+   },
+   "leg_param": "PERFIL_PATA",
+   "frame_params": [
+    "PERFIL_LARGUERO",
+    "PERFIL_TRAVESANO",
+    "PERFIL_ASA"
+   ],
+   "auto_in_construct": [
+    "RADIO_PLEGADO",
+    "FACTOR_K",
+    "NUMERO_TRAVESANOS",
     "HOLGURA_ENCIMERA"
    ]
   }

@@ -16,13 +16,13 @@ SYSTEM = (
     "Eres un ingeniero de diseño de mobiliario industrial. Extrae de la solicitud del usuario los parámetros "
     "técnicos indicados explícitamente. No inventes valores: deja a null todo lo que el usuario no haya dicho. "
     "Dimensiones en milímetros; cargas en kg (fuerzas horizontales en N). Familias: mesa_industrial, estanteria, "
-    "estanteria_bateria, puesto_trabajo, carro_taller, carro_estanteria, mesa_soldadura, armario."
+    "estanteria_bateria, puesto_trabajo, carro_taller, carro_estanteria, carro_plataforma, mesa_soldadura, tarima, armario."
 )
 
 
 class ExtractedRequest(BaseModel):
     family: Optional[Literal["mesa_industrial", "estanteria", "estanteria_bateria", "puesto_trabajo", "carro_taller",
-                             "carro_estanteria", "mesa_soldadura", "armario"]] = None
+                             "carro_estanteria", "carro_plataforma", "mesa_soldadura", "tarima", "armario"]] = None
     LONGITUD: Optional[float] = Field(None, description="Longitud en mm")
     ANCHURA: Optional[float] = Field(None, description="Anchura o fondo en mm")
     ALTURA: Optional[float] = Field(None, description="Altura de trabajo en mm")

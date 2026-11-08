@@ -93,7 +93,9 @@ def handle(state: dict[str, Any], message: str = "", answers: dict[str, Any] | N
                          ". 'auto' significa que el motor de cálculo dimensionará la sección.")
         reply.append("Puede generar ya un diseño preliminar; los datos pendientes quedarán marcados como tales."
                      if not gen_block else "Faltan dimensiones para generar la geometría.")
-    params = {**proposal, **{k: v for k, v in values.items() if k in STRUCTURAL_KEYS}}
+    # todo lo interpretado o respondido pasa al motor (antes sólo STRUCTURAL_KEYS: se perdían el asa, el peto o el
+    # reposapiés); abajo se filtra a los parámetros que existen en la familia y admiten el valor
+    params = {**proposal, **values}
     if implemented:     # sólo parámetros que existen en la familia y con valores admisibles
         specs = {sp.name: sp for sp in REGISTRY[fam].param_specs()}
         clean = {}

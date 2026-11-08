@@ -7,13 +7,16 @@ import { REGISTRY } from "./families";
 import { g, pyRound } from "./util";
 
 const NUM_WORDS = { un: 1, una: 1, uno: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10, once: 11, doce: 12 };
-const NUM = String.raw`(\d{1,3}(?:[.\s]\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)`;
+// miles con punto («1.500») o con espacio sólo tras 1-2 cifras («1 500»): «1800x800x900 400 kg» no es 900.400;
+// nunca empieza en mitad de otro número («950 400» no da «50 400»)
+const NUM = String.raw`(?<![\d.,])(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d{1,2}(?:\s\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)`;
 const UNIT = String.raw`(?:(mm|milimetros?|cm|centimetros?|m|metros?)\b)`;
 const FAMILY_KEYWORDS = [
   ["mesa_soldadura", /mesas? de sold|mesas? para soldar|bancos? de soldadura|mesas? de calderer|mesas? de amarre/],
-  ["puesto_trabajo", /puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion|embalaje)/],
+  ["carro_plataforma", /carros? (?:de )?plataforma|plataformas? (?:\w+ ){0,3}(?:con|sobre) ruedas|plataformas? (?:rodantes?|moviles?|de transporte|de carga)|carros? de (?:base plana|carga pesada)/],
   ["carro_estanteria", /carros? (estanteria|de (baldas|bandejas|picking|estantes))|carros? de \d+ (niveles|baldas|bandejas|estantes)|estanterias? (con ruedas|movil|movible|rodante|sobre ruedas)/],
   ["estanteria_bateria", /estanterias? (?:\w+ ){0,3}en bateria|baterias? de (?:\w+ )?(?:estanterias|modulos)|estanterias? (?:\w+ ){0,3}de \w+ (?:modulos|cuerpos|vanos)|\w+ (?:modulos|cuerpos|vanos) de estanteri|estanterias? modular|estanterias? (?:corrida|continua)s?\b/],
+  ["puesto_trabajo", /puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion|embalaje)/],
   ["carro_taller", /\bcarros?\b|\bcarritos?\b|carro de (taller|transporte)/],
   ["estanteria", /estanteri/],
   ["tarima", /\btarimas?\b|plataformas? (?:\w+ ){0,2}(?:de trabajo|baja|para (?:el |los )?operari|de operari)|\bpodios?\b/],
@@ -21,7 +24,9 @@ const FAMILY_KEYWORDS = [
   ["armario", /\barmario/],
 ];
 /** Accesorios que sí implementa una familia (no se marcan como no soportados) y parámetro que activan. */
-const SUPPORTED_BY = { "puesto_trabajo|panel_trasero": ["PANEL_HERRAMIENTAS", 1], "carro_taller|ruedas": null, "carro_estanteria|ruedas": null };
+const SUPPORTED_BY = { "puesto_trabajo|panel_trasero": ["PANEL_HERRAMIENTAS", 1], "carro_taller|ruedas": null, "carro_estanteria|ruedas": null,
+  "carro_plataforma|ruedas": null };
+const CARTS = ["carro_taller", "carro_estanteria", "carro_plataforma"];
 export const MESA_LIKE = ["mesa_industrial", "puesto_trabajo", "carro_taller", "mesa_soldadura"];
 export const SHELF_LIKE = ["estanteria", "carro_estanteria", "estanteria_bateria"];
 const MODULE_WORDS = "modulos|cuerpos|vanos";
@@ -38,7 +43,7 @@ const UNSUPPORTED = [
 ];
 export const LABELS = { mesa_industrial: "Mesa industrial", estanteria: "Estantería industrial", puesto_trabajo: "Puesto de trabajo industrial",
   carro_taller: "Carro de taller", carro_estanteria: "Carro estantería", mesa_soldadura: "Mesa de soldadura", estanteria_bateria: "Estantería en batería", tarima: "Tarima / plataforma de trabajo",
-  armario: "Armario / mobiliario auxiliar" };
+  carro_plataforma: "Carro plataforma", armario: "Armario / mobiliario auxiliar" };
 const DIM_PROPOSAL = { mesa_industrial: [1800.0, 800.0, 900.0], puesto_trabajo: [1500.0, 750.0, 900.0], carro_taller: [1000.0, 600.0, 900.0],
   mesa_soldadura: [1500.0, 1000.0, 850.0] };
 export const STRUCTURAL_KEYS = ["PROFUNDIDAD", "NUMERO_NIVELES", "CARGA_POR_NIVEL", "ALTURA_PRIMER_NIVEL", "DISTANCIA_BALDAS", "PERFIL_MONTANTE",
@@ -80,6 +85,8 @@ export function parse(text, pending = null) {
     it.family = "carro_taller";
     it.notes.push("Mesa sobre ruedas: se genera como carro de taller sin asa de empuje (mesa móvil).");
   }
+  // plataforma de trabajo para un operario «con ruedas»: es una tarima (las ruedas no se generan)
+  if (it.family === "carro_plataforma" && /de trabajo|operari|podio/.test(t) && !/\bcarros?\b/.test(t)) it.family = "tarima";
   for (const [w, n] of Object.entries(NUM_WORDS)) t = t.replace(R(String.raw`\b${w}\b(?=\s+(niveles|baldas|estantes|cajones|travesanos|${MODULE_WORDS}))`, "g"), String(n));
   let m = t.match(R(String.raw`${NUM}\s*${UNIT}?\s*x\s*${NUM}\s*${UNIT}?\s*x\s*${NUM}\s*${UNIT}?`));
   if (m) {
@@ -87,7 +94,7 @@ export function parse(text, pending = null) {
     const [a, b, c] = [1, 3, 5].map((i) => toMm(toNumber(m[i]), m[i + 1] || unit));
     it.set("LONGITUD", a, m[0]); it.set("ANCHURA", b, m[0]); it.set("ALTURA", c, m[0]);
   } else {   // sólo planta: «2000 x 1000», «1500 por 800» (largo × ancho)
-    m = t.match(R(String.raw`${NUM}\s*${UNIT}?\s*(?:x|por)\s*${NUM}(?![\d.,])\s*${UNIT}?(?!\s*(?:x|por)\s*\d)(?!\s*(?:kg|kilos?|n\b|niveles))`));
+    m = t.match(R(String.raw`${NUM}\s*${UNIT}?\s*(?:x|por)\s*${NUM}(?!\d|[.,]\d)\s*${UNIT}?(?!\s*(?:x|por)\s*\d)(?!\s*(?:kg|kilos?|n\b|niveles))`));
     if (m) {
       const unit = m[4] || m[2];
       it.set("LONGITUD", toMm(toNumber(m[1]), m[2] || unit), m[0]);
@@ -111,18 +118,24 @@ export function parse(text, pending = null) {
     if (am) it.set("ANCHURA", toMm(toNumber(am[1]), am[2]), am[0]);
     else if (pm && it.evidence.ANCHURA === pm[0].trim()) { it.pop("ANCHURA"); delete it.evidence.ANCHURA; }   // el único dato era el fondo
   }
-  m = t.match(/(\d+)\s+(?:niveles|baldas|estantes)/);
+  m = t.match(/(\d+)\s+(?:niveles|baldas|estantes|bandejas)/);
   if (m) it.set("NUMERO_NIVELES", parseInt(m[1], 10), m[0]);
   m = t.match(R(String.raw`(\d+)\s+(?:${MODULE_WORDS})`));
   if (m && it.family === "estanteria_bateria") it.set("NUMERO_MODULOS", parseInt(m[1], 10), m[0]);
   for (const mm of t.matchAll(R(String.raw`${NUM}\s*(kg|kilos?|kilogramos?)\b`, "g"))) {
     const val = toNumber(mm[1]);
     const s = mm.index, e = mm.index + mm[0].length;
-    const ctx = t.slice(Math.max(0, s - 60), e + 60), after = t.slice(e, e + 40), before = t.slice(Math.max(0, s - 40), s);
-    if (/por nivel|cada nivel|por balda|cada balda|por estante|por bandeja|cada bandeja/.test(ctx)) it.set("CARGA_POR_NIVEL", val, mm[0] + " por nivel");
+    const ctx = t.slice(Math.max(0, s - 60), e + 60), after = t.slice(e, e + 40);
+    const before = t.slice(Math.max(0, s - 40), s).split(/\b(?:kg|kilos?|kilogramos?)\b/).at(-1);     // sólo desde la carga anterior
+    const onTop = /^\s*(?:en|sobre) (?:la )?(?:encimera|superficie|tablero|plataforma)/.test(after);
+    // "por nivel", o en estanterías "5 niveles de 100 kg" / "baldas de 80 kg cada una" (carga de cada nivel)
+    if (/por nivel|cada nivel|por balda|cada balda|por estante|por bandeja|cada bandeja/.test(ctx)
+      || (SHELF_LIKE.includes(it.family) && (/(?:niveles|baldas|estantes|bandejas)\s+(?:de\s+)?$/.test(before) || /^\s*(?:cada un[oa]|c\/u|por unidad)/.test(after))))
+      it.set("CARGA_POR_NIVEL", val, mm[0] + " por nivel");
     else if (/^\s*(?:de\s+)?(?:carga\s+)?(?:puntual|concentrada)/.test(after) || /(?:puntual|concentrada)\s*(?:de|:|=)?\s*$/.test(before))
       it.set("CARGA_PUNTUAL", val, ctx);     // pegado al valor
-    else if (/balda|estante inferior/.test(after) || /balda/.test(before)) it.set("CARGA_BALDA", val, ctx);
+    else if ((/^\s*(?:de carga\s+)?(?:en|sobre|para) (?:la )?(?:balda|estante inferior)/.test(after) || /balda/.test(before)) && !onTop)
+      it.set("CARGA_BALDA", val, ctx);     // "100 kg en la balda" o "balda de 100 kg"
     else if (pending && ["CARGA_BALDA", "CARGA_PUNTUAL", "CARGA_TOTAL"].includes(pending[0]) && !/distribuid|encimera/.test(ctx)) it.set(pending[0], val, mm[0]);
     else {
       it.set("CARGA_TOTAL", val, ctx);
@@ -188,7 +201,13 @@ export function parse(text, pending = null) {
     else if (/estante superior|altillo|balda superior/.test(t)) it.set("ESTANTE_SUPERIOR", 1, "estante superior");
     if (/sin panel/.test(t)) it.set("PANEL_HERRAMIENTAS", 0, "sin panel");
   }
-  if (it.family === "carro_taller" || it.family === "carro_estanteria") {
+  if (CARTS.includes(it.family)) {
+    // altura del asa («asa a 950 mm»); no es una cota de planta («sin asa de 1200 x 800»)
+    const ma = t.match(R(String.raw`asas? (?:de empuje )?(?:a|de)\s+${NUM}\s*${UNIT}?(?!\s*(?:x|por)\s*\d)(?:\s*de altura)?|altura (?:del|de la|de) asas?\s*(?:de|:|=|a)?\s*${NUM}\s*${UNIT}?`));
+    if (ma && !/sin asas?\b/.test(t)) {
+      it.set("ALTURA_ASA", toMm(toNumber(ma[1] || ma[3]), ma[2] || ma[4]), ma[0]);
+      if (it.evidence.ALTURA && ma[0].includes(it.evidence.ALTURA)) { delete it.values.ALTURA; delete it.evidence.ALTURA; }     // «asa a 950 mm de altura»
+    }
     if (/sin asas?\b/.test(t) || (mobileTable && !/\basas?\b/.test(t))) it.set("ASA_EMPUJE", "ninguna", t.includes("sin asa") ? "sin asa" : "mesa sobre ruedas");
     else if (/dos asas|doble asa|asas? en (ambos|los dos) (extremos|lados)|asa en cada (extremo|lado)/.test(t)) it.set("ASA_EMPUJE", "dos_extremos", "asa en los dos extremos");
     else if (/\basa\b/.test(t)) it.set("ASA_EMPUJE", "un_extremo", "asa de empuje");
@@ -203,7 +222,7 @@ export function parse(text, pending = null) {
     mm = t.match(R(String.raw`vuelo (?:de\s+)?${NUM}\s*${UNIT}?`));
     if (mm) it.set("VUELO", toMm(toNumber(mm[1]), mm[2]), mm[0]);
   }
-  if (MESA_LIKE.includes(it.family)) {
+  if (MESA_LIKE.includes(it.family) || it.family === "carro_plataforma") {
     const PETO = "peto|tope trasero|reborde trasero";
     if (it.family === "mesa_soldadura") { /* sin peto en la placa de soldadura */ }
     else if (R(`sin (${PETO})`).test(t)) it.set("PETO_TRASERO", 0.0, "sin peto");
@@ -297,6 +316,23 @@ function tarimaLoads(it, t) {
   }
   for (const k of ["NUMERO_BALDAS", "CARGA_BALDA", "PETO_TRASERO", "MATERIAL_CHAPA", "ESPESOR_CHAPA"]) { delete it.values[k]; delete it.evidence[k]; }
 }
+function missingPlatform(values, asked) {
+  const q = [];
+  for (const [p, lbl, prop] of [["LONGITUD", "longitud de la plataforma", 1000.0], ["ANCHURA", "anchura de la plataforma", 600.0]])
+    if (!(p in values)) q.push(Q(p, `¿Qué ${lbl} necesita (mm)?`, "Dimensión principal necesaria para generar la geometría.", [], "generacion", prop));
+  if (values.CARGA_TOTAL == null) q.push(Q("CARGA_TOTAL", "¿Qué carga transportará la plataforma (kg)?",
+    "Fija las ruedas, la chapa y el bastidor; sin carga el resultado quedaría PENDIENTE.", [250, 500, 800].map((n) => ({ label: `${n} kg`, value: n })), "verificacion"));
+  if (!("CARGA_HORIZONTAL" in values) && !asked.has("CARGA_HORIZONTAL")) q.push(Q("CARGA_HORIZONTAL",
+    "¿Qué fuerza de maniobra se aplicará en el asa (empuje o tirón con las ruedas frenadas o contra un obstáculo)?",
+    "Es la acción que puede volcar el carro vacío; se aplica en el asa.",
+    [{ label: "Ligera (30 N)", value: 30 }, { label: "Normal (50 N)", value: 50 }, { label: "Alta (80 N)", value: 80 }], "verificacion", 50.0));
+  if (!("MATERIAL_ESTRUCTURAL" in values) && !asked.has("MATERIAL_ESTRUCTURAL")) q.push(Q("MATERIAL_ESTRUCTURAL", "¿Material y acabado? Propuesta: acero S235 con pintura en polvo RAL 7035.",
+    "Determina propiedades mecánicas, espesores comerciales y acabado.", [{ label: "Acero S235 pintado RAL 7035", value: "S235JRH" }, { label: "Acero inoxidable AISI 304", value: "1.4301" }],
+    "confirmacion", "S235JRH"));
+  if (!("ENTORNO" in values) && !asked.has("ENTORNO")) q.push(Q("ENTORNO", "¿Entorno de uso (interior seco, húmedo, alimentario)?", "Afecta al material y al acabado (corrosión).",
+    [{ label: "Interior seco", value: "interior_seco" }, { label: "Interior húmedo", value: "interior_humedo" }, { label: "Alimentario", value: "alimentario" }], "confirmacion", "interior_seco"));
+  return q;
+}
 function missingTarima(values, asked) {
   const q = [];
   for (const [p, lbl, prop] of [["LONGITUD", "longitud", 1200.0], ["ANCHURA", "anchura (fondo)", 800.0], ["ALTURA", "altura de la superficie de tránsito (hasta 500 mm)", 200.0]])
@@ -318,6 +354,7 @@ export function missingData(family, values, asked = new Set()) {
   const q = [];
   if (SHELF_LIKE.includes(family)) return missingShelf(values, asked, family);
   if (family === "tarima") return missingTarima(values, asked);
+  if (family === "carro_plataforma") return missingPlatform(values, asked);
   if (!MESA_LIKE.includes(family)) return q;
   const [dL, dW, dH] = DIM_PROPOSAL[family];
   for (const [p, lbl, prop] of [["LONGITUD", "longitud", dL], ["ANCHURA", "anchura (fondo)", dW], ["ALTURA", "altura de trabajo", dH]])
@@ -375,6 +412,14 @@ function missingShelf(values, asked, family = "estanteria") {
 }
 
 export function proposalFor(family, values) {
+  if (family === "carro_plataforma") {
+    const p = {};
+    for (const [k, v] of [["LONGITUD", 1000.0], ["ANCHURA", 600.0]]) if (!(k in values)) p[k] = v;
+    const haveLoad = values.CARGA_TOTAL != null || values.CARGA_PUNTUAL != null;
+    for (const k of ["PERFIL_PATA", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ESPESOR_CHAPA"]) if (!(k in values) && haveLoad) p[k] = "auto";
+    for (const k of ["PERFIL_ASA", "RUEDA"]) if (!(k in values)) p[k] = "auto";
+    return p;
+  }
   if (family === "tarima") {
     const p = {};
     for (const [k, v] of [["LONGITUD", 1200.0], ["ANCHURA", 800.0], ["ALTURA", 200.0]]) if (!(k in values)) p[k] = v;
@@ -423,7 +468,8 @@ export function describe(it) {
     out.push(`Carga por ${bat ? "bandeja" : "nivel"}: ${g(v.CARGA_POR_NIVEL)} kg.`);
     if ("NUMERO_NIVELES" in v) out.push(`Carga total nominal solicitada: ${g(v.CARGA_POR_NIVEL * v.NUMERO_NIVELES * (bat ? v.NUMERO_MODULOS ?? 1 : 1))} kg.`);
   }
-  if ("CARGA_TOTAL" in v && v.CARGA_TOTAL != null) out.push(`Carga distribuida sobre ${it.family === "tarima" ? "la tarima" : "encimera"}: ${g(v.CARGA_TOTAL)} kg.`);
+  if ("CARGA_TOTAL" in v && v.CARGA_TOTAL != null)
+    out.push(`Carga distribuida sobre ${{ tarima: "la tarima", carro_plataforma: "la plataforma" }[it.family] ?? "encimera"}: ${g(v.CARGA_TOTAL)} kg.`);
   if ("CARGA_BALDA" in v && v.CARGA_BALDA != null) out.push(`Carga sobre balda: ${g(v.CARGA_BALDA)} kg.`);
   if ("CARGA_PUNTUAL" in v && v.CARGA_PUNTUAL != null) out.push(`Carga puntual: ${g(v.CARGA_PUNTUAL)} kg.`);
   out.push("Material: " + ("MATERIAL_ESTRUCTURAL" in v ? v.MATERIAL_ESTRUCTURAL : "pendiente de selección") + ".");
@@ -439,6 +485,13 @@ export function describe(it) {
   if (it.family === "carro_estanteria") {
     out.push("Asa de empuje: " + { un_extremo: "en un extremo", dos_extremos: "en los dos extremos", ninguna: "sin asa" }[v.ASA_EMPUJE ?? "un_extremo"] + ".");
     out.push("Apoyos: ruedas giratorias de espiga roscada, con freno en un extremo (sin anclaje).");
+  }
+  if (it.family === "carro_plataforma") {
+    const asa = v.ASA_EMPUJE ?? "un_extremo";
+    out.push("Asa de empuje: " + { un_extremo: "en un extremo", dos_extremos: "en los dos extremos", ninguna: "sin asa (plataforma rodante)" }[asa]
+      + (v.ALTURA_ASA && asa !== "ninguna" ? `, a ${g(v.ALTURA_ASA)} mm` : "") + ".");
+    if (v.PETO_TRASERO) out.push(`Peto trasero: ${g(v.PETO_TRASERO)} mm sobre la plataforma.`);
+    out.push("Apoyos: ruedas giratorias de espiga roscada elegidas por cálculo, con freno en " + (asa === "un_extremo" ? "el lado del asa." : "un extremo."));
   }
   if (it.family === "carro_taller") {
     const asa = v.ASA_EMPUJE ?? "un_extremo";
@@ -507,7 +560,9 @@ export function handle(state, message = "", answers = null, llmValues = null) {
       + Object.entries(proposal).map(([k, v]) => `${k} = ${v}`).join(", ") + ". 'auto' significa que el motor de cálculo dimensionará la sección.");
     reply.push(genBlock.length ? "Faltan dimensiones para generar la geometría." : "Puede generar ya un diseño preliminar; los datos pendientes quedarán marcados como tales.");
   }
-  let params = { ...proposal, ...Object.fromEntries(Object.entries(values).filter(([k]) => STRUCTURAL_KEYS.includes(k))) };
+  // todo lo interpretado o respondido pasa al motor (antes sólo STRUCTURAL_KEYS: se perdían el asa, el peto o el reposapiés);
+  // abajo se filtra a los parámetros que existen en la familia y admiten el valor
+  let params = { ...proposal, ...values };
   if (implemented) {
     const specs = Object.fromEntries(REGISTRY[fam].specs().map((s) => [s.name, s]));
     const clean = {};

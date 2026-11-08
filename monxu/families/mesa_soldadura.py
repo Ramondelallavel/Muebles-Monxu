@@ -158,6 +158,15 @@ class MesaSoldadura(MesaIndustrial):
              "values": {"LONGITUD": 1500.0, "ANCHURA": 1000.0, "ALTURA": 850.0, "CARGA_TOTAL": 600.0,
                         "CARGA_PUNTUAL": 200.0, "SISTEMA_TALADROS": "D16_P50", "NUMERO_BALDAS": 1,
                         "CARGA_BALDA": 150.0, "ALTURA_BALDA": 250.0, "CARGA_HORIZONTAL": 300.0}},
+            {"id": "MS-2400-28", "name": "Mesa de soldadura 2.400 × 1.200 mm, sistema 28 (carga 1.500 kg)", "family": self.id,
+             "values": {"LONGITUD": 2400.0, "ANCHURA": 1200.0, "ALTURA": 850.0, "CARGA_TOTAL": 1500.0,
+                        "SISTEMA_TALADROS": "D28_P100", "CARGA_HORIZONTAL": 500.0, "ANCLAJE": "ninguno"}},
+            {"id": "MS-1000x1000-16", "name": "Mesa de soldadura compacta 1.000 × 1.000 mm, sistema 16", "family": self.id,
+             "values": {"LONGITUD": 1000.0, "ANCHURA": 1000.0, "ALTURA": 900.0, "CARGA_TOTAL": 300.0,
+                        "SISTEMA_TALADROS": "D16_P50", "CARGA_HORIZONTAL": 200.0}},
+            {"id": "MS-3000-28-PESADA", "name": "Mesa de soldadura pesada 3.000 × 1.500 mm, sistema 28 (carga 2.000 kg)", "family": self.id,
+             "values": {"LONGITUD": 3000.0, "ANCHURA": 1500.0, "ALTURA": 850.0, "CARGA_TOTAL": 2000.0,
+                        "SISTEMA_TALADROS": "D28_P100", "CARGA_HORIZONTAL": 500.0}},
         ]
 
     # ------------------------------------------------------------------ derivados
@@ -205,7 +214,7 @@ class MesaSoldadura(MesaIndustrial):
                             "SEPARACION_MAX_APOYOS", "LONGITUD"])
             ctx.set_derived("VANO_ENCIMERA", round((xe1 - xe0) / (n_top + 1), 2), "mm", "Vano entre apoyos de la placa",
                             ["LONGITUD", "NUMERO_TRAVESANOS", "PERFIL_TRAVESANO", "RETRANQUEO"])
-            shelf = ctx["NUMERO_BALDAS"] >= 1
+            shelf = self._has_shelf(ctx)
             d.update(Lx=L, Ly=W, leg=leg, rail=rail, trv=trv, bas=bas, a=a, c=c, t=t, hn=hn, tp=tp, z_tf=z_tf,
                      z_leg0=z_leg0, leg_len=leg_len, n_top=n_top, xe=(xe0, xe1), shelf=shelf, peto=0.0)
             d["weld_a"] = lambda tmin: 3.0 if tmin >= 3 else float(tmin)

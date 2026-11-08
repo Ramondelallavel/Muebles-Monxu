@@ -102,6 +102,8 @@ class MesaIndustrial(ProductFamily):
     leg_param = "PERFIL_PATA"
     frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR", "PERFIL_REPOSAPIES")
     top_iid, top_label = "ENC.BANDEJA", "Encimera"          # instancia y subconjunto de la superficie de trabajo
+    #: altura libre mínima bajo la encimera para trabajar sentado o de pie (None: no aplica, p. ej. una plataforma)
+    min_clear_height: float | None = 600.0
     auto_in_construct = ("RADIO_PLEGADO", "FACTOR_K", "NUMERO_TRAVESANOS", "NUMERO_TRAVESANOS_BALDA", "HOLGURA_ENCIMERA")
     #: parámetro que elige el componente de apoyo (pie nivelador o rueda de espiga roscada)
     support_param = "PIE_NIVELADOR"
@@ -280,6 +282,23 @@ class MesaIndustrial(ProductFamily):
              "values": {"LONGITUD": 1500.0, "ANCHURA": 750.0, "ALTURA": 850.0, "CARGA_TOTAL": 500.0,
                         "CARGA_PUNTUAL": 100.0, "ESPESOR_CHAPA": 3.0, "USO": "trabajo_pesado",
                         "NUMERO_BALDAS": 1, "CARGA_BALDA": 150.0, "ANCLAJE": "al_suelo"}},
+            {"id": "MI-3000-LINEA", "name": "Mesa de línea 3.000 mm con balda (anclada)", "family": self.id,
+             "values": {"LONGITUD": 3000.0, "ANCHURA": 800.0, "ALTURA": 900.0, "CARGA_TOTAL": 500.0,
+                        "NUMERO_BALDAS": 1, "CARGA_BALDA": 150.0, "CARGA_HORIZONTAL": 300.0, "ANCLAJE": "al_suelo",
+                        "ACABADO": "RAL7035_POLVO"}},
+            {"id": "MI-1200-ALU", "name": "Mesa de aluminio 1.200 mm para sala limpia", "family": self.id,
+             "values": {"LONGITUD": 1200.0, "ANCHURA": 700.0, "ALTURA": 900.0, "CARGA_TOTAL": 100.0,
+                        "NUMERO_BALDAS": 1, "CARGA_BALDA": 40.0, "MATERIAL_ESTRUCTURAL": "EN AW-6082 T6",
+                        "MATERIAL_CHAPA": "EN AW-5754 H22", "ACABADO": "ANODIZADO_NATURAL",
+                        "ENTORNO": "sala_limpia", "USO": "inspeccion", "CARGA_HORIZONTAL": 40.0}},
+            {"id": "MI-1000-MAQUINA", "name": "Mesa soporte de máquina 1.000 mm (anclada, con carga puntual)", "family": self.id,
+             "values": {"LONGITUD": 1000.0, "ANCHURA": 700.0, "ALTURA": 800.0, "CARGA_TOTAL": 300.0,
+                        "CARGA_PUNTUAL": 150.0, "NUMERO_BALDAS": 0, "USO": "trabajo_pesado", "ANCLAJE": "al_suelo",
+                        "CARGA_HORIZONTAL": 300.0, "ACABADO": "RAL7016_POLVO"}},
+            {"id": "MI-1600-SENTADO", "name": "Mesa de montaje sentado 1.600 mm con reposapiés", "family": self.id,
+             "values": {"LONGITUD": 1600.0, "ANCHURA": 800.0, "ALTURA": 750.0, "CARGA_TOTAL": 150.0,
+                        "NUMERO_BALDAS": 0, "REPOSAPIES": 1, "ALTURA_REPOSAPIES": 200.0, "CARGA_HORIZONTAL": 120.0,
+                        "ACABADO": "RAL7035_POLVO"}},
         ]
 
     # ------------------------------------------------------------------ construcción
@@ -426,6 +445,10 @@ class MesaIndustrial(ProductFamily):
     def _leg_uses(self) -> tuple:
         return ()
 
+    def _has_shelf(self, ctx) -> bool:
+        """¿Lleva balda inferior? (las familias sin balda no tienen los parámetros de la balda)."""
+        return ctx["NUMERO_BALDAS"] >= 1
+
     def _leg_def(self, corner: str, d: dict, leg):
         """(rol, nombre, cota superior, taladros) de la pata de cada esquina."""
         return "pata", "Pata", d["z_tf"], ()
@@ -439,12 +462,12 @@ class MesaIndustrial(ProductFamily):
 
     def _build_top(self, model, ctx, d, H, mat_c, fin, rn, sc) -> None:
         """Superficie de trabajo: encimera de chapa plegada atornillada al bastidor superior."""
-        with ctx.feature("F20", "Encimera de chapa plegada"):
+        with ctx.feature("F20", f"{self.top_label} de chapa plegada"):
             ctx.uses("LONGITUD", "ANCHURA", "ALTURA", "ESP_ENC", "RADIO_ENC", "K_ENC", "ALA_ENCIMERA", "MATERIAL_CHAPA",
                      "PASO_FIJACIONES", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ACABADO", "PETO_TRASERO")
             spec = d["top_spec"]
-            tray = SheetPart("encimera", f"Encimera chapa {spec.t:g} mm", spec, mat_c, fin)
-            model.add("ENC.BANDEJA", "Encimera", tray, G.translation(0, 0, H), "ENC")
+            tray = SheetPart("encimera", f"{self.top_label} chapa {spec.t:g} mm", spec, mat_c, fin)
+            model.add("ENC.BANDEJA", self.top_label, tray, G.translation(0, 0, H), "ENC")
             self._fasteners(model, d["fix_top"], "ENC", rn, sc, ctx)
 
     def _top_notch(self, ctx: ParamContext, d: dict):
@@ -509,7 +532,7 @@ class MesaIndustrial(ProductFamily):
             leg = catalog.profile(ctx["PERFIL_PATA"])
             rail = catalog.profile(ctx["PERFIL_LARGUERO"])
             trv = catalog.profile(ctx["PERFIL_TRAVESANO"])
-            bas = catalog.profile(ctx["PERFIL_BASTIDOR"])
+            bas = catalog.profile(ctx["PERFIL_BASTIDOR"]) if "PERFIL_BASTIDOR" in v else None   # sin balda: no existe
             if leg.B != leg.H:
                 raise ValueError("Las patas deben ser de tubo cuadrado")
             a = leg.B
@@ -547,7 +570,7 @@ class MesaIndustrial(ProductFamily):
                             "SEPARACION_MAX_APOYOS", "LONGITUD"])
             ctx.set_derived("VANO_ENCIMERA", round((xe1 - xe0) / (n_top + 1), 2), "mm", "Vano entre apoyos de encimera",
                             ["LONGITUD", "NUMERO_TRAVESANOS", "PERFIL_TRAVESANO", "RETRANQUEO"])
-            shelf = ctx["NUMERO_BALDAS"] >= 1
+            shelf = self._has_shelf(ctx)
             d.update(Lx=L, Ly=W, leg=leg, rail=rail, trv=trv, bas=bas, a=a, c=c, t=t, r=r, K=K, hn=hn, tp=tp, z_tf=z_tf,
                      z_leg0=z_leg0, leg_len=leg_len, n_top=n_top, xe=(xe0, xe1), shelf=shelf)
             d["weld_a"] = lambda tmin: 3.0 if tmin >= 3 else float(tmin)
@@ -585,8 +608,8 @@ class MesaIndustrial(ProductFamily):
             d["skirt"] = ctx["ALA_ENCIMERA"]
             if shelf:
                 self._derive_shelf(ctx, model, d)
-            if H - ctx["ALA_ENCIMERA"] < 600:
-                model.note("advertencia", "ERG-ALTURA", "Altura libre bajo encimera inferior a 600 mm.")
+            if self.min_clear_height and H - ctx["ALA_ENCIMERA"] < self.min_clear_height:
+                model.note("advertencia", "ERG-ALTURA", f"Altura libre bajo encimera inferior a {self.min_clear_height:g} mm.")
             self._derive_footrest(ctx, model, d)
         return d
 

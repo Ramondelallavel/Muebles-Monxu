@@ -160,6 +160,12 @@ class Estanteria(MesaIndustrial):
             {"id": "ES-1200-6-ARCHIVO", "name": "Estantería de archivo de seis niveles 1.200 mm", "family": self.id,
              "values": {"ANCHURA": 1200.0, "PROFUNDIDAD": 400.0, "ALTURA": 2200.0, "NUMERO_NIVELES": 6,
                         "CARGA_POR_NIVEL": 80.0, "ANCLAJE": "al_suelo", "ACABADO": "RAL7035_POLVO"}},
+            {"id": "ES-1000-3-LIGERA", "name": "Estantería ligera de tres niveles 1.000 mm", "family": self.id,
+             "values": {"ANCHURA": 1000.0, "PROFUNDIDAD": 400.0, "ALTURA": 1500.0, "NUMERO_NIVELES": 3,
+                        "CARGA_POR_NIVEL": 50.0, "ANCLAJE": "al_suelo", "ACABADO": "RAL7035_POLVO"}},
+            {"id": "ES-1800-5-ANCLADA", "name": "Estantería de almacén de cinco niveles 1.800 mm (200 kg por nivel)", "family": self.id,
+             "values": {"ANCHURA": 1800.0, "PROFUNDIDAD": 500.0, "ALTURA": 2000.0, "NUMERO_NIVELES": 5,
+                        "CARGA_POR_NIVEL": 200.0, "ANCLAJE": "al_suelo", "ACABADO": "RAL5010_POLVO"}},
         ]
 
     # ------------------------------------------------------------------ construcción

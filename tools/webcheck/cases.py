@@ -53,6 +53,17 @@ def random_case(rng: random.Random) -> tuple[str, dict]:
              "USO": rng.choice(["montaje", "trabajo_pesado", "inspeccion"]), "CARGA_HORIZONTAL": rng.choice([100, 200, 300]),
              "ANCLAJE": rng.choice(["ninguno", "al_suelo"]), "PETO_TRASERO": rng.choice([0, 0, 0, 40, 100]),
              "REPOSAPIES": rng.choice([0, 0, 1]), "ALTURA_REPOSAPIES": rng.choice([200, 250, 300])}
+    elif u >= 0.46 and u < 0.52:
+        fid = "carro_plataforma"
+        q = rng.choice([None, 100, 250, 400, 600, 800])
+        v = {"LONGITUD": rng.choice(range(600, 2001, 100)), "ANCHURA": rng.choice(range(400, 1001, 50)),
+             "ALTURA": rng.choice([400] if (q or 0) >= 600 else [350, 400] if (q or 0) >= 400 else [300, 350]),
+             "ALTURA_ASA": rng.choice([900, 950, 1000]),
+             "CARGA_TOTAL": q, "CARGA_PUNTUAL": rng.choice([None, None, 100]), "CARGA_HORIZONTAL": rng.choice([30, 50, 80]),
+             "ASA_EMPUJE": rng.choice(["un_extremo", "dos_extremos", "ninguna"]), "USO": rng.choice(["montaje", "trabajo_pesado"]),
+             "PETO_TRASERO": rng.choice([0, 0, 0, 60])}
+        if rng.random() < 0.3:
+            v.pop("ALTURA")               # por defecto: la regla de diseño la eleva si la rueda no cabe
     elif u >= 0.52 and u < 0.58:
         fid = "tarima"
         L, W = rng.choice(range(600, 3001, 100)), rng.choice(range(500, 1801, 100))
@@ -75,6 +86,8 @@ def random_case(rng: random.Random) -> tuple[str, dict]:
              "CARGA_POR_NIVEL": rng.choice([None, 50, 100, 150, 250, 400]), "ANCLAJE": rng.choice(["al_suelo", "ninguno"])}
     if fid in ("mesa_soldadura", "tarima") and m[0] != "S235JRH":
         m = MATS[0]                       # placa de acero soldada: estructura de acero al carbono
+    if fid == "carro_plataforma" and m[1] == "DC01":
+        m = MATS[0]                       # plataforma de carga: chapa estructural, no DC01 (sin límite elástico garantizado)
     v.update({"MATERIAL_ESTRUCTURAL": m[0], "MATERIAL_CHAPA": m[1], "ACABADO": m[2]})
     if fid == "tarima":
         v.pop("MATERIAL_CHAPA")           # sin chapa plegada

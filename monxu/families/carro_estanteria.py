@@ -129,6 +129,14 @@ class CarroEstanteria(Estanteria):
                         "ALTURA_PRIMER_NIVEL": 250.0, "CARGA_POR_NIVEL": 25.0, "ALTURA_ASA": 1000.0,
                         "MATERIAL_ESTRUCTURAL": "1.4301", "MATERIAL_CHAPA": "1.4301", "ACABADO": "INOX_SATINADO",
                         "ENTORNO": "interior_humedo", "CARGA_HORIZONTAL": 50.0}},
+            {"id": "CE-1000-4-PESADO", "name": "Carro estantería de cuatro niveles 1.000 mm (80 kg por nivel)", "family": self.id,
+             "values": {"ANCHURA": 1000.0, "PROFUNDIDAD": 600.0, "ALTURA": 1600.0, "NUMERO_NIVELES": 4,
+                        "CARGA_POR_NIVEL": 80.0, "ASA_EMPUJE": "un_extremo", "ALTURA_ASA": 1000.0,
+                        "CARGA_HORIZONTAL": 60.0, "ACABADO": "RAL7016_POLVO"}},
+            {"id": "CE-700-4-COMPACTO", "name": "Carro de bandejas compacto de cuatro niveles 700 mm", "family": self.id,
+             "values": {"ANCHURA": 700.0, "PROFUNDIDAD": 450.0, "ALTURA": 1200.0, "NUMERO_NIVELES": 4,
+                        "CARGA_POR_NIVEL": 20.0, "ASA_EMPUJE": "un_extremo", "ALTURA_ASA": 1000.0,
+                        "CARGA_HORIZONTAL": 30.0, "ACABADO": "RAL5010_POLVO"}},
         ]
 
     # ------------------------------------------------------------------ ganchos

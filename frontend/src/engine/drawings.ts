@@ -382,6 +382,9 @@ export class Drawing {
       for (let k = 0; k <= 26; k++) c.push([cx, v.oy - 5 - h - k * 1.5, "c"]);
       for (let k = 0; k <= 12; k++) c.push([cx, v.oy + v.h + 4 + k * 1.5, "c"]);
       for (const dx of [-0.25, 0.25]) for (let k = 0; k <= 10; k++) c.push([cx + dx * v.w, v.oy - 5 - h - k * 2, "c"]);
+      // rótulo más ancho que la vista junto al borde: desplazado para que quede dentro del marco
+      const half = textWidth(s, h, true) / 2 + 1, cxc = Math.min(Math.max(cx, FRAME[0] + half), FRAME[2] - half);
+      if (Math.abs(cxc - cx) > 0.1) for (let k = 0; k <= 12; k++) c.push([cxc, v.oy - 5 - h - k * 1.5, "c"], [cxc, v.oy + v.h + 4 + k * 1.5, "c"]);
       this.group("label", () => this.placeText(s, h, c, { bold: true, orderWeight: 0.05 }));
     }
     this.pendingLabels = [];
@@ -620,13 +623,16 @@ function planGeneral(d, X) {
   d.dimH(xa, xb, ya, ya, pl.oy - 9, hi[0] - lo[0]);
   d.dimV(ya, yb, pl.ox, pl.ox, pl.ox - 9, hi[1] - lo[1]);
   const iso = X.proj("all", insts, "iso", false);
+  const isoLabel = (sc) => "PERSPECTIVA ISOMÉTRICA" + (sc ? ` (E ${scaleLabel(sc)})` : " (sin escala)");
   let best = null;
   for (const r of [[p.ox + p.w + 18, 86, 405, 270], [pl.ox + pl.w + 22, 86, 405, p.oy - 14]]) {
-    if (r[2] - r[0] < 40 || r[3] - r[1] < 40) continue;
-    const [sc, vi] = fitView(iso, "iso", r, [...SCALES, [1, 200]]);
-    if (!best || vi.scale > best[1].scale) best = [sc, vi];
+    const rr = [r[0], r[1] + 9, r[2], r[3]];          // sitio para el rótulo bajo la vista (antes podía ir encima, sobre otra vista)
+    if (rr[2] - rr[0] < 40 || rr[3] - rr[1] < 40) continue;
+    const [sc, vi] = fitView(iso, "iso", rr, [...SCALES, [1, 200]]);
+    const fits = textWidth(isoLabel(sc), 3.0, true) <= r[2] - r[0];      // a igual escala, el hueco donde cabe el rótulo
+    if (!best || vi.scale > best[1].scale + 1e-12 || (Math.abs(vi.scale - best[1].scale) <= 1e-12 && fits && !best[2])) best = [sc, vi, fits];
   }
-  if (best) { best[1].label = "PERSPECTIVA ISOMÉTRICA" + (best[0] ? ` (E ${scaleLabel(best[0])})` : " (sin escala)"); d.drawView(best[1], false, 0.35); }
+  if (best) { best[1].label = isoLabel(best[0]); d.drawView(best[1], false, 0.35); }
   const ps = m.params.values;
   const lines = [`Producto: ${m.family_name} ${m.product_code}`, `Masa total calculada desde la geometría: ${X.bom.totals.total_mass.toFixed(1)} kg`, m.dims.load_text ?? "",
     `Estado de verificación: ${X.eng.status_label}`, supportLine(m),

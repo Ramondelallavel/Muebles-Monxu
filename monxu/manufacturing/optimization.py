@@ -36,10 +36,11 @@ def optimize_bars(pieces: list[dict[str, Any]], bar_length: float = 6000.0, kerf
             bars.append(best)
         best["cuts"].append({"ref": it["ref"], "label": it.get("label", ""), "length": it["length"]})
         best["free"] -= need
-    lb0 = math.ceil(sum(p["length"] + kerf for p in items) / (bar_length - trim)) if items else 0
+    # cota inferior válida: cada barra admite hasta un ancho de sierra más (la última pieza puede apurarla)
+    lb0 = math.ceil(sum(p["length"] + kerf for p in items) / (bar_length - trim + kerf) - 1e-9) if items else 0
     if len(bars) > lb0 and len(items) <= 60:
         for k in range(lb0, len(bars)):
-            exact = _exact_pack(items, bar_length - trim, kerf, k)
+            exact = _exact_pack(items, bar_length - trim + kerf, kerf, k)
             if exact is not None:
                 bars = [{"cuts": [{"ref": it["ref"], "label": it.get("label", ""), "length": it["length"]} for it in b],
                          "free": bar_length - trim - sum(it["length"] + kerf for it in b)} for b in exact]
@@ -48,10 +49,11 @@ def optimize_bars(pieces: list[dict[str, Any]], bar_length: float = 6000.0, kerf
     out = []
     for n, b in enumerate(bars, start=1):
         rem = max(0.0, b["free"])
+        # la última pieza puede apurar la barra: su corte final no consume el ancho de sierra completo
         out.append({"bar": n, "cuts": b["cuts"], "used": round(sum(c["length"] for c in b["cuts"]), 1),
-                    "kerf_loss": round(kerf * len(b["cuts"]) + trim, 1), "remnant": round(rem, 1),
+                    "kerf_loss": round(kerf * len(b["cuts"]) + trim + min(0.0, b["free"]), 1), "remnant": round(rem, 1),
                     "remnant_reusable": rem >= reusable_min})
-    lb = math.ceil(sum(p["length"] + kerf for p in items) / (bar_length - trim)) if items else 0
+    lb = lb0
     nb = len(bars)
     return {"bar_length": bar_length, "kerf": kerf, "trim": trim, "reusable_min": reusable_min, "bars": out,
             "n_bars": nb, "lower_bound": lb, "optimal": nb == lb, "pieces": len(items),
@@ -63,7 +65,9 @@ def optimize_bars(pieces: list[dict[str, Any]], bar_length: float = 6000.0, kerf
 
 
 def _exact_pack(items, cap, kerf, k, node_limit=200000):
-    """Búsqueda exacta (ramificación y poda) de un reparto en k barras; None si no existe o se agota el límite."""
+    """Búsqueda exacta (ramificación y poda) de un reparto en k barras; None si no existe o se agota el límite.
+
+    cap es la capacidad para la suma de (longitud + sierra) de las piezas de una barra."""
     need = [it["length"] + kerf for it in items]
     order = sorted(range(len(items)), key=lambda i: -need[i])
     free = [cap] * k

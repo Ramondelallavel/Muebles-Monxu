@@ -126,7 +126,7 @@ function Home({ onOpen }: { onOpen: (c: string) => void }) {
   );
 }
 
-const icon = (id: string) => ({ mesa_industrial: "▭", estanteria: "☰", puesto_trabajo: "⌂", carro_taller: "⛟", carro_estanteria: "▤", mesa_soldadura: "⊞", estanteria_bateria: "▥", tarima: "▬", armario: "▯" } as Dict)[id] ?? "■";
+const icon = (id: string) => ({ mesa_industrial: "▭", estanteria: "☰", puesto_trabajo: "⌂", carro_taller: "⛟", carro_estanteria: "▤", mesa_soldadura: "⊞", estanteria_bateria: "▥", tarima: "▬", carro_plataforma: "▂", armario: "▯" } as Dict)[id] ?? "■";
 
 function Header({ children }: { children?: React.ReactNode }) {
   return <header className="topbar"><div className="brand"><b>MONXU</b><span>Ingeniería paramétrica de mobiliario industrial</span>

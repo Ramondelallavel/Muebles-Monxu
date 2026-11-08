@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026.11-3",
+    "version": "2026.11-4",
     "currency": "EUR",
     "note": "Tarifas orientativas de taller (España, 2026) para estimar el coste de fabricación. Deben ajustarse a los precios reales del taller y de los proveedores. No incluyen transporte, embalaje especial, diseño ni impuestos."
   },
@@ -19,6 +19,8 @@
     ["RUEDA_ESP_M12_D80_FRENO", 9.50], ["RUEDA_ESP_M12_D80", 6.90], ["RUEDA_ESP_M12_D100_FRENO", 11.80],
     ["RUEDA_ESP_M12_D100", 8.40], ["RUEDA_ESP_M16_D125_FRENO", 16.50], ["RUEDA_ESP_M16_D125", 12.20],
     ["RUEDA_ESP_M16_D160_FRENO", 24.00], ["RUEDA_ESP_M16_D160", 18.50],
+    ["RUEDA_ESP_M20_D160_FRENO", 34.00], ["RUEDA_ESP_M20_D160", 26.00], ["RUEDA_ESP_M20_D200_FRENO", 45.00],
+    ["RUEDA_ESP_M20_D200", 34.00],
     ["RUEDA_100", 9.00], ["RUEDA_125", 13.00],
     ["TUERCA_SOLDAR_M8_A2", 0.55], ["TUERCA_SOLDAR_M10_A2", 0.70], ["TUERCA_SOLDAR_M12_A2", 0.85],
     ["TUERCA_SOLDAR_M16_A2", 1.40], ["TUERCA_SOLDAR_M20_A2", 2.20], ["TUERCA_SOLDAR_M8_AL", 0.45],

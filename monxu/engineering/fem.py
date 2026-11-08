@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+from scipy.sparse import csc_matrix
+from scipy.sparse.linalg import splu
 
 
 @dataclass
@@ -123,10 +125,20 @@ class Frame3D:
         Kff = K[np.ix_(free, free)]
         cases = cases or list(self.loads)
         U = {}
-        for c in cases:
-            F = self.load_vector(c)
+        if not cases:
+            return Results(self, K, U)
+        # una sola factorización dispersa (SuperLU) para todos los casos de carga
+        try:
+            lu = splu(csc_matrix(Kff))
+        except RuntimeError as e:          # SuperLU: "Factor is exactly singular"
+            raise np.linalg.LinAlgError("Matriz de rigidez singular: estructura inestable (mecanismo)") from e
+        Ff = np.column_stack([self.load_vector(c)[free] for c in cases])
+        Uf = lu.solve(Ff)
+        if not np.all(np.isfinite(Uf)):
+            raise np.linalg.LinAlgError("Matriz de rigidez singular: estructura inestable (mecanismo)")
+        for k, c in enumerate(cases):
             u = np.zeros(self.ndof())
-            u[free] = np.linalg.solve(Kff, F[free])
+            u[free] = Uf[:, k]
             U[c] = u
         return Results(self, K, U)
 
@@ -164,19 +176,26 @@ def gauss_points(n: int = 6):
     return np.polynomial.legendre.leggauss(n)
 
 
-def line_load_to_nodes(s_nodes: np.ndarray, p, s0: float, s1: float, n_gauss: int = 6) -> np.ndarray:
+def line_load_to_nodes(s_nodes: np.ndarray, p, s0: float, s1: float, n_gauss: int = 6, breaks=()) -> np.ndarray:
     """Cargas nodales equivalentes (funciones de forma lineales) de una densidad p(s) en [s0, s1].
 
     ``s_nodes`` ordenadas. La parte de [s0, s1] fuera del rango de nodos se asigna al nodo extremo.
+    ``breaks``: quiebros de p (p. ej. de la regla de 45°); la integración se parte en ellos para que la cuadratura
+    de Gauss sea exacta en cada tramo (antes se perdía hasta un 0,1 % de la carga, del lado inseguro).
     Devuelve la fuerza en cada nodo (misma unidad que ∫p ds)."""
     out = np.zeros(len(s_nodes))
     xg, wg = gauss_points(n_gauss)
+    kinks = sorted(breaks)
 
     def integrate(a, b, f):
         if b <= a:
             return 0.0
-        xm, xr = (a + b) / 2, (b - a) / 2
-        return float(sum(w * f(xm + xr * x) for x, w in zip(xg, wg)) * xr)
+        total = 0.0
+        pts = [a] + [k for k in kinks if a < k < b] + [b]
+        for lo, hi in zip(pts[:-1], pts[1:]):
+            xm, xr = (lo + hi) / 2, (hi - lo) / 2
+            total += float(sum(w * f(xm + xr * x) for x, w in zip(xg, wg)) * xr)
+        return total
 
     lo, hi = s_nodes[0], s_nodes[-1]
     out[0] += integrate(s0, min(s1, lo), p)

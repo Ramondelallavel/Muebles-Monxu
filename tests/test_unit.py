@@ -103,6 +103,39 @@ def test_plate_navier_matches_timoshenko():
 
 
 # ------------------------------------------------------------------ optimización
+def test_line_load_integration_is_exact_across_kinks():
+    """La regla de 45° da densidades con quiebros: partir la cuadratura en ellos conserva la carga total."""
+    s = np.linspace(0, 1000, 11)
+    a = 250.0                                                   # meseta trapecial (quiebros dentro de los tramos)
+
+    def p(x):
+        return min(x, a, 1000 - x)
+    total = a * (1000 - a)                                      # área exacta del trapecio
+    F = line_load_to_nodes(s, p, 0, 1000, breaks=(a, 1000 - a, 500))
+    assert F.sum() == pytest.approx(total, rel=1e-12)
+    F0 = line_load_to_nodes(s, p, 0, 1000)                       # sin quiebros: error de cuadratura apreciable
+    assert abs(F0.sum() - total) > 1e-6 * total
+
+
+def test_singular_frame_raises_linalg_error():
+    f = Frame3D()
+    a, b = f.node((0, 0, 0)), f.node((1000, 0, 0))
+    f.element(a, b, 210000, 81000, 100, 1e4, 1e4, 1e4, (0, 0, 1))
+    f.support(a, (True, True, True, False, False, False))       # rótula esférica: la barra gira libre (mecanismo)
+    f.add_nodal_load("Q", b, (0, 0, -100))
+    with pytest.raises(np.linalg.LinAlgError):
+        f.solve()
+
+
+def test_bar_plan_length_balance_when_last_piece_fills_the_bar():
+    """Cortes + sierra + retal = longitud de barra, también cuando la última pieza apura la barra sin corte final."""
+    r = optimize_bars([{"ref": "A", "length": 2993.0, "qty": 2}], 6000, 3, 10)      # 2·(2993+3) = 5992 > 5990 útiles
+    assert r["n_bars"] == 1 == r["lower_bound"] and r["optimal"]
+    for b in r["bars"]:
+        assert sum(c["length"] for c in b["cuts"]) + b["kerf_loss"] + b["remnant"] == pytest.approx(6000)
+        assert b["remnant"] >= 0
+
+
 def test_bar_optimizer_respects_kerf_and_bound():
     r = optimize_bars([{"ref": "A", "length": 1912, "qty": 4}, {"ref": "B", "length": 712, "qty": 6}], 6000, 3, 10)
     assert r["n_bars"] == r["lower_bound"] == 2

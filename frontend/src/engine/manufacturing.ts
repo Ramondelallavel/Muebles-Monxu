@@ -26,10 +26,11 @@ export function optimizeBars(pieces, bar_length = 6000.0, kerf = 3.0, trim = 10.
     best.cuts.push({ ref: it.ref, label: it.label ?? "", length: it.length });
     best.free -= need;
   }
-  const lb0 = items.length ? Math.ceil(items.reduce((s, p) => s + p.length + kerf, 0) / (bar_length - trim)) : 0;
+  // cota inferior válida: cada barra admite hasta un ancho de sierra más (la última pieza puede apurarla)
+  const lb0 = items.length ? Math.ceil(items.reduce((s, p) => s + p.length + kerf, 0) / (bar_length - trim + kerf) - 1e-9) : 0;
   if (bars.length > lb0 && items.length <= 60) {
     for (let k = lb0; k < bars.length; k++) {
-      const exact = exactPack(items, bar_length - trim, kerf, k);
+      const exact = exactPack(items, bar_length - trim + kerf, kerf, k);
       if (exact) {
         bars = exact.map((b) => ({ cuts: b.map((it) => ({ ref: it.ref, label: it.label ?? "", length: it.length })),
           free: bar_length - trim - b.reduce((s, it) => s + it.length + kerf, 0) }));
@@ -40,7 +41,7 @@ export function optimizeBars(pieces, bar_length = 6000.0, kerf = 3.0, trim = 10.
   const total = items.reduce((s, p) => s + p.length, 0);
   const out = bars.map((b, n) => {
     const rem = Math.max(0.0, b.free);
-    return { bar: n + 1, cuts: b.cuts, used: pyRound(b.cuts.reduce((s, c) => s + c.length, 0), 1), kerf_loss: pyRound(kerf * b.cuts.length + trim, 1),
+    return { bar: n + 1, cuts: b.cuts, used: pyRound(b.cuts.reduce((s, c) => s + c.length, 0), 1), kerf_loss: pyRound(kerf * b.cuts.length + trim + Math.min(0.0, b.free), 1),
       remnant: pyRound(rem, 1), remnant_reusable: rem >= reusable_min };
   });
   const nb = bars.length;

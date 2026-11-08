@@ -5,9 +5,9 @@ geométrica, mecánica y constructivamente: modelo B-rep real, cálculo, planos,
 BOM, optimización de corte y expediente de fabricación, todo derivado de una única fuente de
 parámetros.
 
-> **Estado:** núcleo funcional con ocho familias completas (**mesa industrial**, **mesa de soldadura**,
-> **estantería industrial**, **estantería en batería**, **puesto de trabajo**, **carro de taller**, **carro estantería** y
-> **tarima / plataforma de trabajo**) y el caso de aceptación §23 superado por
+> **Estado:** núcleo funcional con nueve familias completas (**mesa industrial**, **mesa de soldadura**,
+> **estantería industrial**, **estantería en batería**, **puesto de trabajo**, **carro de taller**, **carro estantería**,
+> **carro plataforma** y **tarima / plataforma de trabajo**) y el caso de aceptación §23 superado por
 > pruebas automáticas. Los armarios (puertas, cajones) están previstos en la arquitectura pero
 > **no implementados**.
 
@@ -48,7 +48,7 @@ python -m pytest -q
 | 4. Documentación | ✔ | 12 hojas de planos (conjunto, estructura, perfiles, chapa, desarrollos, pletinas, soldaduras con detalles, explosionado, montaje, despiece), STEP de conjunto y de cada pieza, STL, BREP, GLB, DXF, Excel con fórmulas, informe PDF |
 | 5. Fabricación | ✔ | Desarrollos con BA = π/2·(Ri+K·t), DFM (láser, plegadora, perfiles, soldadura, montaje), corte de barras hasta la cota inferior, anidado de chapa |
 | 6. Asistente IA | ✔ | Interpretación en español con evidencia, preguntas de datos faltantes, propuesta preliminar diferenciada de lo verificado |
-| 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) **carro de taller** (ruedas de espiga con freno; asa en uno, dos o ningún extremo) **carro estantería** (N niveles sobre ruedas, asa opcional), **mesa de soldadura** (placa perforada de 10–20 mm), **estantería en batería** (N módulos con montantes compartidos) y **tarima** (plataforma baja con cargas de EN ISO 14122-2). Peto trasero opcional en mesa, puesto y carro. Armarios: sólo se identifican en el asistente |
+| 7. Nuevas familias | ◐ parcial | **Estantería industrial** (N niveles, montantes, bastidores y bandejas, anclaje), **puesto de trabajo** (montantes, travesaño alto, estante en voladizo, panel perforado) **carro de taller** (ruedas de espiga con freno; asa en uno, dos o ningún extremo) **carro estantería** (N niveles sobre ruedas, asa opcional), **mesa de soldadura** (placa perforada de 10–20 mm), **estantería en batería** (N módulos con montantes compartidos), **tarima** (plataforma baja con cargas de EN ISO 14122-2) y **carro plataforma** (plataforma baja sobre ruedas con asa de empuje). Peto trasero opcional en mesa, puesto y carro. Armarios: sólo se identifican en el asistente |
 | 8. Validación | ✔ | 125 pruebas: unidades frente a soluciones analíticas y tablas, las ocho familias, QA, API, aceptación §23, validación cruzada navegador ↔ servidor, expediente del navegador y legibilidad de planos |
 
 ### Verificaciones de la cadena (no simuladas)
@@ -244,6 +244,90 @@ discontinuos sobre un bastidor de tubo, con patas cortas, placas base y pies niv
 
 Plantillas: tarima de operario de 1.200 × 800 × 200 mm, plataforma frente a máquina de 2.000 × 1.000
 × 300 mm y podio de taller de 3.000 × 1.200 × 450 mm.
+
+## Carro plataforma
+
+`carro_plataforma` (`CP`) es una plataforma baja de chapa plegada sobre un bastidor soldado y cuatro
+ruedas giratorias de espiga roscada, para el transporte interno de cargas de hasta 1.000 kg. Es el
+carro de taller sin balda ni reposapiés, con la superficie a 200–500 mm. El asa de empuje puede ir en
+un extremo, en los dos o no existir (plataforma rodante). Las ruedas con freno van en el lado del asa.
+
+- **Altura de la plataforma:** la cara superior debe dejar sitio al bastidor sobre las placas base de
+  las ruedas, que se eligen por cálculo. Con la altura por defecto (300 mm), si la rueda que exige la
+  carga no cabe, la plataforma se eleva (regla de diseño `REGLA-ALTURA`). Por ejemplo, 1.000 kg en
+  1.200 × 800 piden ruedas Ø200 M20 y la plataforma sube a 335 mm. Un valor del usuario no se cambia:
+  se informa `GEO-PLATAFORMA-BAJA` con la altura mínima.
+- **Fuerza de maniobra en el asa:** se aplica donde se empuja, en el asa (la del extremo izquierdo si
+  hay dos), tanto en el modelo de barras como en el vuelco del carro vacío. El desplome se limita a la
+  altura del asa. Sin asa se aplica en el plano de la plataforma. Por defecto son 50 N. Un carro vacío es
+  ligero: el de 1.000 × 600 mm (31 kg) admite 52 N de cálculo en el asa a 950 mm antes de volcar de
+  lado, y el resultado lo dice (`empuje_admisible_N` en el detalle de la comprobación).
+- **Ruedas nuevas en el catálogo:** Ø160 y Ø200 con espiga M20 (200 y 300 kg), con y sin freno.
+- **Asistente:** reconoce «carro plataforma», «plataforma con ruedas», «plataforma rodante / móvil / de
+  transporte» y «carro de base plana». Lee la altura del asa («asa a 950 mm») sin confundirla con la
+  altura de la plataforma. Una «plataforma de trabajo con ruedas para un operario» sigue siendo una
+  tarima, y las ruedas se marcan como no soportadas.
+
+Plantillas: 1.000 × 600 mm (250 kg), 1.200 × 800 mm (500 kg), 1.600 × 800 mm con dos asas (600 kg),
+plataforma rodante sin asa de 1.200 × 800 mm (400 kg) y carro inoxidable de 800 × 500 mm.
+
+## Depuración de lógica: invariantes
+
+`tools/invariants.py` comprueba sobre las plantillas y casos realistas aleatorios que el motor de
+referencia es coherente consigo mismo:
+
+- ningún parámetro queda en 'auto' y ningún valor del usuario se cambia;
+- en cada combinación, las reacciones suman las cargas aplicadas, y cada superficie recibe exactamente su
+  carga;
+- un diseño simétrico tiene reacciones verticales simétricas;
+- BOM = suma de piezas = masa del modelo;
+- el plan de corte usa cada pieza tantas veces como su cantidad y la longitud de cada barra cuadra;
+- el anidado coloca todas las piezas, dentro del formato útil y sin solapes;
+- la soldadura total es la suma de las uniones;
+- precio ≥ coste ≥ directo y el precio unitario no crece con el lote.
+
+```bash
+python tools/invariants.py 250 81
+```
+
+Resultado: 284 casos (plantillas y 250 aleatorios), 0 incidencias. `tests/test_invariants.py` lo
+ejecuta sobre una plantilla de cada familia. Fallos encontrados y corregidos en los dos motores:
+
+- **Carga perdida en la regla de 45°:** la integración de Gauss cruzaba los quiebros del reparto y
+  perdía hasta un 0,1 % de la carga, del lado inseguro (1961,1 N en lugar de 1962,0 N). Ahora se integra
+  por tramos.
+- **Apoyos horizontales hiperestáticos:** los cuatro apoyos impedían el desplazamiento horizontal.
+  Aparecían reacciones horizontales espurias y reacciones verticales asimétricas en diseños simétricos
+  (321,7 frente a 361,1 N). Ahora un pie es fijo, otro desliza en X e impide el giro en planta, y el
+  resto solo apoya en vertical.
+- **Capacidad de pies y ruedas:** se comprobaba solo con la combinación ELS-1. Ahora se usa la peor
+  combinación de servicio con peso propio (con carga puntual gobierna ELS-2).
+- **Balance de barras:** cuando la última pieza apura la barra, no hay corte final, pero se contaba el
+  ancho de sierra (balance de 6001 mm en barras de 6000). La cota inferior ya tiene en cuenta ese corte
+  ahorrado.
+- **Texto del vuelco:** decía «Vuelco de la carro vacía» y «de la puesto vacía». Ahora concuerda
+  («del carro vacío»).
+
+Además, el motor de referencia resolvía cada caso de carga con un sistema denso completo. Ahora
+factoriza una sola vez la matriz dispersa (SuperLU) para todos los casos. La comprobación completa de
+la mesa de 1.200 mm (dimensionado, cálculo y fabricación) baja de unos 8 s a 2 s.
+
+### Asistente: datos que se perdían o se leían mal
+
+Corregido en los dos intérpretes (`tools/webcheck/interp_cmp.py` compara 55 frases: 0 diferencias):
+
+- **Datos interpretados descartados:** el asa en los dos extremos, el peto o el reposapiés se
+  interpretaban, pero no pasaban a los parámetros (solo pasaba una lista fija). Ahora pasa todo lo que
+  existe en la familia.
+- **Cota unida a la carga:** en «1800x800x900 400 kg», el espacio se tomaba como separador de miles. La
+  altura y la carga salían de 900.400. Ahora el espacio solo agrupa miles tras una o dos cifras
+  («1 500 kg»), y un número nunca empieza en mitad de otro.
+- **Coma tras la planta:** «1000x600, 300 kg» perdía las dos cotas.
+- **Carga por nivel:** «5 niveles de 100 kg» se repartía como 100 kg en total (20 kg por nivel).
+  «5 baldas de 80 kg cada una» no se leía, y «4 bandejas» no contaba como niveles.
+- **Carga de balda y de encimera:** «400 kg, balda de 100 kg» asignaba los 400 kg a la balda, y «balda
+  de 80 kg y 200 kg en la encimera» también.
+- **Esquema del modelo de lenguaje:** no admitía `tarima` ni `carro_plataforma`.
 
 ## Borrar proyectos
 
@@ -501,6 +585,8 @@ con cargas puntuales, taladro de Ø16 en placa de 20 mm, o un asa fijada contra 
 - **Capacidad de los pies niveladores y de las ruedas:** catálogo genérico, a confirmar con el proveedor. Las ruedas
   se modelan con su envolvente simplificada (sin descentrado de giro).
 - **Fuerza de maniobra del carro:** 100 N por defecto, aplicada en el plano de la encimera con las ruedas frenadas.
+  En el carro plataforma, 50 N en el asa. El vuelco se comprueba con el carro vacío en la dirección más
+  desfavorable, que en carros estrechos es la lateral.
 - **DC01:** la norma no garantiza fy mínimo, así que se marca como hipótesis.
 - **Gargantas a < 3 mm:** quedan fuera de EN 1993-1-8 §4.5.2 y requieren una WPS cualificada.
 

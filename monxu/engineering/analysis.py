@@ -22,6 +22,7 @@ OK, FAIL, PENDING, WARN = "CUMPLE", "NO_CUMPLE", "PENDIENTE", "ADVERTENCIA"
 G_ACC = 9.81
 MAX_ELEMENT = 100.0
 N_ZERO = 1e-3          # N: axil por debajo del cual la barra se considera sin compresión
+MASCULINE_WORDS = ("carro", "puesto")     # concordancia del texto de vuelco ("del carro vacío", "de la mesa vacía")
 
 
 @dataclass
@@ -132,17 +133,19 @@ class StructuralModel:
             self.members[i.id] = {"instance": i, "profile": prof, "props": sp, "material": mat, "length": Lm,
                                   "p0": p0, "p1": p1, "x": x, "elements": elems, "role": i.role}
         # Coacciones horizontales isostáticas: sin empujes hiperestáticos entre pies (conservador para
-        # flexión de bastidores y para el desplome; el rozamiento real con el suelo no se cuenta).
+        # flexión de bastidores y para el desplome; el rozamiento real con el suelo no se cuenta). Tres coacciones
+        # en planta: un pie fijo en X-Y y otro, alejado en X, deslizante en X (impide el giro). Antes había una
+        # cuarta (otro pie deslizante en Y): hiperestática, y con bastidores asimétricos (reposapiés delantero)
+        # creaba empujes falsos entre pies y descompensaba las reacciones verticales.
         sups = m.structure.get("supports", [])
         if sups:
             P = np.array([s["point"] for s in sups], float)
             k0 = int(np.argmin(P[:, 0] + P[:, 1]))
             d = P - P[k0]
             kx = int(np.argmax(np.abs(d[:, 0]) - np.abs(d[:, 1])))
-            ky = int(np.argmax(np.abs(d[:, 1]) - np.abs(d[:, 0])))
             for k, sup in enumerate(sups):
                 n = self.frame.node(sup["point"])
-                fx = k in (k0, ky)
+                fx = k == k0
                 fy = k in (k0, kx)
                 self.frame.support(n, (fx, fy, True, False, False, False))
                 sup["node"] = n
@@ -161,7 +164,7 @@ class StructuralModel:
                 self.frame.add_nodal_load(case, e.j, (0, 0, -P / 2))
         return total
 
-    def line_load(self, case: str, member: str, p, s0g: float, s1g: float, axis_coord: int) -> float:
+    def line_load(self, case: str, member: str, p, s0g: float, s1g: float, axis_coord: int, breaks=()) -> float:
         """Aplica una densidad vertical p(s) [N/mm] en coordenada global ``axis_coord`` ∈ [s0g, s1g]."""
         mm = self.members[member]
         chain = self.chains[member]
@@ -169,7 +172,7 @@ class StructuralModel:
         order = np.argsort(coords)
         coords = coords[order]
         nodes = [chain[k][1] for k in order]
-        F = line_load_to_nodes(coords, p, s0g, s1g)
+        F = line_load_to_nodes(coords, p, s0g, s1g, breaks=breaks)
         for f, n in zip(F, nodes):
             self.frame.add_nodal_load(case, n, (0, 0, -f))
         return float(F.sum())
@@ -184,9 +187,11 @@ class StructuralModel:
             x0, x1 = gx[k], gx[k + 1]
             a = x1 - x0
             for mem in level["long"]:
-                total += self.line_load(case, mem, lambda s, x0=x0, x1=x1: q * min(s - x0, x1 - s, b / 2), x0, x1, 0)
+                total += self.line_load(case, mem, lambda s, x0=x0, x1=x1: q * min(s - x0, x1 - s, b / 2), x0, x1, 0,
+                                        breaks=(x0 + b / 2, x1 - b / 2, (x0 + x1) / 2))
             for xm, mem in ((x0, x_members[k]), (x1, x_members[k + 1])):
-                total += self.line_load(case, mem, lambda s, a=a: q * min(s - yf, yb - s, a / 2), yf, yb, 1)
+                total += self.line_load(case, mem, lambda s, a=a: q * min(s - yf, yb - s, a / 2), yf, yb, 1,
+                                        breaks=(yf + a / 2, yb - a / 2, (yf + yb) / 2))
         return total
 
     def member_deflection(self, mid: str, u: np.ndarray) -> float:
@@ -285,18 +290,25 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         hyp.append(pl["hypothesis"])
     H_N = ps.get("CARGA_HORIZONTAL") or 0.0
     top_nodes = []
-    if H_N and top_lvl:
-        for lid in st["leg_ids"]:
-            chain = sm.chains[lid]
-            z_top = top_lvl["z"] - model.instance(top_lvl["long"][0]).part.profile.H / 2
-            top_nodes.append(min(chain, key=lambda c: abs(fr.nodes[c[1]][2] - z_top))[1])
+    push = st.get("push_points")      # puntos de empuje propios (p. ej. el asa de un carro): [{"member", "z"}]
+    if H_N and (push or top_lvl):
+        if push:
+            for pp in push:
+                chain = sm.chains[pp["member"]]
+                top_nodes.append(min(chain, key=lambda c: abs(fr.nodes[c[1]][2] - pp["z"]))[1])
+        else:
+            for lid in st["leg_ids"]:
+                chain = sm.chains[lid]
+                z_top = top_lvl["z"] - model.instance(top_lvl["long"][0]).part.profile.H / 2
+                top_nodes.append(min(chain, key=lambda c: abs(fr.nodes[c[1]][2] - z_top))[1])
         for n in top_nodes:
             fr.add_nodal_load("HX", n, (H_N / len(top_nodes), 0, 0))
             fr.add_nodal_load("HY", n, (0, H_N / len(top_nodes), 0))
-        cases.append({"id": "HX/HY", "label": "Empuje horizontal en el plano de la encimera (direcciones X e Y)",
+        cases.append({"id": "HX/HY", "label": st.get("push_label", "Empuje horizontal en el plano de la encimera "
+                                                                    "(direcciones X e Y)"),
                       "value": f"{H_N:g} N", "total_N": H_N})
         if model.params.sources.get("CARGA_HORIZONTAL") == "defecto":
-            hyp.append(f"Empuje horizontal de {H_N:g} N: {crit['horizontal_service_load_note']}")
+            hyp.append(f"Empuje horizontal de {H_N:g} N: {st.get('push_note', crit['horizontal_service_load_note'])}")
 
     gG, gQ, psi = pf["gamma_G"], pf["gamma_Q"], pf["psi0_Q"]
     combos_uls = {"ELU-1": {"G": gG}}
@@ -399,7 +411,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
 
     # ---------------------------------------------------------------- desplome
     if "ELS-3" in U and top_nodes:
-        h = st["worktop_height"]
+        h = st.get("sway_height", st["worktop_height"])     # altura del punto de empuje (encimera o asa)
         lim = h / crit["deflection_limits"]["sway_height_ratio"]
         for cname, comp in (("ELS-3", 0), ("ELS-4", 1)):
             dx = max(abs(U[cname][6 * n + comp]) for n in top_nodes)
@@ -422,9 +434,14 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         comp = catalog.component(sups[0]["component"])
         cap = comp["rated_load_kg"] * G_ACC
         sup_word = "Ruedas" if comp["category"].startswith("ruedas") else "Pies niveladores"
-        sls_v = "ELS-1" if "ELS-1" in combos_sls else None
+        # peor reacción de servicio con gravedad (uniforme, carga puntual, reposapiés...): antes sólo ELS-1, y una
+        # carga puntual (p. ej. 153 kg sobre una tarima) que va a dos pies quedaba sin comprobar
+        rmax, sls_v = float("-inf"), None
+        for cname in (c for c, f in combos_sls.items() if "G" in f):
+            for r in reactions:
+                if r["combination"] == cname and r["Rz_N"] > rmax:
+                    rmax, sls_v = r["Rz_N"], cname
         if sls_v:
-            rmax = max(r["Rz_N"] for r in reactions if r["combination"] == sls_v)
             st_ = _status(rmax / cap)
             checks.append(Check("A.PIES", "apoyos", sup_word, f"Reacción máxima de servicio frente a la "
                                 f"capacidad nominal de {comp['name']}", "Dato de catálogo genérico — confirmar con la "
@@ -550,7 +567,10 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             Mdst = pf["gamma_Q_dst"] * H_N * hgt
             ratio = Mdst / Mstb if Mstb > 0 else float("inf")
             what = st.get("product_word", "mesa")
-            det = {"peso_N": Wtot, "cdg_mm": [round(v, 1) for v in cog], "brazo_mm": lev}
+            what = f"del {what} vacío" if what in MASCULINE_WORDS else f"de la {what} vacía"
+            # empuje de servicio que el conjunto vacío resiste sin anclaje (EQU): γQ·H·h = γG,stb·W·brazo
+            det = {"peso_N": Wtot, "cdg_mm": [round(v, 1) for v in cog], "brazo_mm": lev,
+                   "empuje_admisible_N": math.floor(Mstb / (pf["gamma_Q_dst"] * hgt))}
             if ps.get("ANCLAJE") == "al_suelo":
                 # base de vuelco: distancia entre líneas de apoyo en la dirección más desfavorable
                 base = (ymax - ymin) if dirn in ("+Y", "-Y") else (xmax - xmin)
@@ -566,8 +586,9 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
                                     "EN 1990 EQU + EN 1992-4 (anclajes, no evaluado)", round(T / n_anchor, 1), None,
                                     "N", None, PENDING, "EQU", det))
             else:
-                checks.append(Check("E.VUELCO", "estabilidad", "Conjunto", f"Vuelco de la {what} vacía bajo empuje "
-                                    f"horizontal de {H_N:g} N en la parte superior (dirección {dirn})",
+                checks.append(Check("E.VUELCO", "estabilidad", "Conjunto", f"Vuelco {what} bajo empuje "
+                                    f"horizontal de {H_N:g} N {st.get('push_where', 'en la parte superior')} "
+                                    f"(dirección {dirn})",
                                     "EN 1990 EQU (γG,stb = 0,9; γQ = 1,5)", round(Mdst / 1e3, 2), round(Mstb / 1e3, 2),
                                     "N·m", round(ratio, 4), _status(ratio), "EQU", det))
         stability = {"weight_N": Wtot, "cog": cog.tolist(), "levers": levers}
@@ -605,8 +626,9 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
                              round(mm["props"].Iz / 1e4, 3), round(mm["props"].Wpl_y / 1e3, 3),
                              round(mm["props"].Wpl_z / 1e3, 3)) for mm in sm.members.values()}),
         "hypotheses": hyp + [
-            "Apoyos: pies niveladores articulados con coacción horizontal isostática (un pie fijo en X-Y, uno "
-            "deslizante en X, uno deslizante en Y y el cuarto sólo vertical); no se cuenta con el rozamiento.",
+            "Apoyos: pies niveladores articulados con coacción horizontal isostática (un pie fijo en X-Y, otro "
+            "deslizante en X que impide el giro en planta, y los demás sólo verticales); no se cuenta con el "
+            "rozamiento.",
             f"Cargas de superficie repartidas al emparrillado mediante la regla de 45° (áreas tributarias).",
             f"Longitud de pandeo de patas: {beta_leg}·L (pórtico traslacional, conservador).",
             f"Curva de pandeo '{crit['buckling_curve_cold_formed_hollow']}' para perfiles huecos conformados en frío "
