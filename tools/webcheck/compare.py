@@ -119,7 +119,8 @@ for J, P in zip(js, py):
             if u is not None and jc[1] is not None:
                 e = abs(jc[1] - u) / max(abs(u), 1e-3)
                 worst[cid.split(".")[0]] = max(worst.get(cid.split(".")[0], 0), e)
-                if e > 2e-3:
+                # los aprovechamientos se redondean a 4 decimales: admite un escalón de redondeo (0,0001)
+                if e > 2e-3 and abs(jc[1] - u) > 1.01e-4:
                     d.append(f"aprovechamiento {cid}: JS={jc[1]} PY={u}")
         for cid in J["checks"]:
             if cid not in P["checks"]:

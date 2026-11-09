@@ -103,9 +103,13 @@ def overturning(model, ps: dict, st: dict | None = None) -> dict | None:
         # (T_i = M·d_i / Σd²). Con cuatro esquinas es M/base repartido entre los dos tacos del lado traccionado; con
         # más apoyos (baterías, cantilever) el taco más alejado lleva más que la media
         M_net = max(0.0, Mdst - Mstb)
-        s2 = float((dist[d] ** 2).sum())
-        T_per = M_net * float(dist[d].max()) / s2 if s2 > 0 else (float("inf") if M_net > 0 else 0.0)
-        T = M_net * float(dist[d].sum()) / s2 if s2 > 0 else (float("inf") if M_net > 0 else 0.0)
+        dd = [float(x) for x in dist[d]]            # suma en orden (igual que el motor del navegador)
+        s2, s1 = 0.0, 0.0
+        for x in dd:
+            s2 += x * x
+            s1 += x
+        T_per = M_net * max(dd) / s2 if s2 > 0 else (float("inf") if M_net > 0 else 0.0)
+        T = M_net * s1 / s2 if s2 > 0 else (float("inf") if M_net > 0 else 0.0)
         res[d] = {"ratio": Mdst / Mstb if Mstb > 0 else float("inf"), "Mstb": Mstb, "Mdst": Mdst, "T": T,
                   "T_per": T_per, "n": int((dist[d] > 1e-6).sum())}
     dirn = max(DIRS, key=lambda d: res[d]["ratio"])
