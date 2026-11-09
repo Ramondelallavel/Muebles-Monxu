@@ -385,6 +385,10 @@ Cambios generales que trajeron estas dos familias, en los dos motores:
   muy juntos ya no se pisan (se escalonan a ambos lados de la línea de cota) y la altura total va por fuera de la
   cadena, como en el navegador.
 - **Fabricación:** las advertencias de soldeo y la comprobación de la tuerca dentro de la pata dependen de la familia.
+- **Planos del navegador:** las aristas de una pieza que queda 1–2 mm por debajo de una chapa de otra pieza (p. ej. los
+  travesaños bajo la balda) asomaban como trazos sueltos sobre la chapa en la isométrica. El z-buffer guarda ahora qué
+  pieza es la más cercana: la tolerancia amplia (para que una pieza no se oculte a sí misma) sólo se aplica frente a
+  sus propias caras.
 
 ## Depuración de lógica: invariantes
 

@@ -41,6 +41,7 @@ export function project(items, view, opts = {}) {
       A[0] * M[0][2] + A[1] * M[1][2] + A[2] * M[2][2], A[0] * t[0] + A[1] * t[1] + A[2] * t[2]]);
     return { g, pu, M };
   });
+  inst.forEach((it, idx) => { it.idx = idx; });
   let u0 = Infinity, v0 = Infinity, u1 = -Infinity, v1 = -Infinity;
   for (const it of inst) {
     const P = it.g.brep.verts, pu = it.pu;
@@ -57,10 +58,11 @@ export function project(items, view, opts = {}) {
   const NX = Math.ceil((u1 - u0) / px) + 3, NY = Math.ceil((v1 - v0) / px) + 3;
   const zb = new Float32Array(NX * NY).fill(-Infinity);
   const zs = new Float32Array(NX * NY);         // pendiente de profundidad (mm por píxel) de la superficie más cercana
+  const zi = new Int32Array(NX * NY).fill(-1);  // pieza (instancia) de la superficie más cercana
   const X = (u) => (u - u0) / px + 1, Y = (v) => (v - v0) / px + 1;
   // ---- z-buffer por líneas de barrido; las caras traseras de sólidos cerrados nunca son las más cercanas
   const q = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
-  for (const it of inst) {
+  inst.forEach((it, idx) => {
     const P = it.g.positions, pu = it.pu;
     for (let k = 0; k < P.length; k += 9) {
       for (let j = 0; j < 3; j++) {
@@ -90,20 +92,22 @@ export function project(items, view, opts = {}) {
         }
         const x0 = Math.max(0, Math.ceil(xl - 0.5)), x1 = Math.min(NX - 1, Math.floor(xr - 0.5));
         let dd = A * (x0 + 0.5) + B * sy + D, i = y * NX + x0;
-        for (let x = x0; x <= x1; x++, i++, dd += A) if (dd > zb[i]) { zb[i] = dd; zs[i] = slope; }
+        for (let x = x0; x <= x1; x++, i++, dd += A) if (dd > zb[i]) { zb[i] = dd; zs[i] = slope; zi[i] = idx; }
       }
     }
-  }
-  // ---- visibilidad de un punto: mayoría de la vecindad 3×3 claramente por delante del punto
+  });
+  // ---- visibilidad de un punto: mayoría de la vecindad 3×3 claramente por delante del punto. Frente a las caras de su
+  // propia pieza la tolerancia es amplia (una arista está sobre ellas: no debe ocultarse a sí misma); frente a otra pieza,
+  // estricta (una arista que queda 1–2 mm por debajo de una chapa de otra pieza está oculta: antes asomaba a trozos)
   const tol = 1.0 * px + 0.05;
-  const isHidden = (u, v, d) => {
+  const isHidden = (u, v, d, self) => {
     const x = Math.floor(X(u)), y = Math.floor(Y(v));
     let n = 0;
     for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
       const xx = x + i, yy = y + j;
       if (xx < 0 || yy < 0 || xx >= NX || yy >= NY) continue;
       const c = yy * NX + xx;
-      if (zb[c] > d + tol + 1.6 * zs[c]) n++;
+      if (zb[c] > d + (zi[c] === self ? tol + 1.6 * zs[c] : 0.1 + 1.2 * zs[c])) n++;
     }
     return n >= 5;
   };
@@ -111,6 +115,7 @@ export function project(items, view, opts = {}) {
   const vis = [], hid = [];
   const seen = new Set();
   const edge = (it, a, b) => {
+    const self = it.idx;
     const A = it.uvw, ua = A[3 * a], va = A[3 * a + 1], da = A[3 * a + 2], ub = A[3 * b], vb = A[3 * b + 1], db = A[3 * b + 2];
     const L = Math.hypot(ub - ua, vb - va);
     if (L < px * 0.3) return;                     // arista vista de punta
@@ -118,7 +123,7 @@ export function project(items, view, opts = {}) {
     const key = `${ka}|${kb}`, key2 = `${kb}|${ka}`;
     if (seen.has(key) || seen.has(key2)) return;
     seen.add(key);
-    const at = (s) => isHidden(ua + (ub - ua) * s, va + (vb - va) * s, da + (db - da) * s);
+    const at = (s) => isHidden(ua + (ub - ua) * s, va + (vb - va) * s, da + (db - da) * s, self);
     const step = Math.min(1, (3 * px) / L);
     const n = Math.ceil(1 / step);
     let sPrev = 0, hPrev = at(0), start = 0;
