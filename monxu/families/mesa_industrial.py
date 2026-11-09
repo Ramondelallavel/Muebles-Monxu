@@ -56,6 +56,7 @@ CANDIDATES = {
 FOOTREST_LOAD_N = 1000.0     # apoyo del pie en el centro del reposapiés (criterio de ensayo habitual de 1 kN)
 FOOT_CLEARANCE = 100.0       # hueco libre mínimo sobre el reposapiés para apoyar el pie
 CROSSBEAM_GAP = 5.0          # hueco mínimo entre travesaños intermedios, y con las patas, para soldarlos
+RADIUS_MARGIN = 1.0          # margen del taladro de la remachable respecto al radio de esquina del perfil
 CONSTRUCTIVE_DEFAULTS = {"PERFIL_PATA": "SHS 40x40x2", "PERFIL_LARGUERO": "RHS 60x40x2",
                          "PERFIL_TRAVESANO": "RHS 40x20x2", "PERFIL_BASTIDOR": "RHS 40x20x2",
                          "PERFIL_REPOSAPIES": "RHS 40x20x2",
@@ -743,8 +744,10 @@ class MesaIndustrial(ProductFamily):
             prof = (profs or {}).get(e) or (prof_long if e in ("y0", "y1") else prof_end)
             fl_lo, fl_hi = R + 2 * t + hole_d / 2, ala - max(t, 3.0) - hole_d / 2
             depth0 = t    # la cara superior del bastidor está a 't' bajo la cara superior de la chapa
-            rail_lo = depth0 + prof.r_out + rn["hole_d"] / 2
-            rail_hi = depth0 + prof.H - prof.r_out - rn["hole_d"] / 2
+            # el taladro de la remachable, al menos a RADIUS_MARGIN del radio de esquina (antes podía quedar en la
+            # tangente: el cuerpo de la remachable rozaba la esquina interior del tubo)
+            rail_lo = depth0 + prof.r_out + rn["hole_d"] / 2 + RADIUS_MARGIN
+            rail_hi = depth0 + prof.H - prof.r_out - rn["hole_d"] / 2 - RADIUS_MARGIN
             lo, hi = max(fl_lo, rail_lo), min(fl_hi, rail_hi)
             if lo > hi:
                 ala_min = max(fl_lo, rail_lo) + max(t, 3.0) + hole_d / 2

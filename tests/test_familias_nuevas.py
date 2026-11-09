@@ -601,3 +601,12 @@ def test_hot_dip_galvanizing_asks_for_vent_holes():
     assert any(f["code"] == "GAL-VENTEO" and f["level"] == "advertencia" for f in dfm)
     m2 = _build("mesa_industrial", {"LONGITUD": 1500, "ANCHURA": 700, "ALTURA": 900, "CARGA_TOTAL": 200})
     assert not any(f["code"] == "GAL-VENTEO" for f in dfm_check(m2, manufacturing_plan(m2)))
+
+
+def test_workstation_shelf_too_shallow_for_its_frame_is_rejected():
+    """Brazos del estante de longitud negativa (sólidos abiertos): ahora se rechaza con el fondo mínimo."""
+    from monxu.core.params import ParamError
+    vals = {"ESTANTE_SUPERIOR": 1, "PROFUNDIDAD_ESTANTE": 177, "PERFIL_ALTILLO": "SHS 120x120x4", "PERFIL_PATA": "SHS 70x70x3",
+            "ALTURA_ESTANTE": 1600}
+    with pytest.raises(ParamError, match="Fondo de estante 177 mm insuficiente"):
+        _build("puesto_trabajo", vals)

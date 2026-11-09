@@ -22,7 +22,7 @@ from .. import catalog
 from ..cad import geometry as G
 from ..cad.sheetmetal import EDGES, FlangeSpec, SheetMetalSpec, analytic_volume, bend_deduction, perforation_grid
 from ..core.model import Joint, ProfilePart, SheetPart, StandardPart
-from ..core.params import AUTO, ParamSpec
+from ..core.params import ParamError, AUTO, ParamSpec
 from .base import register
 from .mesa_industrial import (ALLP, CANDIDATES as MESA_CANDIDATES, CONSTRUCTIVE_DEFAULTS as MESA_DEFAULTS, MesaIndustrial,
                               even_positions, flange_hole_d, frame_z)
@@ -196,6 +196,9 @@ class PuestoTrabajo(MesaIndustrial):
                     model.note("error", "DFM-BASTIDOR-ESTANTE", "El bastidor retranqueado del estante no cabe en la "
                                "sección del montante.")
                 arm_len = D - a - e - alt.B
+                if arm_len <= 0:        # brazos de longitud nula o negativa: geometría imposible (sólidos abiertos)
+                    raise ParamError(f"Fondo de estante {D:g} mm insuficiente para el montante y el bastidor del estante "
+                                     f"({alt.code}): mínimo {a + e + alt.B + 40:.0f} mm.")
                 if arm_len < 40:
                     model.note("error", "GEO-ESTANTE-CORTO", f"Fondo de estante {D:g} mm insuficiente para el montante "
                                f"y el bastidor (mínimo {a + e + alt.B + 40:.0f} mm).")

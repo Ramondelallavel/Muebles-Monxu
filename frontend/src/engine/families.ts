@@ -30,6 +30,7 @@ const pt = (p) => p.map(Number);
 const FOOTREST_LOAD_N = 1000.0;     // apoyo del pie en el centro del reposapiés (criterio de ensayo habitual de 1 kN)
 const FOOT_CLEARANCE = 100.0;       // hueco libre mínimo sobre el reposapiés para apoyar el pie
 const CROSSBEAM_GAP = 5.0;          // hueco mínimo entre travesaños intermedios, y con las patas, para soldarlos
+const RADIUS_MARGIN = 1.0;          // margen del taladro de la remachable respecto al radio de esquina del perfil
 /** Cota de balda compatible con el reposapiés: por debajo o por encima dejando el hueco para el pie; la más próxima. */
 function shelfClearOfFootrest(ctx, d, zr, fp) {
   const ts = d.z_shelf - d.z_lf, bas = d.bas, zs = d.z_shelf;
@@ -440,8 +441,9 @@ function fixLayout(model, Lx, Ly, c, a, t, R, ala, prof_long, prof_end, z_ref, i
     const prof = profOf(e);
     const fl_lo = R + 2 * t + hole_d / 2, fl_hi = ala - Math.max(t, 3.0) - hole_d / 2;
     const depth0 = t;
-    const rail_lo = depth0 + prof.r_out + rn.hole_d / 2;
-    const rail_hi = depth0 + prof.H - prof.r_out - rn.hole_d / 2;
+    // el taladro de la remachable, al menos a RADIUS_MARGIN del radio de esquina (antes podía quedar en la tangente)
+    const rail_lo = depth0 + prof.r_out + rn.hole_d / 2 + RADIUS_MARGIN;
+    const rail_hi = depth0 + prof.H - prof.r_out - rn.hole_d / 2 - RADIUS_MARGIN;
     const lo = Math.max(fl_lo, rail_lo), hi = Math.min(fl_hi, rail_hi);
     if (lo > hi) {
       const ala_min = Math.max(fl_lo, rail_lo) + Math.max(t, 3.0) + hole_d / 2;
@@ -799,6 +801,8 @@ class PuestoTrabajo extends MesaIndustrial {
         const notch = a + ctx.get("HOLGURA_ESCOTADURA");
         const Lx = L - 2 * c;
         if (e + alt.B > a) model.note("error", "DFM-BASTIDOR-ESTANTE", "El bastidor retranqueado del estante no cabe en la sección del montante.");
+        if (D - a - e - alt.B <= 0)     // brazos de longitud nula o negativa: geometría imposible (sólidos abiertos)
+          throw new ParamError(`Fondo de estante ${g(D)} mm insuficiente para el montante y el bastidor del estante (${alt.code}): mínimo ${fx(a + e + alt.B + 40)} mm.`);
         if (D - a - e - alt.B < 40) model.note("error", "GEO-ESTANTE-CORTO", `Fondo de estante ${g(D)} mm insuficiente para el montante y el bastidor (mínimo ${fx(a + e + alt.B + 40)} mm).`);
         if (zs > zt - 100 + 1e-9) model.note("error", "GEO-ESTANTE-ALTO", `El estante superior (${g(zs)} mm) debe quedar al menos 100 mm por debajo de la cota superior de los montantes (${g(zt)} mm).`);
         if (zs < H + 300) model.note("error", "GEO-ESTANTE-BAJO", `El estante superior (${g(zs)} mm) debe quedar al menos 300 mm por encima de la encimera (${g(H)} mm).`);

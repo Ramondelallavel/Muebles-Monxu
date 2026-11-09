@@ -312,7 +312,11 @@ En el armario aparecieron tres fallos generales, corregidos en los dos motores:
   (mesas, puestos, carros, estanterías y armarios). La encontró el barrido aleatorio del motor del navegador
   (`FAMS=armario,carro_plataforma node fuzz.mjs`).
 - Una plataforma más baja que la placa base de su rueda daba una pata de longitud negativa (sólido abierto).
-  Ahora se rechaza con la altura mínima.
+  Ahora se rechaza con la altura mínima. Lo mismo con un estante de puesto de trabajo demasiado corto para su
+  bastidor: los brazos salían de longitud negativa; ahora se rechaza con el fondo mínimo.
+- La fijación de las bandejas podía quedar justo en la tangente del radio de esquina del perfil (a 0,05 mm):
+  el cuerpo de la remachable rozaba la esquina interior del tubo. Ahora se exige 1 mm de margen; si no cabe,
+  se pide una pestaña mayor. Ninguna plantilla cambia.
 - El asistente avisa si se piden más de dos puertas en un armario.
 - Nueva advertencia `GAL-VENTEO`: con galvanizado en caliente (EN ISO 1461), los tubos cerrados por soldadura
   necesitan taladros de venteo y drenaje (EN ISO 14713-2). No se modelan; el aviso da un criterio orientativo
