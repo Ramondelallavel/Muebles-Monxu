@@ -1,7 +1,7 @@
 // @ts-nocheck
 // Resolución de parámetros 'auto' por reglas y cálculo (port de monxu/engineering/sizing.py).
 import * as C from "./catalog";
-import { analyze, overturning, surfaceSheet } from "./analysis";
+import { analyze, deflectionRatios, dynamicFactor, overturning, patchSize, surfaceSheet } from "./analysis";
 import { navier } from "./fem";
 import { autoExplode } from "./geometry";
 import { AUTO, copyParams } from "./model";
@@ -12,10 +12,11 @@ const G_ACC = 9.81;
 function plateSizing(family, ps, tgt, notes, autoT, autoN) {
   const crit = C.criteria();
   const gG = crit.partial_factors.gamma_G, gQ = crit.partial_factors.gamma_Q;
-  const dl = crit.deflection_limits.panel_span_ratio;
+  const dl = deflectionRatios(ps.values)[1];
   const { surface, t_param, n_param } = tgt;
   const mat = C.material(ps.values[tgt.mat_param ?? "MATERIAL_CHAPA"]);
-  const load = ps.values[tgt.load_param] ?? 0;          // p. ej. sólo carga puntual sobre la encimera
+  const phi = dynamicFactor(ps.values);                 // coeficiente dinámico (carros)
+  const load = (ps.values[tgt.load_param] ?? 0) * phi;   // p. ej. sólo carga puntual sobre la encimera
   const tMin = tgt.min_t_by_use ? crit.min_sheet_thickness_by_use_mm[ps.values.USO ?? "montaje"] ?? 1.5 : 1.0;
   const tMax = 6.0;
   const tOpts = autoT ? (tgt.t_options ?? C.sheetThicknesses(mat.code)).filter((t) => tMin <= t && t <= (tgt.t_max ?? tMax)) : [ps.values[t_param]];
@@ -38,7 +39,7 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
     // peso propio igual que en la verificación: chapa real (con pestañas y escotaduras) repartida en la superficie
     const qg = (surfaceSheet(m.instance(surf.sheet_instance).part)[0] * G_ACC) / surf.area_mm2;
     const eta = surf.ligament_efficiency ?? 1.0;
-    const P_kg = surface === "encimera" ? ps.values.CARGA_PUNTUAL : null;
+    const P_kg = surface === "encimera" ? (ps.values.CARGA_PUNTUAL || 0.0) * phi || null : null;
     const fyd = mat.fy / mat.gamma_M0;
     const prof = C.profile(trial.values[tgt.trv_param]);
     const crossLen = yb - yf - prof.B;
@@ -50,7 +51,7 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
       const rs = { w: navier(a, b, t, mat.E, mat.nu, qg + q).w / eta };
       let okP = true;
       if (P_kg) {          // carga puntual sobre la encimera: misma comprobación que la verificación final
-        const size = surf.patch_mm ?? crit.point_load_patch_mm;
+        const size = patchSize(ps.values, surf);
         okP = navier(a, b, t, mat.E, mat.nu, gG * qg, [gQ * P_kg * G_ACC, size, size, a / 2, b / 2], null, 121).sigma / eta <= fyd;
       }
       if (ru.sigma <= fyd && rs.w <= Math.min(a, b) / dl && !okP) pointOnly = true;
@@ -66,7 +67,7 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
   if (!alternatives.length) {
     const fixed = [[t_param, autoT], [n_param, autoN]].filter(([, a]) => !a).map(([p]) => p);
     const maxT = tOpts.length ? Math.max(...tOpts) : 0;
-    const Pk = surface === "encimera" ? ps.values.CARGA_PUNTUAL : null;
+    const Pk = surface === "encimera" ? (ps.values.CARGA_PUNTUAL || 0.0) * phi || null : null;
     const what = pointOnly && Pk ? `la carga puntual de ${g(Pk)} kg (la carga repartida de ${g(load)} kg sí se verifica; la flexión local `
       + "bajo una pieza concentrada depende del espesor, no del vano)" : `${g(load)} kg`;
     notes.push({ level: "error", code, message: `No se encuentra combinación de espesor y travesaños que verifique ${label} con ${what}`

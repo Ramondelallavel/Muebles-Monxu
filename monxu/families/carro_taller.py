@@ -77,6 +77,12 @@ class CarroTaller(MesaIndustrial):
             elif s.name == "ANCLAJE":
                 s = P("ANCLAJE", "Anclaje al suelo", "choice", "ninguno", None, "cargas", choices=["ninguno"],
                       help="Un carro no se ancla: la estabilidad se comprueba sin anclaje.")
+            elif s.name == "TIPO_SUELO":
+                out.append(s)
+                s = P("COEF_DINAMICO", "Coeficiente dinámico de las cargas (rodadura)", "float", 1.0, None, "cargas",
+                      1.0, 2.0, advanced=True, help="Amplifica las cargas de uso por el traqueteo al rodar sobre juntas, "
+                                                    "rampas o umbrales: 1,0 suelo liso; 1,2–1,5 suelo irregular o con "
+                                                    "umbrales. Afecta a perfiles, chapas y ruedas.")
             elif s.name == "CARGA_HORIZONTAL":
                 s = P("CARGA_HORIZONTAL", "Fuerza horizontal de maniobra", "float", 100.0, "N", "cargas", 0, 2000,
                       help="Empuje o arrastre con las ruedas frenadas o bloqueadas por un obstáculo; se aplica en el plano "

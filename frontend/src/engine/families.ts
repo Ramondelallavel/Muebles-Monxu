@@ -375,8 +375,9 @@ class MesaIndustrial {
       area_mm2: ps.LONGITUD * ps.ANCHURA, ...(d.top_surface ?? {}), count_param: "NUMERO_TRAVESANOS" }];
     if (d.shelf) surfaces.push({ id: "balda", label: "Balda inferior", level: "INF", load_param: "CARGA_BALDA", sheet_instance: "BAL.BANDEJA",
       area_mm2: (ps.LONGITUD - 2 * d.c) * (ps.ANCHURA - 2 * d.c), count_param: "NUMERO_TRAVESANOS_BALDA" });
-    const point_loads = d.footrest ? [{ id: "F", member: "EST.REPOSAPIES", load_N: FOOTREST_LOAD_N, label: "Apoyo del pie en el centro del reposapiés",
-      hypothesis: `Reposapiés: ${g(FOOTREST_LOAD_N)} N verticales en el centro de la barra (apoyo de una persona), como acción variable.` }] : [];
+    const fN = +(model.params.values.CARGA_REPOSAPIES || FOOTREST_LOAD_N);
+    const point_loads = d.footrest ? [{ id: "F", member: "EST.REPOSAPIES", load_N: fN, label: "Apoyo del pie en el centro del reposapiés",
+      hypothesis: `Reposapiés: ${g(fN)} N verticales en el centro de la barra (apoyo de una persona), como acción variable.` }] : [];
     return { levels: model.structure.levels ?? {}, surfaces, supports: supportsOf(model, legs, this.support_group[0]), point_loads, horizontal_points: [legs.DI, legs.DD],
       worktop_height: ps.ALTURA, leg_ids: Object.values(legs), member_roles: memberRoles(model) };
   }
@@ -1912,7 +1913,7 @@ class Tarima extends MesaSoldadura {
       Object.assign(d, { Lx: L, Ly: W, leg, rail, trv, bas: null, a, c, t, hn, tp, z_tf, z_leg0, leg_len, n_top, xe: [xe0, xe1], shelf: false, peto: 0.0,
         footrest: null });
       d.plate = { holes: [], eta: 1.0 };
-      d.top_surface = { patch_mm: TARIMA_PATCH_MM };
+      d.top_surface = { patch_mm: ctx.params.values.HUELLA_CARGA_PUNTUAL || TARIMA_PATCH_MM };
       d.fix_top = { s: Object.fromEntries(EDGES.map((e) => [e, []])), h: Object.fromEntries(EDGES.map((e) => [e, 0.0])), z_ref: H, t, inset: 0.0, offset: 0.0,
         Lx: L, Ly: W, c, wall: Object.fromEntries(EDGES.map((e) => [e, (e === "y0" || e === "y1" ? rail : trv).t])), gap: 0.0 };
       d.skirt = rail.H;

@@ -281,7 +281,7 @@ export function CostPanel({ cost }: { cost: Dict }) {
       <p className="muted">Tarifas orientativas {cost.rates_version} · material imputado {cost.material_basis === "consumo" ? "por consumo (el sobrante vuelve a almacén)" : "por compra de barras y chapas completas"}.
         {" "}{cost.note}</p>
       <div className="cols">
-        <div><h4>Lote de 1 unidad</h4><ul>{Object.entries(cost.groups).map(([k, v]) => <li key={k}>{k}: {eur(v as number)}</li>)}
+        <div><h4>{cost.lot > 1 ? `Lote de ${cost.lot} unidades (importes por unidad)` : "Lote de 1 unidad"}</h4><ul>{Object.entries(cost.groups).map(([k, v]) => <li key={k}>{k}: {eur(v as number)}</li>)}
           <li><b>Coste directo: {eur(cost.direct)}</b></li><li>Gastos generales ({fmt(cost.overhead_rate * 100, 0)} %): {eur(cost.overheads)}</li>
           <li><b>Coste total: {eur(cost.cost)}</b> ({fmt(cost.eur_per_kg, 2)} €/kg)</li><li>Margen ({fmt(cost.margin_rate * 100, 0)} %): {eur(cost.margin)}</li>
           <li><b>Precio de venta estimado: {eur(cost.price)}</b></li></ul></div>

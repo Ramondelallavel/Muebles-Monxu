@@ -20,6 +20,14 @@ def _counts(model) -> dict[str, int]:
     return c
 
 
+PAINT_REF_UM = 80.0          # µm: espesor de referencia del consumo de polvo del catálogo (= families.base.PAINT_REF_UM)
+
+
+def bar_length(model) -> float:
+    """Longitud de barra comercial: la del proyecto (LONGITUD_BARRA) o la del catálogo."""
+    return float(model.params.values.get("LONGITUD_BARRA") or catalog.profile_meta()["default_bar_length_mm"])
+
+
 def routing(part) -> list[str]:
     if isinstance(part, ProfilePart):
         r = ["Corte por sierra de cinta (90°)"]
@@ -37,7 +45,8 @@ def manufacturing_plan(model) -> dict[str, Any]:
     counts = _counts(model)
     sd = catalog.sheet_data()
     meta = catalog.profile_meta()
-    bar_len = float(meta["default_bar_length_mm"])
+    bar_len = bar_length(model)
+    kerf = float(model.params.values.get("CORTE_SIERRA") or 3.0)
     # ------------------------------------------------------------- perfiles
     groups: dict[tuple, list] = defaultdict(list)
     for k, p in model.parts.items():
@@ -46,7 +55,7 @@ def manufacturing_plan(model) -> dict[str, Any]:
                                                          "qty": counts[k]})
     cutting = []
     for (code, mat), pieces in sorted(groups.items()):
-        r = optimize_bars(pieces, bar_length=bar_len)
+        r = optimize_bars(pieces, bar_length=bar_len, kerf=kerf)
         r.update({"profile": code, "material": mat,
                   "mass_per_bar_kg": round(catalog.profile(code).mass_per_m(catalog.material(mat).density) * bar_len / 1000, 2)})
         cutting.append(r)
@@ -64,8 +73,10 @@ def manufacturing_plan(model) -> dict[str, Any]:
                                                 "rotate": True, "kind": "pletina"})
     nesting = []
     las = sd["laser"]
+    fmt = model.params.values.get("FORMATO_CHAPA")
+    formats = [f for f in catalog.sheet_formats() if f["code"] == fmt] or catalog.sheet_formats()
     for (mat, t), parts in sorted(sgroups.items()):
-        r = best_format(parts, catalog.sheet_formats(), margin=las["sheet_margin_mm"], spacing=las["part_spacing_mm"],
+        r = best_format(parts, formats, margin=las["sheet_margin_mm"], spacing=las["part_spacing_mm"],
                         kerf=las["kerf_mm"])
         r.update({"material": mat, "thickness": t,
                   "mass_per_sheet_kg": round(r.get("length", 0) * r.get("width", 0) * t * 1e-9 *
@@ -94,7 +105,8 @@ def manufacturing_plan(model) -> dict[str, Any]:
                 continue
             painted += a * counts[k]
     fin = model.params.values.get("ACABADO")
-    paint_kg = painted / 1e6 * catalog.finish(fin)["consumable_kg_m2"] if fin else 0.0
+    film = float(model.params.values.get("ESPESOR_PINTURA") or PAINT_REF_UM)      # consumo ∝ espesor de película
+    paint_kg = painted / 1e6 * catalog.finish(fin)["consumable_kg_m2"] * film / PAINT_REF_UM if fin else 0.0
     return {"cutting": cutting, "nesting": nesting,
             "welding": {"joints": len(welds), "total_length_mm": round(weld_len, 1), "deposit_kg": round(deposit_kg, 3),
                         "wire_kg": round(wire_kg, 3), "arc_time_h": round(arc_h, 3), "gas_l": round(gas_l, 1),
@@ -112,7 +124,7 @@ def dfm_check(model, plan: dict[str, Any] | None = None) -> list[dict[str, Any]]
     def add(level, code, element, msg, proposal=""):
         out.append({"level": level, "code": code, "element": element, "message": msg, "proposal": proposal})
 
-    bar_len = float(catalog.profile_meta()["default_bar_length_mm"])
+    bar_len = bar_length(model)
     for p in model.parts.values():
         if isinstance(p, SheetPart):
             mat = catalog.material(p.material)

@@ -27,6 +27,17 @@ cases.append({"id": "ACEPT-2000", "family": "mesa_industrial", "values": {"LONGI
 cases.append({"id": "ACEPT-2400", "family": "mesa_industrial", "values": {"LONGITUD": 2400, "ANCHURA": 800, "ALTURA": 900, "CARGA_TOTAL": 400}})
 cases.append({"id": "SIN-CARGA", "family": "mesa_industrial", "values": {}})
 cases.append({"id": "EST-DEF", "family": "estanteria", "values": {}})
+# parámetros avanzados de fabricación y criterio (barra, sierra, formato, pintura, lote, flechas y desplome)
+cases.append({"id": "AVANZ-MESA", "family": "mesa_industrial", "values": {
+    "LONGITUD_BARRA": 6500, "CORTE_SIERRA": 4, "FORMATO_CHAPA": "3000x1500", "ESPESOR_PINTURA": 120,
+    "LOTE_FABRICACION": 10, "LIMITE_FLECHA_BARRAS": 500, "LIMITE_FLECHA_CHAPA": 400, "LIMITE_DESPLOME": 300}})
+cases.append({"id": "AVANZ-EST", "family": "estanteria", "values": {
+    "CARGA_POR_NIVEL": 200, "LIMITE_FLECHA_CHAPA": 300, "LIMITE_FLECHA_BARRAS": 400, "LONGITUD_BARRA": 12000,
+    "FORMATO_CHAPA": "2500x1250", "LOTE_FABRICACION": 25}})
+cases.append({"id": "AVANZ-CARRO", "family": "carro_taller", "values": {"CARGA_TOTAL": 150, "COEF_DINAMICO": 1.5}})
+cases.append({"id": "AVANZ-HUELLA", "family": "mesa_industrial", "values": {"CARGA_PUNTUAL": 120, "HUELLA_CARGA_PUNTUAL": 50}})
+cases.append({"id": "AVANZ-REPOSA", "family": "puesto_trabajo", "values": {"REPOSAPIES": 1, "CARGA_REPOSAPIES": 1500}})
+cases.append({"id": "AVANZ-CE", "family": "carro_estanteria", "values": {"CARGA_POR_NIVEL": 40, "COEF_DINAMICO": 1.3}})
 cases += random_cases(n_rand, seed)
 
 if os.environ.get("COMPARE_ONLY"):

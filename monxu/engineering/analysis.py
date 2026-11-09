@@ -43,6 +43,24 @@ def support_levers(sups, cog) -> dict:
     return {"+X": xmax - cog[0], "-X": cog[0] - xmin, "+Y": ymax - cog[1], "-Y": cog[1] - ymin}
 
 
+def dynamic_factor(ps: dict) -> float:
+    """Coeficiente dinámico de las cargas de uso (carros rodando sobre juntas y umbrales); 1 si no se indica."""
+    return max(1.0, float(ps.get("COEF_DINAMICO") or 1.0))
+
+
+def patch_size(ps: dict, surf: dict) -> float:
+    """Lado de la huella cuadrada de la carga puntual: el del proyecto, el de la superficie o el del criterio general."""
+    return float(ps.get("HUELLA_CARGA_PUNTUAL") or surf.get("patch_mm") or catalog.criteria()["point_load_patch_mm"])
+
+
+def deflection_ratios(ps: dict) -> tuple[float, float, float]:
+    """Límites de flecha (L/…) de barras y chapas y de desplome (H/…): los del proyecto o los del criterio general."""
+    dl = catalog.criteria()["deflection_limits"]
+    return (float(ps.get("LIMITE_FLECHA_BARRAS") or dl["member_span_ratio"]),
+            float(ps.get("LIMITE_FLECHA_CHAPA") or dl["panel_span_ratio"]),
+            float(ps.get("LIMITE_DESPLOME") or dl["sway_height_ratio"]))
+
+
 def _lc(name: str) -> str:
     """Nombre de catálogo en minúscula inicial, para usarlo dentro de una frase."""
     return name[:1].lower() + name[1:]
@@ -308,6 +326,10 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             fr.add_nodal_load("G", n, (0, 0, -P))
             Gm += P
     g_sheets = 0.0
+    phi = dynamic_factor(ps)
+    if phi > 1.0:
+        hyp.append(f"Cargas de uso y carga puntual amplificadas por el coeficiente dinámico φ = {phi:g} (rodadura sobre "
+                   "juntas, rampas o umbrales).")
     surfaces_info = []
     undefined_loads: list[str] = []
     for surf in st.get("surfaces", []):
@@ -322,6 +344,8 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         q_g = sheet_mass * G_ACC / area
         g_sheets += sm.surface_load("G", lvl, q_g * scale)
         load_kg = ps.get(surf["load_param"])
+        if load_kg:
+            load_kg = load_kg * phi                 # coeficiente dinámico (carros)
         info = {"surface": surf, "level": lvl, "q_g": q_g, "sheet_mass": sheet_mass, "load_kg": load_kg,
                 "scale": scale, "part": part}
         if load_kg:
@@ -343,7 +367,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
     has_Q = "Q" in fr.loads
     # verificación completa si hay sobrecarga o si todas las cargas de uso están indicadas (0 kg incluidos)
     q_defined = has_Q or not undefined_loads
-    P_kg = ps.get("CARGA_PUNTUAL")
+    P_kg = (ps.get("CARGA_PUNTUAL") or 0.0) * phi or None
     top_lvl = levels.get("SUP")
     if P_kg and top_lvl:
         front = top_lvl["long"][0]
@@ -417,6 +441,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
     beta_leg = crit["effective_length_factors"]["leg_sway"]
     member_results = []
     class4: set[str] = set()
+    r_member, _r_panel, r_sway = deflection_ratios(ps)
     for mid, mm in sm.members.items():
         mat, prof, sp = mm["material"], mm["profile"], mm["props"]
         fy, gM0, gM1 = mat.fy, mat.gamma_M0, mat.gamma_M1
@@ -483,9 +508,9 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
                     if dv > dmax:
                         dmax, cmax = dv, cname
             if cmax:
-                lim = mm["length"] / crit["deflection_limits"]["member_span_ratio"]
+                lim = mm["length"] / r_member
                 checks.append(Check(f"D.{mid}", "deformacion", mid, f"{mm['instance'].name}: flecha relativa",
-                                    f"EN 1990 A1.4 (límite L/{crit['deflection_limits']['member_span_ratio']} adoptado)",
+                                    f"EN 1990 A1.4 (límite L/{r_member:g} adoptado)",
                                     round(dmax, 3), round(lim, 3), "mm", round(dmax / lim, 4), _status(dmax / lim),
                                     cmax))
     if class4:
@@ -496,12 +521,12 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
     # ---------------------------------------------------------------- desplome
     if "ELS-3" in U and top_nodes:
         h = st.get("sway_height", st["worktop_height"])     # altura del punto de empuje (encimera o asa)
-        lim = h / crit["deflection_limits"]["sway_height_ratio"]
+        lim = h / r_sway
         for cname, comp in (("ELS-3", 0), ("ELS-4", 1)):
             dx = max(abs(U[cname][6 * n + comp]) for n in top_nodes)
             checks.append(Check(f"S.{cname}", "deformacion", "Estructura", f"Desplome horizontal en dirección "
                                 f"{'X' if comp == 0 else 'Y'} bajo empuje de servicio",
-                                f"Criterio adoptado H/{crit['deflection_limits']['sway_height_ratio']}",
+                                f"Criterio adoptado H/{r_sway:g}",
                                 round(dx, 3), round(lim, 3), "mm", round(dx / lim, 4), _status(dx / lim), cname))
 
     # ---------------------------------------------------------------- reacciones y apoyos
@@ -540,7 +565,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
                                 "—", None, cap, "N", None, PENDING, "", {}))
 
     # ---------------------------------------------------------------- placas (encimera / balda)
-    dl = crit["deflection_limits"]["panel_span_ratio"]
+    dl = deflection_ratios(ps)[1]
     for info in surfaces_info:
         surf, lvl, part = info["surface"], info["level"], info["part"]
         mat = catalog.material(part.material)
@@ -584,7 +609,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             checks.append(Check(f"PL.{sid}", "placa", surf["label"], f"{surf['label']}: verificación de chapa",
                                 "—", None, None, "-", None, PENDING, "", {"motivo": f"{surf['load_param']} sin definir"}))
         if sid == "encimera" and P_kg:
-            size = surf.get("patch_mm", crit["point_load_patch_mm"])        # huella de la carga concentrada
+            size = patch_size(ps, surf)        # huella de la carga concentrada
             r_p = navier(a, b, t, mat.E, mat.nu, q=gG * info["q_g"], patch=(gQ * P_kg * G_ACC, size, size, a / 2, b / 2),
                          terms=121)
             r_p = {**r_p, "sigma": r_p["sigma"] / eta}

@@ -4,6 +4,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from .. import catalog
 from ..core.params import AUTO, ParameterSet, ParamSpec
 
 GROUPS = [
@@ -13,6 +14,37 @@ GROUPS = [
     ("accesorios", "Accesorios"),
     ("cargas", "Cargas y condiciones de trabajo"),
 ]
+
+
+#: espesor de película de referencia del consumo de polvo de los acabados del catálogo (µm)
+PAINT_REF_UM = 80.0
+
+
+def fabrication_specs() -> list[ParamSpec]:
+    """Parámetros avanzados comunes a todas las familias, con efecto real en el cálculo, la fabricación y el presupuesto."""
+    P = ParamSpec
+    formats = [f["code"] for f in catalog.sheet_formats()]
+    return [
+        P("LIMITE_FLECHA_BARRAS", "Límite de flecha de largueros y travesaños (L/…)", "int", 300, None, "cargas", 150,
+          1000, advanced=True, help="Flecha admisible como fracción de la luz: 300 = L/300 (EN 1990 A1.4). Súbalo para "
+                                    "superficies de precisión (el dimensionado aumentará los perfiles)."),
+        P("LIMITE_FLECHA_CHAPA", "Límite de flecha de chapas y placas (L/…)", "int", 200, None, "cargas", 100, 1000,
+          advanced=True, help="Flecha admisible de cada panel entre apoyos: 200 = L/200. Más exigente → más espesor o "
+                              "más travesaños."),
+        P("LIMITE_DESPLOME", "Límite de desplome bajo empuje (H/…)", "int", 150, None, "cargas", 100, 1000,
+          advanced=True, help="Desplazamiento horizontal admisible del conjunto bajo el empuje de servicio: 150 = H/150."),
+        P("LONGITUD_BARRA", "Longitud de barra comercial de perfil", "float", 6000.0, "mm", "construccion", 6000, 12000,
+          advanced=True, help="Barras que se compran: plan de corte, retales, compras y presupuesto."),
+        P("CORTE_SIERRA", "Ancho de corte de la sierra", "float", 3.0, "mm", "construccion", 1, 6, advanced=True,
+          help="Material que se pierde en cada corte de perfil (plan de corte)."),
+        P("FORMATO_CHAPA", "Formato de chapa del anidado", "choice", "optimo", None, "construccion",
+          choices=["optimo", *formats], advanced=True,
+          help="'optimo': el formato del catálogo que consume menos chapa; o un formato fijo (el de su almacén)."),
+        P("ESPESOR_PINTURA", "Espesor de película de pintura", "float", PAINT_REF_UM, "µm", "materiales", 40, 200,
+          advanced=True, help=f"Consumo de polvo proporcional al espesor (referencia {PAINT_REF_UM:g} µm)."),
+        P("LOTE_FABRICACION", "Lote de fabricación del presupuesto", "int", 1, "ud", "construccion", 1, 1000,
+          advanced=True, help="Unidades por lote: reparte la preparación y agrupa la compra de barras y chapas."),
+    ]
 
 
 class ProductFamily(ABC):

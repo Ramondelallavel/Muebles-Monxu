@@ -31,7 +31,7 @@ POINT_LOAD_KG = 153.0          # 1,5 kN
 POINT_PATCH_MM = 200.0         # huella de la carga concentrada
 GUARDRAIL_HEIGHT = 500.0       # EN ISO 14122-3: por encima, barandilla obligatoria
 
-DROP = {"VUELO", "MATERIAL_CHAPA", "ESPESOR_BALDA", "SISTEMA_TALADROS", "PERFIL_BASTIDOR", "PERFIL_REPOSAPIES",
+DROP = {"CARGA_REPOSAPIES", "VUELO", "MATERIAL_CHAPA", "ESPESOR_BALDA", "SISTEMA_TALADROS", "PERFIL_BASTIDOR", "PERFIL_REPOSAPIES",
         "NUMERO_TRAVESANOS_BALDA", "ALA_BALDA", "RADIO_PLEGADO", "FACTOR_K", "HOLGURA_ENCIMERA", "HOLGURA_ESCOTADURA",
         "PASO_FIJACIONES", "REPOSAPIES", "ALTURA_REPOSAPIES", "NUMERO_BALDAS", "ALTURA_BALDA", "CARGA_BALDA", "USO"}
 CANDIDATES = {k: v for k, v in MESA_CANDIDATES.items() if k in ("PERFIL_PATA", "PERFIL_LARGUERO", "PERFIL_TRAVESANO")}
@@ -103,6 +103,9 @@ class Tarima(MesaSoldadura):
             elif s.name == "CARGA_PUNTUAL":
                 s = P("CARGA_PUNTUAL", "Carga concentrada (200 × 200 mm)", "float", POINT_LOAD_KG, "kg", "cargas", 0,
                       2000, nullable=True, help="EN ISO 14122-2: 1,5 kN (153 kg) en la posición más desfavorable.")
+            elif s.name == "HUELLA_CARGA_PUNTUAL":
+                s = P("HUELLA_CARGA_PUNTUAL", "Huella de la carga concentrada (lado del cuadrado)", "float", POINT_PATCH_MM,
+                      "mm", "cargas", 25, 500, advanced=True, help="EN ISO 14122-2: 200 × 200 mm.")
             elif s.name == "CARGA_HORIZONTAL":
                 s = P("CARGA_HORIZONTAL", "Empuje horizontal en el canto de la superficie", "float", 150.0, "N",
                       "cargas", 0, 3000)
@@ -205,7 +208,7 @@ class Tarima(MesaSoldadura):
                      z_leg0=z_leg0, leg_len=leg_len, n_top=n_top, xe=(xe0, xe1), shelf=False, peto=0.0, footrest=None)
             d["weld_a"] = lambda tmin: 3.0 if tmin >= 3 else float(tmin)
             d["plate"] = {"holes": (), "eta": 1.0}
-            d["top_surface"] = {"patch_mm": POINT_PATCH_MM}
+            d["top_surface"] = {"patch_mm": ctx.params.values.get("HUELLA_CARGA_PUNTUAL") or POINT_PATCH_MM}
             d["fix_top"] = {"s": {e: [] for e in EDGES}, "h": {e: 0.0 for e in EDGES}, "z_ref": H, "t": t,
                             "inset": 0.0, "offset": 0.0, "Lx": L, "Ly": W, "c": c,
                             "wall": {e: (rail if e in ("y0", "y1") else trv).t for e in EDGES}, "gap": 0.0}

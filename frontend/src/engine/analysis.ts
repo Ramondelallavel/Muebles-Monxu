@@ -29,6 +29,15 @@ export function sectionClass(prof, fy) {
   if (ct <= 42 * eps) return 3;
   return 4;
 }
+/** Coeficiente dinámico de las cargas de uso (carros rodando sobre juntas y umbrales); 1 si no se indica. */
+export const dynamicFactor = (ps) => Math.max(1.0, +(ps.COEF_DINAMICO || 1.0));
+/** Lado de la huella cuadrada de la carga puntual: el del proyecto, el de la superficie o el del criterio general. */
+export const patchSize = (ps, surf) => +(ps.HUELLA_CARGA_PUNTUAL || surf.patch_mm || C.criteria().point_load_patch_mm);
+/** Límites de flecha (L/…) de barras y chapas y de desplome (H/…): los del proyecto o los del criterio general. */
+export function deflectionRatios(ps) {
+  const dl = C.criteria().deflection_limits;
+  return [+(ps.LIMITE_FLECHA_BARRAS || dl.member_span_ratio), +(ps.LIMITE_FLECHA_CHAPA || dl.panel_span_ratio), +(ps.LIMITE_DESPLOME || dl.sway_height_ratio)];
+}
 /** Carros: la maniobra actúa en la dirección de la marcha; lateralmente (giros, empujes ocasionales) esta fracción. */
 export const LATERAL_FACTOR_MOBILE = 0.5;
 const DIRS = ["+X", "-X", "+Y", "-Y"];
@@ -241,6 +250,8 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     Gm += P;
   }
   let gSheets = 0.0;
+  const phi = dynamicFactor(ps);
+  if (phi > 1.0) hyp.push(`Cargas de uso y carga puntual amplificadas por el coeficiente dinámico φ = ${g(phi)} (rodadura sobre juntas, rampas o umbrales).`);
   const surfInfo = [], undefinedLoads = [];
   for (const surf of st.surfaces ?? []) {
     const lvl = levels[surf.level];
@@ -251,7 +262,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     const scale = area / ((gx.at(-1) - gx[0]) * (gy[1] - gy[0]));
     const q_g = (sheetMass * G_ACC) / area;
     gSheets += sm.surfaceLoad("G", lvl, q_g * scale);
-    const loadKg = ps[surf.load_param];
+    const loadKg = ps[surf.load_param] ? ps[surf.load_param] * phi : ps[surf.load_param];     // coeficiente dinámico (carros)
     const info = { surface: surf, level: lvl, q_g, sheet_mass: sheetMass, load_kg: loadKg, scale, part };
     if (loadKg) {
       const q = (loadKg * G_ACC) / area;
@@ -273,7 +284,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   const hasQ = "Q" in fr.loads;
   // verificación completa si hay sobrecarga o si todas las cargas de uso están indicadas (0 kg incluidos)
   const qDefined = hasQ || !undefinedLoads.length;
-  const P_kg = ps.CARGA_PUNTUAL;
+  const P_kg = (ps.CARGA_PUNTUAL || 0.0) * phi || null;
   const top = levels.SUP;
   if (P_kg && top) {
     const chain = sm.chains[top.long[0]];
@@ -382,9 +393,9 @@ export function analyze(model, includeStability = true, includeWelds = true) {
         if (dv > dmax) { dmax = dv; cmax = cname; }
       }
       if (cmax) {
-        const r = crit.deflection_limits.member_span_ratio;
+        const r = deflectionRatios(ps)[0];
         const lim = mm.length / r;
-        checks.push(check(`D.${mid}`, "deformacion", mid, `${mm.instance.name}: flecha relativa`, `EN 1990 A1.4 (límite L/${r} adoptado)`,
+        checks.push(check(`D.${mid}`, "deformacion", mid, `${mm.instance.name}: flecha relativa`, `EN 1990 A1.4 (límite L/${g(r)} adoptado)`,
           pyRound(dmax, 3), pyRound(lim, 3), "mm", pyRound(dmax / lim, 4), status(dmax / lim), cmax));
       }
     }
@@ -393,12 +404,12 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     + "reducción de la pared más esbelta en compresión uniforme aplicada a toda la sección (del lado de la seguridad).");
   // ---------------------------------------------------------------- desplome
   if (U["ELS-3"] && topNodes.length) {
-    const r = crit.deflection_limits.sway_height_ratio;
+    const r = deflectionRatios(ps)[2];
     const lim = (st.sway_height ?? st.worktop_height) / r;     // altura del punto de empuje (encimera o asa)
     for (const [cname, comp] of [["ELS-3", 0], ["ELS-4", 1]]) {
       const dx = Math.max(...topNodes.map((n) => Math.abs(U[cname][6 * n + comp])));
       checks.push(check(`S.${cname}`, "deformacion", "Estructura", `Desplome horizontal en dirección ${comp === 0 ? "X" : "Y"} bajo empuje de servicio`,
-        `Criterio adoptado H/${r}`, pyRound(dx, 3), pyRound(lim, 3), "mm", pyRound(dx / lim, 4), status(dx / lim), cname));
+        `Criterio adoptado H/${g(r)}`, pyRound(dx, 3), pyRound(lim, 3), "mm", pyRound(dx / lim, 4), status(dx / lim), cname));
     }
   }
   // ---------------------------------------------------------------- reacciones y apoyos
@@ -429,7 +440,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     } else checks.push(check("A.PIES", "apoyos", supWord, `Capacidad de los ${supWord.toLowerCase()}`, "—", null, cap, "N", null, PENDING, "", {}));
   }
   // ---------------------------------------------------------------- placas
-  const dl = crit.deflection_limits.panel_span_ratio;
+  const dl = deflectionRatios(ps)[1];
   for (const info of surfInfo) {
     const { surface: surf, level: lvl, part } = info;
     const mat = C.material(part.material);
@@ -463,7 +474,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     } else checks.push(check(`PL.${sid}`, "placa", surf.label, `${surf.label}: verificación de chapa`, "—", null, null, "-", null, PENDING, "",
       { motivo: `${surf.load_param} sin definir` }));
     if (sid === "encimera" && P_kg) {
-      const size = surf.patch_mm ?? crit.point_load_patch_mm;        // huella de la carga concentrada
+      const size = patchSize(ps, surf);        // huella de la carga concentrada
       const rp0 = navier(a, b, t, mat.E, mat.nu, gG * info.q_g, [gQ * P_kg * G_ACC, size, size, a / 2, b / 2], null, 121);
       const rp = { ...rp0, sigma: rp0.sigma / eta };
       const fyd = mat.fy / mat.gamma_M0;

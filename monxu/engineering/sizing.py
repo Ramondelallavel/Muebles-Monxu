@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from .. import catalog
 from ..core.params import AUTO, ParameterSet
-from .analysis import analyze, overturning, surface_sheet
+from .analysis import analyze, deflection_ratios, dynamic_factor, overturning, patch_size, surface_sheet
 from .plate import navier
 
 G_ACC = 9.81
@@ -22,10 +22,11 @@ G_ACC = 9.81
 def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool, auto_n: bool) -> None:
     crit = catalog.criteria()
     gG, gQ = crit["partial_factors"]["gamma_G"], crit["partial_factors"]["gamma_Q"]
-    dl = crit["deflection_limits"]["panel_span_ratio"]
+    dl = deflection_ratios(ps.values)[1]
     surface, t_param, n_param = tgt["surface"], tgt["t_param"], tgt["n_param"]
     mat = catalog.material(ps.values[tgt.get("mat_param", "MATERIAL_CHAPA")])
-    load = ps.values[tgt["load_param"]] or 0.0          # p. ej. sólo carga puntual sobre la encimera
+    phi = dynamic_factor(ps.values)                     # coeficiente dinámico (carros)
+    load = (ps.values[tgt["load_param"]] or 0.0) * phi  # p. ej. sólo carga puntual sobre la encimera
     t_min = crit["min_sheet_thickness_by_use_mm"].get(ps.values.get("USO", "montaje"), 1.5) \
         if tgt.get("min_t_by_use") else 1.0
     t_max = 6.0                     # chapa de encimera/bandeja razonable para plegar y manipular
@@ -51,7 +52,7 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
         # peso propio igual que en la verificación: chapa real (con pestañas y escotaduras) repartida en la superficie
         qg = surface_sheet(m.instance(surf["sheet_instance"]).part)[0] * G_ACC / surf["area_mm2"]
         eta = surf.get("ligament_efficiency", 1.0)
-        P_kg = ps.values.get("CARGA_PUNTUAL") if surface == "encimera" else None
+        P_kg = ((ps.values.get("CARGA_PUNTUAL") or 0.0) * phi or None) if surface == "encimera" else None
         fyd = mat.fy / mat.gamma_M0
         prof = catalog.profile(trial.values[tgt["trv_param"]])
         cross_len = yb - yf - prof.B
@@ -65,7 +66,7 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
             ru, rs = {"sigma": ru["sigma"] / eta}, {"w": rs["w"] / eta}
             ok_p = True
             if P_kg:          # carga puntual sobre la encimera: misma comprobación que la verificación final
-                size = surf.get("patch_mm", crit["point_load_patch_mm"])
+                size = patch_size(ps.values, surf)
                 rp = navier(a, b, t, mat.E, mat.nu, q=gG * qg, patch=(gQ * P_kg * G_ACC, size, size, a / 2, b / 2),
                             terms=121)
                 ok_p = rp["sigma"] / eta <= fyd
@@ -81,7 +82,7 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
                                  "estante": "el estante superior"}.get(surface, f"la bandeja ({surface})")
     if not alternatives:
         fixed = [p for p, a in ((t_param, auto_t), (n_param, auto_n)) if not a]
-        P_kg = ps.values.get("CARGA_PUNTUAL") if surface == "encimera" else None
+        P_kg = ((ps.values.get("CARGA_PUNTUAL") or 0.0) * phi or None) if surface == "encimera" else None
         what = (f"la carga puntual de {P_kg:g} kg (la carga repartida de {load:g} kg sí se verifica; la flexión local "
                 "bajo una pieza concentrada depende del espesor, no del vano)" if point_only and P_kg else f"{load:g} kg")
         notes.append({"level": "error", "code": code,

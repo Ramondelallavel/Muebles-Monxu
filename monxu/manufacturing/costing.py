@@ -227,9 +227,11 @@ def estimate(model, plan: dict[str, Any], lot: int = 1, R: dict[str, Any] | None
 
 
 def quotation(model, plan: dict[str, Any], R: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Presupuesto del lote unitario y tabla de coste por unidad según el tamaño de lote."""
+    """Presupuesto del lote del proyecto (LOTE_FABRICACION, 1 por defecto) y tabla de coste por unidad según el lote."""
     R = R or rates()
-    base = estimate(model, plan, 1, R)
+    lot = max(1, int(model.params.values.get("LOTE_FABRICACION") or 1))     # lote del proyecto (parámetro avanzado)
+    base = estimate(model, plan, lot, R)
+    lots = sorted(set(R["lots"]) | {lot})
     base["by_lot"] = [{"lot": n, **{k: e[k] for k in ("direct", "cost", "price")}}
-                      for n in R["lots"] for e in [estimate(model, plan, n, R)]]
+                      for n in lots for e in [estimate(model, plan, n, R)]]
     return base

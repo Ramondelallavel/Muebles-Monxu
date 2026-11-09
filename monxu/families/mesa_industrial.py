@@ -26,7 +26,7 @@ from ..cad import geometry as G
 from ..cad.sheetmetal import EDGES, FlangeSpec, SheetMetalSpec
 from ..core.model import Joint, PlatePart, ProductModel, ProfilePart, SheetPart, StandardPart
 from ..core.params import AUTO, ParamContext, ParameterSet, ParamSpec
-from .base import ProductFamily, register
+from .base import ProductFamily, fabrication_specs, register
 
 SHS = [c for c, p in catalog.profiles().items() if p.type == "SHS"]
 ALLP = list(catalog.profiles())
@@ -271,6 +271,9 @@ class MesaIndustrial(ProductFamily):
               help="Barra soldada entre las patas delanteras para apoyar los pies (trabajo sentado o en taburete). "
                    "Se verifica con 1 kN en el centro."),
             P("ALTURA_REPOSAPIES", "Altura del reposapiés (cara superior)", "float", 250.0, "mm", "accesorios", 100, 450),
+            P("CARGA_REPOSAPIES", "Carga de apoyo en el reposapiés", "float", FOOTREST_LOAD_N, "N", "accesorios", 0, 3000,
+              advanced=True, help="Fuerza vertical en el centro de la barra (apoyo o subida de una persona); 1 kN es el "
+                                  "criterio de ensayo habitual."),
             P("NUMERO_BALDAS", "Balda inferior", "int", 1, "ud", "accesorios", 0, 1),
             P("ALTURA_BALDA", "Altura de la balda (cara superior)", "float", 200.0, "mm", "accesorios", 100, 600),
             P("TOLERANCIAS", "Tolerancias generales", "choice", "ISO 2768-mK", None, "construccion",
@@ -281,7 +284,10 @@ class MesaIndustrial(ProductFamily):
               nullable=True),
             P("CARGA_BALDA", "Carga distribuida sobre balda", "float", None, "kg", "cargas", 0, 3000, nullable=True),
             P("CARGA_PUNTUAL", "Carga puntual sobre encimera", "float", None, "kg", "cargas", 0, 2000, nullable=True,
-              help="Aplicada sobre una huella cuadrada de 100 mm en la posición más desfavorable."),
+              help="Aplicada sobre una huella cuadrada (lado HUELLA_CARGA_PUNTUAL) en la posición más desfavorable."),
+            P("HUELLA_CARGA_PUNTUAL", "Huella de la carga puntual (lado del cuadrado)", "float", 100.0, "mm", "cargas",
+              25, 500, advanced=True, help="Superficie de apoyo de la pieza concentrada: cuanto menor, mayor la flexión "
+                                           "local de la chapa (100 mm: pieza pequeña; 200 mm: EN ISO 14122-2)."),
             P("CARGA_HORIZONTAL", "Empuje horizontal en canto de encimera", "float", 300.0, "N", "cargas", 0, 5000),
             P("USO", "Uso previsto", "choice", "montaje", None, "cargas",
               choices=["montaje_ligero", "montaje", "trabajo_pesado", "inspeccion", "laboratorio", "embalaje"]),
@@ -294,7 +300,7 @@ class MesaIndustrial(ProductFamily):
               help="'ninguno' por defecto: si el conjunto vacío volcara con el empuje, se ancla automáticamente."),
             P("TACO_ANCLAJE", "Taco de anclaje", "choice", AUTO, None, "cargas", choices=ANCHORS, allow_auto=True,
               help="'auto': el de menor capacidad que resiste la tracción de cálculo (sólo con anclaje al suelo)."),
-        ]
+        ] + fabrication_specs()
 
     def templates(self):
         base = {"CARGA_TOTAL": 300.0, "NUMERO_BALDAS": 1, "ANCLAJE": "al_suelo"}     # 300 N de empuje: anclada
@@ -958,9 +964,10 @@ class MesaIndustrial(ProductFamily):
                  "component": model.instance(f"{self.support_group[0]}.PIE.{k}").part.code} for k in ("DI", "DD", "TI", "TD")]
         point_loads = []
         if d.get("footrest"):
-            point_loads.append({"id": "F", "member": "EST.REPOSAPIES", "load_N": FOOTREST_LOAD_N,
+            f_n = float(ps.get("CARGA_REPOSAPIES") or FOOTREST_LOAD_N)
+            point_loads.append({"id": "F", "member": "EST.REPOSAPIES", "load_N": f_n,
                                 "label": "Apoyo del pie en el centro del reposapiés",
-                                "hypothesis": f"Reposapiés: {FOOTREST_LOAD_N:g} N verticales en el centro de la barra "
+                                "hypothesis": f"Reposapiés: {f_n:g} N verticales en el centro de la barra "
                                               "(apoyo de una persona), como acción variable."})
         return {"levels": lv, "surfaces": surfaces, "supports": feet, "point_loads": point_loads,
                 "horizontal_points": [legs["DI"], legs["DD"]], "worktop_height": ps["ALTURA"],

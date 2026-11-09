@@ -24,7 +24,8 @@ from .carro_taller import CANDIDATES as CT_CANDIDATES, CONSTRUCTIVE_DEFAULTS as 
 
 #: parámetros de la mesa que no existen en la plataforma (balda inferior y reposapiés)
 DROPPED = ("NUMERO_BALDAS", "ALTURA_BALDA", "CARGA_BALDA", "ESPESOR_BALDA", "PERFIL_BASTIDOR",
-           "NUMERO_TRAVESANOS_BALDA", "ALA_BALDA", "REPOSAPIES", "ALTURA_REPOSAPIES", "PERFIL_REPOSAPIES")
+           "NUMERO_TRAVESANOS_BALDA", "ALA_BALDA", "REPOSAPIES", "ALTURA_REPOSAPIES", "PERFIL_REPOSAPIES",
+           "CARGA_REPOSAPIES")
 CANDIDATES = {k: v for k, v in CT_CANDIDATES.items() if k not in DROPPED}
 CONSTRUCTIVE_DEFAULTS = {k: v for k, v in CT_DEFAULTS.items() if k not in DROPPED}
 FRAME_CLEARANCE = 20.0      # mm libres entre el bastidor y la placa base (como el bastidor de la balda)

@@ -148,7 +148,9 @@ export function estimate(model, plan, lot = 1, R = C.costRates()) {
 
 /** Presupuesto del lote unitario y coste por unidad según el tamaño de lote. */
 export function quotation(model, plan, R = C.costRates()) {
-  const base = estimate(model, plan, 1, R);
-  base.by_lot = R.lots.map((n) => { const e = estimate(model, plan, n, R); return { lot: n, direct: e.direct, cost: e.cost, price: e.price }; });
+  const lot = Math.max(1, Math.floor(+(model.params.values.LOTE_FABRICACION || 1)));     // lote del proyecto (parámetro avanzado)
+  const base = estimate(model, plan, lot, R);
+  const lots = [...new Set([...R.lots, lot])].sort((a, b) => a - b);
+  base.by_lot = lots.map((n) => { const e = estimate(model, plan, n, R); return { lot: n, direct: e.direct, cost: e.cost, price: e.price }; });
   return base;
 }

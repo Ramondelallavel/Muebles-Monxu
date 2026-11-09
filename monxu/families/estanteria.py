@@ -25,7 +25,7 @@ from ..cad import geometry as G
 from ..cad.sheetmetal import EDGES, FlangeSpec, SheetMetalSpec, bend_deduction
 from ..core.model import Joint, PlatePart, ProductModel, ProfilePart, SheetPart, StandardPart
 from ..core.params import AUTO, ParamContext, ParameterSet, ParamError, ParamSpec
-from .base import register
+from .base import fabrication_specs, register
 from .mesa_industrial import (ALLP, ANCHORS, FEET, SHEET_MATERIALS, SHS, STRUCT_MATERIALS, MesaIndustrial, add_anchors,
                               flange_hole_d, r10, weld_nut_code)
 
@@ -152,7 +152,7 @@ class Estanteria(MesaIndustrial):
             P("ENTORNO", "Entorno", "choice", "interior_seco", None, "cargas",
               choices=["interior_seco", "interior_humedo", "exterior", "alimentario", "sala_limpia"]),
             P("TIPO_SUELO", "Tipo de suelo", "choice", "nivelado", None, "cargas", choices=["nivelado", "irregular"]),
-        ]
+        ] + fabrication_specs()
 
     def templates(self):
         return [

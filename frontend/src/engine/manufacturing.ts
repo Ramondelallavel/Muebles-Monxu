@@ -162,10 +162,15 @@ export function routing(p) {
 }
 const plateArea = (p) => p.outlineArea - p.holes.reduce((s, h) => s + (Math.PI * h[2] * h[2]) / 4, 0);
 
+/** µm: espesor de referencia del consumo de polvo del catálogo. */
+const PAINT_REF_UM = 80.0;
+/** Longitud de barra comercial: la del proyecto (LONGITUD_BARRA) o la del catálogo. */
+export const barLength = (model) => +(model.params.values.LONGITUD_BARRA || C.profileMeta().default_bar_length_mm);
+
 export function manufacturingPlan(model) {
   const cnt = counts(model);
   const sd = C.sheetData();
-  const barLen = +C.profileMeta().default_bar_length_mm;
+  const barLen = barLength(model), kerf = +(model.params.values.CORTE_SIERRA || 3.0);
   const groups = new Map();
   for (const [k, p] of Object.entries(model.parts)) if (p.kind === "perfil") {
     const key = JSON.stringify([p.profile.code, p.material]);
@@ -174,7 +179,7 @@ export function manufacturingPlan(model) {
   }
   const cutting = [...groups.entries()].sort((a, b) => cmpTuple(JSON.parse(a[0]), JSON.parse(b[0]))).map(([key, pieces]) => {
     const [code, mat] = JSON.parse(key);
-    return { ...optimizeBars(pieces, barLen), profile: code, material: mat,
+    return { ...optimizeBars(pieces, barLen, kerf), profile: code, material: mat,
       mass_per_bar_kg: pyRound((C.profile(code).massPerM(C.material(mat).density) * barLen) / 1000, 2) };
   });
   const sg = new Map();
@@ -185,9 +190,11 @@ export function manufacturingPlan(model) {
     else if (p.kind === "pletina") push(p.material, p.t, { ref: p.ref, w: p.w, h: p.h, qty: cnt[k], area: plateArea(p), rotate: true, kind: "pletina" });
   }
   const las = sd.laser;
+  const fmt = model.params.values.FORMATO_CHAPA;
+  const fixedFmt = C.sheetFormats().filter((f) => f.code === fmt), formats = fixedFmt.length ? fixedFmt : C.sheetFormats();
   const nesting = [...sg.entries()].sort((a, b) => cmpTuple(JSON.parse(a[0]), JSON.parse(b[0]))).map(([key, parts]) => {
     const [mat, t] = JSON.parse(key);
-    const r = bestFormat(parts, C.sheetFormats(), { margin: las.sheet_margin_mm, spacing: las.part_spacing_mm, kerf: las.kerf_mm });
+    const r = bestFormat(parts, formats, { margin: las.sheet_margin_mm, spacing: las.part_spacing_mm, kerf: las.kerf_mm });
     return { ...r, material: mat, thickness: t,
       mass_per_sheet_kg: r.feasible ? pyRound((r.length ?? 0) * (r.width ?? 0) * t * 1e-9 * C.material(mat).density, 2) : null };
   });
@@ -207,7 +214,8 @@ export function manufacturingPlan(model) {
     painted += a * cnt[k];
   }
   const fin = model.params.values.ACABADO;
-  const paintKg = fin ? (painted / 1e6) * C.finish(fin).consumable_kg_m2 : 0.0;
+  const film = +(model.params.values.ESPESOR_PINTURA || PAINT_REF_UM);      // consumo ∝ espesor de película
+  const paintKg = fin ? (((painted / 1e6) * C.finish(fin).consumable_kg_m2) * film) / PAINT_REF_UM : 0.0;
   return { cutting, nesting,
     welding: { joints: welds.length, total_length_mm: pyRound(weldLen, 1), deposit_kg: pyRound(deposit, 3), wire_kg: pyRound(wireKg, 3),
       arc_time_h: pyRound(arcH, 3), gas_l: pyRound(gasL, 1), wire: wire.name, gas: gas.name },
@@ -221,7 +229,7 @@ export function dfmCheck(model, plan = null) {
   const pb = sd.press_brake, las = sd.laser;
   const out = [];
   const add = (level, code, element, message, proposal = "") => out.push({ level, code, element, message, proposal });
-  const barLen = +C.profileMeta().default_bar_length_mm;
+  const barLen = barLength(model);
   for (const p of Object.values(model.parts)) {
     if (p.kind === "chapa") {
       const mat = C.material(p.material);
