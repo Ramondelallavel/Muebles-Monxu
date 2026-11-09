@@ -19,7 +19,7 @@ def test_registered_and_implemented():
     assert lib["carro_estanteria"] == "implementada" and lib["mesa_soldadura"] == "implementada"
     assert lib["estanteria_bateria"] == "implementada" and lib["tarima"] == "implementada"
     assert lib["carro_plataforma"] == "implementada" and lib["armario"] == "implementada"
-    assert lib["cantilever"] == "implementada"
+    assert lib["cantilever"] == "implementada" and lib["escalon"] == "implementada"
 
 
 def test_notch_only_in_selected_corners():
@@ -751,6 +751,78 @@ def test_assistant_cantilever():
 def test_cantilever_dossier(tmp_path):
     r = regenerate("cantilever", _tpl("cantilever", "CV-3-2000-600"))
     res = generate_dossier(r, {"code": "P-CV", "revision": "A"}, tmp_path / "exp")
+    assert res["qa"]["blocking"] == 0
+    items = {i["code"]: i for i in res["qa"]["items"]}
+    assert items["EXP-STEP"]["level"] == "ok" and items["PLANO-GEOMETRIA"]["level"] == "ok"
+
+
+# ------------------------------------------------------------------ escalón de acceso
+@pytest.mark.parametrize("tid", [t["id"] for t in family("escalon").templates()])
+def test_step_templates_verify(tid):
+    from monxu.engineering.analysis import analyze
+    m = _build("escalon", _tpl("escalon", tid))
+    assert not [n for n in m.design_notes if n["level"] == "error"]
+    eng = analyze(m)
+    assert eng["status"] == "CUMPLE", [c["id"] for c in eng["checks"] if c["status"] != "CUMPLE"]
+    ids = {c["id"] for c in eng["checks"]}
+    for s in m.structure["surfaces"]:          # cada peldaño y la meseta: chapa con carga repartida y concentrada
+        assert {f"PL.{s['id']}.S", f"PL.{s['id']}.D", f"PL.{s['id']}.P"} <= ids
+
+
+def test_step_geometry_follows_en_iso_14122_3():
+    from monxu.families.escalon import going, risers
+    assert risers(400, "auto") == 2 and risers(500, "auto") == 3 and risers(250, "auto") == 1
+    assert going(200, "auto") == 230 and going(500 / 3, "auto") == 295
+    m = _build("escalon", _tpl("escalon", "EA-1000-500"))
+    assert m.product_code == "EA1000-500-3"
+    plates = sorted((i for i in m.instances if i.group == "PEL"), key=lambda i: i.T[2][3])
+    h = 500 / 3
+    t = plates[0].part.t
+    # peldaños a h, 2h y meseta a 3h; huella 295 mm visible en cada peldaño y meseta de 800 mm
+    assert [round(i.T[2][3] + t, 6) for i in plates] == [round(k * h, 6) for k in (1, 2, 3)]
+    assert [i.part.h for i in plates] == [295.0, 295.0, 800.0]
+    assert plates[1].T[1][3] - plates[0].T[1][3] == pytest.approx(295.0)
+    assert m.dims["FONDO"] == pytest.approx(2 * 295 + 800)
+    # todas las líneas de patas llevan pie nivelador
+    assert len([i for i in m.instances if i.part.role == "pie_nivelador"]) == 2 * 4
+    r = regenerate("escalon", _tpl("escalon", "EA-1000-500"))
+    assert r.interferences["interferences"] == [] and r.qa.result()["blocking"] == 0
+    codes = {n["code"] for n in m.design_notes}
+    assert "ERG-ANTIDESLIZANTE" in codes and "NORMA-14122-CONTRAHUELLA" not in codes and "NORMA-14122-PASO" not in codes
+
+
+def test_step_shared_sheet_thickness_is_the_largest():
+    """Un único espesor de chapa para peldaños y meseta: el mayor de los que pide cada superficie, y la meseta se
+    recalcula con él (sus travesaños y su propuesta corresponden al espesor final)."""
+    m = _build("escalon", {"ANCHURA": 1200.0, "ALTURA": 450.0, "FONDO_MESETA": 1000.0, "CARGA_PUNTUAL": 250.0})
+    t = m.params.values["ESPESOR_PLACA"]
+    assert {i.part.t for i in m.instances if i.group == "PEL"} == {t}
+    props = {n["code"]: n["message"] for n in m.design_notes if n["code"].startswith("DIM-")}
+    assert f"chapa de {t:g} mm" in props["DIM-MESETA"] and f"chapa de {t:g} mm" in props["DIM-PELDANO_1"]
+
+
+def test_step_rules_and_warnings():
+    m = _build("escalon", {"ALTURA": 480.0, "NUMERO_PELDANOS": 1})
+    assert any(n["code"] == "NORMA-14122-CONTRAHUELLA" for n in m.design_notes)
+    m = _build("escalon", {"ALTURA": 400.0, "HUELLA": 350.0})
+    assert any(n["code"] == "NORMA-14122-PASO" for n in m.design_notes)
+    with pytest.raises(Exception):
+        _build("escalon", {"ALTURA": 400.0, "FONDO_MESETA": 300.0, "HUELLA": 350.0})     # meseta más corta que la huella
+
+
+def test_assistant_step():
+    r = assistant.handle(assistant.new_state(), "Necesito un escalón de acceso de 800 x 1000 x 400 para subir a una máquina")
+    assert r["family"] == "escalon" and r["family_implemented"]
+    p = r["parameters"]
+    assert p["ANCHURA"] == 800.0 and p["ALTURA"] == 400.0 and p["FONDO_MESETA"] == 770.0 and p["ESPESOR_PLACA"] == "auto"
+    r = assistant.handle(assistant.new_state(), "peldaño de acceso de 600 de ancho a 250 mm, 150 kg")
+    assert r["parameters"]["ALTURA"] == 250.0 and r["parameters"]["CARGA_PUNTUAL"] == 150.0
+
+
+@pytest.mark.slow
+def test_step_dossier(tmp_path):
+    r = regenerate("escalon", _tpl("escalon", "EA-800-400"))
+    res = generate_dossier(r, {"code": "P-EA", "revision": "A"}, tmp_path / "exp")
     assert res["qa"]["blocking"] == 0
     items = {i["code"]: i for i in res["qa"]["items"]}
     assert items["EXP-STEP"]["level"] == "ok" and items["PLANO-GEOMETRIA"]["level"] == "ok"

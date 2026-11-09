@@ -19,14 +19,14 @@ SYSTEM = (
     "técnicos indicados explícitamente. No inventes valores: deja a null todo lo que el usuario no haya dicho. "
     "Dimensiones en milímetros; cargas en kg (fuerzas horizontales en N). Familias: mesa_industrial, estanteria, "
     "estanteria_bateria, puesto_trabajo, carro_taller, carro_estanteria, carro_plataforma, mesa_soldadura, tarima, armario, "
-    "cantilever (estantería de brazos en voladizo para barras, tubos o tableros)."
+    "cantilever (estantería de brazos en voladizo para barras, tubos o tableros), escalon (escalón de acceso con meseta)."
 )
 
 
 class ExtractedRequest(BaseModel):
     family: Optional[Literal["mesa_industrial", "estanteria", "estanteria_bateria", "puesto_trabajo", "carro_taller",
                              "carro_estanteria", "carro_plataforma", "mesa_soldadura", "tarima", "armario",
-                             "cantilever"]] = None
+                             "cantilever", "escalon"]] = None
     LONGITUD: Optional[float] = Field(None, description="Longitud en mm")
     ANCHURA: Optional[float] = Field(None, description="Anchura o fondo en mm")
     ALTURA: Optional[float] = Field(None, description="Altura de trabajo en mm")
@@ -47,6 +47,8 @@ class ExtractedRequest(BaseModel):
     LONGITUD_BRAZO: Optional[float] = Field(None, description="Longitud útil de los brazos cantilever en mm")
     CARAS: Optional[Literal["una", "dos"]] = Field(None, description="Brazos a una o a dos caras (cantilever)")
     CARGA_POR_BRAZO: Optional[float] = Field(None, description="Carga uniforme por brazo cantilever en kg")
+    NUMERO_PELDANOS: Optional[int] = Field(None, description="Peldaños de un escalón de acceso, contando la meseta")
+    FONDO_MESETA: Optional[float] = Field(None, description="Fondo de la meseta del escalón de acceso en mm")
 
 
 def extract(message: str, state: dict, client=None) -> dict:

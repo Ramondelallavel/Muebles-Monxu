@@ -13,10 +13,11 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
   const crit = C.criteria();
   const gG = crit.partial_factors.gamma_G, gQ = crit.partial_factors.gamma_Q;
   const dl = deflectionRatios(ps.values)[1];
-  const { surface, t_param, n_param } = tgt;
+  const { surface, t_param } = tgt, n_param = tgt.n_param ?? null;     // sin n_param: sin travesaños
   const mat = C.material(ps.values[tgt.mat_param ?? "MATERIAL_CHAPA"]);
   const phi = dynamicFactor(ps.values);                 // coeficiente dinámico (carros)
-  const load = (ps.values[tgt.load_param] ?? 0) * phi;   // p. ej. sólo carga puntual sobre la encimera
+  let load = (ps.values[tgt.load_param] ?? 0) * phi;     // se precisa con la superficie del modelo de prueba
+  let pointSurface = surface === "encimera";
   const tMin = tgt.min_t_by_use ? crit.min_sheet_thickness_by_use_mm[ps.values.USO ?? "montaje"] ?? 1.5 : 1.0;
   const tMax = 6.0;
   const tOpts = autoT ? (tgt.t_options ?? C.sheetThicknesses(mat.code)).filter((t) => tMin <= t && t <= (tgt.t_max ?? tMax)) : [ps.values[t_param]];
@@ -28,10 +29,13 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
   for (const t of tOpts) {
     const trial = copyParams(ps);
     trial.values[t_param] = t;
-    trial.values[n_param] = autoN ? 0 : ps.values[n_param];
+    if (n_param) trial.values[n_param] = autoN ? 0 : ps.values[n_param];
     const m = family.construct(trial);
     if (m.design_notes.some((n) => n.code.startsWith("DFM-FIJ") && n.level === "error")) continue;
     const surf = m.structure.surfaces.find((s) => s.id === surface);
+    // carga de la superficie: la propia (peldaño) o la del parámetro; p. ej. sólo carga puntual sobre la encimera
+    load = (("load_kg" in surf ? surf.load_kg : ps.values[tgt.load_param]) ?? 0) * phi;
+    pointSurface = surface === "encimera" || !!surf.point_load;
     const lvl = m.structure.levels[surf.level];
     const gx = lvl.grid_x, [yf, yb] = lvl.grid_y;
     const span = gx.at(-1) - gx[0], b = yb - yf;
@@ -39,12 +43,12 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
     // peso propio igual que en la verificación: chapa real (con pestañas y escotaduras) repartida en la superficie
     const qg = (surfaceSheet(m.instance(surf.sheet_instance).part)[0] * G_ACC) / surf.area_mm2;
     const eta = surf.ligament_efficiency ?? 1.0;
-    const P_kg = surface === "encimera" ? (ps.values.CARGA_PUNTUAL || 0.0) * phi || null : null;
+    const P_kg = pointSurface ? (ps.values.CARGA_PUNTUAL || 0.0) * phi || null : null;
     const fyd = mat.fy / mat.gamma_M0;
     const prof = C.profile(trial.values[tgt.trv_param]);
     const crossLen = yb - yf - prof.B;
     const rhoS = C.material(trial.values.MATERIAL_ESTRUCTURAL).density;
-    for (const n of autoN ? Array.from({ length: 25 }, (_, i) => i) : [ps.values[n_param]]) {
+    for (const n of autoN ? Array.from({ length: 25 }, (_, i) => i) : [n_param ? ps.values[n_param] : 0]) {
       const a = span / (n + 1);
       if (a < minBay) break;
       const ru = { sigma: navier(a, b, t, mat.E, mat.nu, gG * qg + gQ * q).sigma / eta };
@@ -65,9 +69,9 @@ function plateSizing(family, ps, tgt, notes, autoT, autoN) {
   }
   const label = tgt.label ?? { encimera: "la encimera", balda: "la balda inferior", estante: "el estante superior" }[surface] ?? `la bandeja (${surface})`;
   if (!alternatives.length) {
-    const fixed = [[t_param, autoT], [n_param, autoN]].filter(([, a]) => !a).map(([p]) => p);
+    const fixed = [[t_param, autoT], [n_param, autoN]].filter(([p, a]) => p && !a).map(([p]) => p);
     const maxT = tOpts.length ? Math.max(...tOpts) : 0;
-    const Pk = surface === "encimera" ? (ps.values.CARGA_PUNTUAL || 0.0) * phi || null : null;
+    const Pk = pointSurface ? (ps.values.CARGA_PUNTUAL || 0.0) * phi || null : null;
     const what = pointOnly && Pk ? `la carga puntual de ${g(Pk)} kg (la carga repartida de ${g(load)} kg sí se verifica; la flexión local `
       + "bajo una pieza concentrada depende del espesor, no del vano)" : `${g(load)} kg`;
     notes.push({ level: "error", code, message: `No se encuentra combinación de espesor y travesaños que verifique ${label} con ${what}`
@@ -110,10 +114,17 @@ export function resolveAuto(family, params, autos, onProgress = null) {
 
   const plates = () => {
     for (const t of targets) if (ps.values[t.t_param] === AUTO) ps.values[t.t_param] = defaults[t.t_param] ?? 2.0;
+    const thick = {}, chosen = [];          // espesor común a varias superficies (peldaños): el mayor que piden
     for (const t of targets) {
-      const at = autos.includes(t.t_param), an = autos.includes(t.n_param);
-      if (at || an) plateSizing(family, ps, t, notes, at, an);
+      const at = autos.includes(t.t_param), an = t.n_param != null && autos.includes(t.n_param);
+      if (at || an) {
+        plateSizing(family, ps, t, notes, at, an);
+        if (at) { thick[t.t_param] = Math.max(thick[t.t_param] ?? 0.0, ps.values[t.t_param]); chosen.push([t, ps.values[t.t_param], an]); }
+      }
     }
+    for (const [k, t] of Object.entries(thick)) ps.values[k] = t;
+    // las superficies que admitían una chapa más fina se recalculan con la común (travesaños y propuesta exactos)
+    for (const [t, th, an] of chosen) if (th < thick[t.t_param]) plateSizing(family, ps, t, notes, false, an);
   };
   plates();
   let iterTotal = 0;

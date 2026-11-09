@@ -23,10 +23,11 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
     crit = catalog.criteria()
     gG, gQ = crit["partial_factors"]["gamma_G"], crit["partial_factors"]["gamma_Q"]
     dl = deflection_ratios(ps.values)[1]
-    surface, t_param, n_param = tgt["surface"], tgt["t_param"], tgt["n_param"]
+    surface, t_param, n_param = tgt["surface"], tgt["t_param"], tgt.get("n_param")    # sin n_param: sin travesaños
     mat = catalog.material(ps.values[tgt.get("mat_param", "MATERIAL_CHAPA")])
     phi = dynamic_factor(ps.values)                     # coeficiente dinámico (carros)
-    load = (ps.values[tgt["load_param"]] or 0.0) * phi  # p. ej. sólo carga puntual sobre la encimera
+    load = (ps.values.get(tgt["load_param"]) or 0.0) * phi       # se precisa con la superficie del modelo de prueba
+    point_surface = surface == "encimera"
     t_min = crit["min_sheet_thickness_by_use_mm"].get(ps.values.get("USO", "montaje"), 1.5) \
         if tgt.get("min_t_by_use") else 1.0
     t_max = 6.0                     # chapa de encimera/bandeja razonable para plegar y manipular
@@ -40,11 +41,15 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
     for t in t_opts:
         trial = ps.copy()
         trial.values[t_param] = t
-        trial.values[n_param] = 0 if auto_n else ps.values[n_param]
+        if n_param:
+            trial.values[n_param] = 0 if auto_n else ps.values[n_param]
         m = family.construct(trial)
         if any(n["code"].startswith("DFM-FIJ") and n["level"] == "error" for n in m.design_notes):
             continue          # con este espesor no hay zona válida para las fijaciones: no es fabricable
         surf = next(s for s in m.structure["surfaces"] if s["id"] == surface)
+        # carga de la superficie: la propia (peldaño) o la del parámetro; p. ej. sólo carga puntual sobre la encimera
+        load = ((surf["load_kg"] if "load_kg" in surf else ps.values[tgt["load_param"]]) or 0.0) * phi
+        point_surface = surface == "encimera" or bool(surf.get("point_load"))
         lvl = m.structure["levels"][surf["level"]]
         gx, (yf, yb) = lvl["grid_x"], lvl["grid_y"]
         span, b = gx[-1] - gx[0], yb - yf
@@ -52,12 +57,12 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
         # peso propio igual que en la verificación: chapa real (con pestañas y escotaduras) repartida en la superficie
         qg = surface_sheet(m.instance(surf["sheet_instance"]).part)[0] * G_ACC / surf["area_mm2"]
         eta = surf.get("ligament_efficiency", 1.0)
-        P_kg = ((ps.values.get("CARGA_PUNTUAL") or 0.0) * phi or None) if surface == "encimera" else None
+        P_kg = ((ps.values.get("CARGA_PUNTUAL") or 0.0) * phi or None) if point_surface else None
         fyd = mat.fy / mat.gamma_M0
         prof = catalog.profile(trial.values[tgt["trv_param"]])
         cross_len = yb - yf - prof.B
         rho_s = catalog.material(trial.values["MATERIAL_ESTRUCTURAL"]).density
-        for n in (range(0, 25) if auto_n else [ps.values[n_param]]):
+        for n in (range(0, 25) if auto_n else [ps.values[n_param] if n_param else 0]):
             a = span / (n + 1)
             if a < min_bay:
                 break
@@ -81,8 +86,8 @@ def _plate_sizing(family, ps: ParameterSet, tgt: dict, notes: list, auto_t: bool
     label = tgt.get("label") or {"encimera": "la encimera", "balda": "la balda inferior",
                                  "estante": "el estante superior"}.get(surface, f"la bandeja ({surface})")
     if not alternatives:
-        fixed = [p for p, a in ((t_param, auto_t), (n_param, auto_n)) if not a]
-        P_kg = ((ps.values.get("CARGA_PUNTUAL") or 0.0) * phi or None) if surface == "encimera" else None
+        fixed = [p for p, a in ((t_param, auto_t), (n_param, auto_n)) if p and not a]
+        P_kg = ((ps.values.get("CARGA_PUNTUAL") or 0.0) * phi or None) if point_surface else None
         what = (f"la carga puntual de {P_kg:g} kg (la carga repartida de {load:g} kg sí se verifica; la flexión local "
                 "bajo una pieza concentrada depende del espesor, no del vano)" if point_only and P_kg else f"{load:g} kg")
         notes.append({"level": "error", "code": code,
@@ -150,10 +155,21 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
         for tgt in targets:        # valores provisionales para construir los modelos de prueba
             if ps.values[tgt["t_param"]] == AUTO:
                 ps.values[tgt["t_param"]] = defaults.get(tgt["t_param"], 2.0)
+        thick: dict[str, float] = {}       # espesor común a varias superficies (peldaños): el mayor que piden
+        chosen = []
         for tgt in targets:
-            at, an = tgt["t_param"] in autos, tgt["n_param"] in autos
+            at, an = tgt["t_param"] in autos, tgt.get("n_param") in autos
             if at or an:
                 _plate_sizing(family, ps, tgt, notes, at, an)
+                if at:
+                    thick[tgt["t_param"]] = max(thick.get(tgt["t_param"], 0.0), ps.values[tgt["t_param"]])
+                    chosen.append((tgt, ps.values[tgt["t_param"]], an))
+        for k, t in thick.items():
+            ps.values[k] = t
+        # las superficies que admitían una chapa más fina se recalculan con la común (travesaños y propuesta exactos)
+        for tgt, t, an in chosen:
+            if t < thick[tgt["t_param"]]:
+                _plate_sizing(family, ps, tgt, notes, False, an)
 
     plates()
     def size_profiles():

@@ -23,7 +23,7 @@ OK, FAIL, PENDING, WARN = "CUMPLE", "NO_CUMPLE", "PENDIENTE", "ADVERTENCIA"
 G_ACC = 9.81
 MAX_ELEMENT = 100.0
 N_ZERO = 1e-3          # N: axil por debajo del cual la barra se considera sin compresión
-MASCULINE_WORDS = ("carro", "puesto", "armario")     # concordancia del texto de vuelco ("del carro vacío", "de la mesa vacía")
+MASCULINE_WORDS = ("carro", "puesto", "armario", "escalón")     # concordancia del texto de vuelco ("del carro vacío", "de la mesa vacía")
 #: carros: la maniobra actúa en la dirección de la marcha; lateralmente (giros, empujes ocasionales) esta fracción
 LATERAL_FACTOR_MOBILE = 0.5
 DIRS = ("+X", "-X", "+Y", "-Y")
@@ -361,7 +361,8 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         scale = area / grid_area
         q_g = sheet_mass * G_ACC / area
         g_sheets += sm.surface_load("G", lvl, q_g * scale)
-        load_kg = ps.get(surf["load_param"])
+        # carga propia de la superficie (p. ej. kN/m² por su área, en un peldaño) o la del parámetro de carga
+        load_kg = surf["load_kg"] if "load_kg" in surf else ps.get(surf["load_param"])
         if load_kg:
             load_kg = load_kg * phi                 # coeficiente dinámico (carros)
         info = {"surface": surf, "level": lvl, "q_g": q_g, "sheet_mass": sheet_mass, "load_kg": load_kg,
@@ -699,7 +700,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         else:
             checks.append(Check(f"PL.{sid}", "placa", surf["label"], f"{surf['label']}: verificación de chapa",
                                 "—", None, None, "-", None, PENDING, "", {"motivo": f"{surf['load_param']} sin definir"}))
-        if sid == "encimera" and P_kg:
+        if (sid == "encimera" or surf.get("point_load")) and P_kg:
             size = patch_size(ps, surf)        # huella de la carga concentrada
             r_p = navier(a, b, t, mat.E, mat.nu, q=gG * info["q_g"], patch=(gQ * P_kg * G_ACC, size, size, a / 2, b / 2),
                          terms=121)

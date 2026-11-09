@@ -58,7 +58,8 @@ def check_case(fid: str, values: dict) -> list[str]:
     Hn = v.get("CARGA_HORIZONTAL") or 0.0
     q_total = sum(t for k, t in tot.items() if k.startswith("Q_"))
     for s in m.structure.get("surfaces", []):
-        kg = (v.get(s["load_param"]) or 0.0) * max(1.0, float(v.get("COEF_DINAMICO") or 1.0))    # coeficiente dinámico
+        kg = ((s["load_kg"] if "load_kg" in s else v.get(s["load_param"])) or 0.0) * \
+            max(1.0, float(v.get("COEF_DINAMICO") or 1.0))    # coeficiente dinámico
         sid = f"Q_{s['id']}"
         if kg and sid in tot and abs(tot[sid] - kg * G) > max(0.2, 1e-4 * kg * G):
             out.append(f"CARGA {sid}: aplicada {tot[sid]} N frente a {kg * G:.1f} N")

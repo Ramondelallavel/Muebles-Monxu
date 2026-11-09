@@ -5,9 +5,10 @@ geométrica, mecánica y constructivamente: modelo B-rep real, cálculo, planos,
 BOM, optimización de corte y expediente de fabricación, todo derivado de una única fuente de
 parámetros.
 
-> **Estado:** núcleo funcional con diez familias completas (**mesa industrial**, **mesa de soldadura**,
-> **estantería industrial**, **estantería en batería**, **puesto de trabajo**, **carro de taller**, **carro estantería**,
-> **carro plataforma**, **tarima / plataforma de trabajo** y **armario industrial**) y el caso de aceptación §23 superado
+> **Estado:** núcleo funcional con doce familias completas (**mesa industrial**, **mesa de soldadura**,
+> **estantería industrial**, **estantería en batería**, **estantería cantilever**, **puesto de trabajo**, **carro de taller**,
+> **carro estantería**, **carro plataforma**, **tarima / plataforma de trabajo**, **escalón de acceso** y **armario
+> industrial**) y el caso de aceptación §23 superado
 > por pruebas automáticas. Los cajones y las cajoneras **no están implementados**.
 
 ## Puesta en marcha
@@ -29,7 +30,7 @@ MONXU_DATA=var uvicorn monxu.api.main:app --host 127.0.0.1 --port 8000
 Abra `http://127.0.0.1:8000`. Los datos (SQLite y expedientes) se guardan en `var/`.
 
 Para el asistente con Claude (opcional; sin él se usa el intérprete local determinista), defina
-`MONXU_LLM=1` y `ANTHROPIC_API_KEY`.
+`MONXU_LLM=1`, `MONXU_LLM_MODEL` (identificador del modelo de Claude que se usará) y `ANTHROPIC_API_KEY`.
 
 Pruebas, incluido el caso de aceptación completo (unos 80 s):
 
@@ -321,6 +322,69 @@ En el armario aparecieron tres fallos generales, corregidos en los dos motores:
 - Nueva advertencia `GAL-VENTEO`: con galvanizado en caliente (EN ISO 1461), los tubos cerrados por soldadura
   necesitan taladros de venteo y drenaje (EN ISO 14713-2). No se modelan; el aviso da un criterio orientativo
   y recuerda repasar las roscas de las tuercas soldadas.
+
+## Estantería cantilever
+
+`cantilever` (`CV`) almacena barras, tubos, perfiles y tableros en brazos en voladizo, a una o dos caras.
+
+- **Estructura:** columnas de tubo rectangular con el canto en la dirección de los brazos, cerradas con una tapa,
+  soldadas sobre una base de tubo que apoya en el suelo por sus dos extremos. Brazos soldados a la cara de la columna,
+  con un tope vertical en la punta (o una tapa si no se quiere tope). Arriostramiento horizontal entre columnas a
+  media altura y en cabeza. Placas base bajo los extremos de cada base, con la tuerca soldada en el vuelo de la placa
+  y el pie nivelador sin sobresalir del contorno. A una cara, la base trasera mide el 35 % de la delantera (mínimo
+  250 mm); a dos caras es simétrica. El último nivel deja su tope enrasado con la cabeza de la columna.
+- **Cálculo:** carga uniforme a lo largo de cada brazo (sin indicar: 250 kg por metro de brazo); a dos caras, además
+  el caso asimétrico con sólo los brazos delanteros cargados (`ELU-QA`/`ELS-QA`), que es el que más flecta la
+  columna. Flecha propia de cada brazo en punta (respecto a la tangente en su arranque) con límite 2L/r, y desplome de
+  las columnas bajo la carga vertical (`S.ELS-G`, H/r). Soldaduras brazo–columna y columna–base, apoyos, vuelco y
+  tacos como en el resto de familias.
+- **Dimensionado:** columnas, brazos, bases y arriostramiento por cálculo; la base nunca es más estrecha que la
+  columna que lleva encima (regla `fit_profiles`). Se añadieron al catálogo los RHS 140x80x4, 150x100x5, 160x80x5,
+  200x100x5 y 200x100x6 (EN 10219-2) para las columnas grandes.
+- **Planos:** la hoja de estructura acota el paso de columnas y la longitud de los brazos; la de soldaduras detalla
+  brazo–columna y columna–base, con la secuencia de soldeo propia.
+- **Asistente:** reconoce «cantilever», «estantería de brazos», «portabarras», «estantería/rack para barras, tubos,
+  perfiles o tableros»; columnas, separación, brazos («brazos de 800», «voladizo de 1 m»), caras, tope y carga por
+  brazo. Una longitud total se reparte entre columnas, el fondo se toma como longitud de brazo y una carga por nivel o
+  total se reparte por brazo.
+
+Plantillas: 3 columnas con brazos de 600 mm, taller de barras de 2 columnas, dos caras con brazos de 800 mm y
+tableros con 4 columnas y brazos de 1.000 mm.
+
+## Escalón de acceso
+
+`escalon` (`EA`) sube al operario a una máquina, una línea o un mostrador alto: uno a tres peldaños de chapa de acero
+soldada sobre bastidores de tubo, el último de ellos una meseta donde trabaja de pie (altura hasta 500 mm; por encima,
+EN ISO 14122-3 exige barandilla, no incluida).
+
+- **Geometría (EN ISO 14122-3):** número de peldaños 'auto' con la contrahuella admisible (150–250 mm) más próxima
+  a 190 mm y huella 'auto' con 2h + g = 630 mm; avisos si se fijan valores fuera de norma o una anchura menor de
+  600 mm.
+- **Estructura:** una línea de patas bajo el borde delantero de cada peldaño y otra al fondo de la meseta, todas con
+  placa base, tuerca y pie nivelador. El larguero trasero de cada peldaño va soldado a la cara de las patas del
+  siguiente, de modo que cada chapa apoya en todo su contorno.
+- **Cargas (EN ISO 14122-2/-3):** 2 kN/m² repartidos en cada peldaño y en la meseta y 1,5 kN concentrados sobre
+  100 × 100 mm en cada peldaño (200 × 200 mm en la meseta). Un mismo espesor de chapa para todo: el mayor que pide
+  cada superficie, y la meseta se recalcula con él (sus travesaños intermedios corresponden al espesor final).
+- **Asistente:** reconoce «escalón», «peldaño», «escalera/escalerilla de acceso»; «A × B × C» es anchura × fondo total
+  × altura (la meseta resulta de restar los peldaños), «meseta de 800», «huella de 260», «3 escalones», cargas en
+  kN/m² y una carga en kg como la de una persona.
+
+Plantillas: dos peldaños de 800 mm a 400 mm, peldaño de 600 mm a 250 mm, acceso a máquina de tres peldaños a 500 mm
+y escalón ancho galvanizado para exterior.
+
+Cambios generales que trajeron estas dos familias, en los dos motores:
+
+- **Anclajes:** la tracción de cada taco se reparte con giro rígido alrededor de la arista de vuelco
+  (T_i = M·d_i/Σd²). Con cuatro esquinas el resultado no cambia; con más apoyos (estanterías en batería, cantilever,
+  escalones) el taco más alejado lleva más que la media, que es lo que antes se tomaba (subestimaba hasta un 17 %).
+- **Cálculo:** cargas lineales sobre barras, superficies con su propia carga (kN/m² por su área), carga concentrada en
+  cualquier superficie marcada y objetivos de chapa sin travesaños.
+- **Planos:** hojas de estructura y soldadura para familias sin bastidor superior (paso de columnas, cotas en fondo,
+  detalles y notas declarados por la familia). En los planos del servidor, las cotas cortas de una cadena de niveles
+  muy juntos ya no se pisan (se escalonan a ambos lados de la línea de cota) y la altura total va por fuera de la
+  cadena, como en el navegador.
+- **Fabricación:** las advertencias de soldeo y la comprobación de la tuerca dentro de la pata dependen de la familia.
 
 ## Depuración de lógica: invariantes
 

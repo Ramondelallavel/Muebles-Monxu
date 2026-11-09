@@ -72,6 +72,7 @@ class Drawing:
         self.c.saveState()
         self.c.scale(mm, mm)
         self._open = True
+        self._short_v: dict[float, list] = {}       # textos de cotas verticales cortas por carril (escalonado)
         self.pages.append({"number": number, "title": title, "scale": scale, "dims": [], **(sheet_meta or {})})
         self._frame()
         self._title_block(number, title, scale, material)
@@ -272,8 +273,13 @@ class Drawing:
         txt = prefix + fmt(value)
         if (y2 - y1) > len(txt) * 2.2 + 2:
             self.text(x_dim - 1.0, (y1 + y2) / 2, txt, 3.0, "c", angle=90)
-        else:   # cota corta: texto desplazado al exterior para no pisar las cotas contiguas de la cadena
-            self.text(x_dim - 4.6 * sgn, (y1 + y2) / 2, txt, 3.0, "c", angle=90)
+        else:   # cota corta: texto fuera del tramo, hacia la pieza; si pisa el de la cota corta contigua del mismo
+            # carril (cadena de niveles muy juntos), al otro lado de la línea de cota
+            yc, half = (y1 + y2) / 2, len(txt) * 1.1 + 0.6
+            lane = getattr(self, "_short_v", {}).setdefault(round(x_dim, 1), [])
+            inward = not any(abs(yc - c) < half + h2 and side for c, h2, side in lane)
+            lane.append((yc, half, inward))
+            self.text(x_dim - 4.6 * sgn if inward else x_dim + 4.6 * sgn, yc, txt, 3.0, "c", angle=90)
         if name:
             self.record_dim(name, value, source)
 

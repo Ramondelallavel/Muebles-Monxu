@@ -2246,9 +2246,308 @@ class Cantilever extends MesaIndustrial {
   }
 }
 
+// ============================================================================ escalón de acceso (port de escalon.py)
+const EA_DECK_THICKNESSES = [3.0, 4.0, 5.0, 6.0, 8.0, 10.0];
+const RISER_MIN = 150.0, RISER_MAX = 250.0, RISER_PREF = 190.0;   // EN ISO 14122-3: contrahuella h
+const STEP_RULE = [600.0, 660.0], STEP_RULE_TARGET = 630.0;     // EN ISO 14122-3: 2h + g
+const GOING_MIN = 200.0, GOING_MAX = 350.0;
+const EA_SERVICE_KN_M2 = 2.0, EA_POINT_KG = 153.0, TREAD_PATCH = 100.0, LANDING_PATCH = 200.0;
+/** Peldaños (contando la meseta): los indicados o, en 'auto', la contrahuella admisible más próxima a 190 mm. */
+export function risers(H, n) {
+  if (n != null && n !== AUTO) return Math.trunc(n);
+  const ok = [1, 2, 3].filter((k) => RISER_MIN - 1e-9 <= H / k && H / k <= RISER_MAX + 1e-9);
+  const best = (arr, f) => arr.reduce((b, k) => (f(k) < f(b) ? k : b));
+  if (ok.length) return best(ok, (k) => Math.abs(H / k - RISER_PREF));
+  return best([1, 2, 3], (k) => Math.max(RISER_MIN - H / k, H / k - RISER_MAX));
+}
+/** Huella: la indicada o, en 'auto', la que da 2h + g = 630 mm, redondeada a 5 mm y dentro de 200–350 mm. */
+export function going(h, gv) {
+  if (gv != null && gv !== AUTO) return +gv;
+  return Math.min(Math.max(5.0 * pyRound((STEP_RULE_TARGET - 2 * h) / 5.0, 0), GOING_MIN), GOING_MAX);
+}
+class Escalon extends MesaIndustrial {
+  constructor() { super("escalon"); }
+  legFits(v) { return true; }        // los anchos se igualan con frame_params (ningún larguero ni travesaño más ancho que la pata)
+  swayBeamParam(axis) { return axis === 0 ? "PERFIL_LARGUERO" : "PERFIL_TRAVESANO"; }
+  paramForRole(role) {
+    if (role === "pata") return "PERFIL_PATA";
+    if (role.startsWith("larguero")) return "PERFIL_LARGUERO";
+    if (role.startsWith("travesano")) return "PERFIL_TRAVESANO";
+    return null;
+  }
+  defaultLoads(v) { return {}; }
+  verticalLoadPresent(v) { return !!(v.CARGA_REPARTIDA || v.CARGA_PUNTUAL); }
+  plateTargets(v) {
+    if (!this.verticalLoadPresent(v)) return [];
+    const avail = new Set(C.sheetThicknesses(v.MATERIAL_PLACA));
+    const common = { t_param: "ESPESOR_PLACA", load_param: "CARGA_REPARTIDA", trv_param: "PERFIL_TRAVESANO", min_t_by_use: false,
+      mat_param: "MATERIAL_PLACA", t_options: EA_DECK_THICKNESSES.filter((t) => avail.has(t)), t_max: EA_DECK_THICKNESSES.at(-1) };
+    const n = risers(v.ALTURA, v.NUMERO_PELDANOS);
+    const out = range(n - 1).map((i) => ({ ...common, surface: `peldano_${i + 1}`, n_param: null, label: `el peldaño ${i + 1}` }));
+    out.push({ ...common, surface: "meseta", n_param: "NUMERO_TRAVESANOS", label: "la meseta" });
+    return out;
+  }
+  sheetDefaultsWithoutLoad(v) { return this.verticalLoadPresent(v) ? {} : { ESPESOR_PLACA: this.constructive_defaults.ESPESOR_PLACA }; }
+
+  construct(ps) {
+    this.checkResolved(ps);
+    const ctx = new ParamContext(ps);
+    const V = ps.values;
+    const W = V.ANCHURA, H = V.ALTURA;
+    const d = this._deriveStep(ctx);
+    const n = d.n;
+    const model = new ProductModel(this.id, this.name, `${this.def.prefix}${fx(W)}-${fx(H)}-${n}`, ps, ctx);
+    model.requested = ps;
+    for (const [lvl, code, msg] of d.notes) model.note(lvl, code, msg);
+    Object.assign(model.rule_fixes, d.rule_fixes);
+    const mat_s = V.MATERIAL_ESTRUCTURAL, fin = V.ACABADO;
+    const { leg, a, t, Y } = d;
+    model.addSub("EST", "Estructura soldada", { welded: true, step: 1 });
+    const gr = this.support_group[0];
+    model.addSub(gr, this.support_group[1], { explode: [0, 0, -160], step: 2 });
+    model.addSub("PEL", "Chapas de peldaños y meseta", { explode: [0, 0, 200], step: 3 });
+    const foot = C.component(V[this.support_param]);
+    const thread = parseFloat(foot.thread.slice(1));
+    const nutCode = weldNutCode(thread, mat_s);
+    const weld = makeWelder(model);
+    const legs = {}, corners = {}, cname = {};
+    ctx.feature("F10", "Estructura soldada", () => {
+      ctx.feature("F11", "Patas, placas base y tuercas", () => {
+        ctx.uses("ALTURA", "NUMERO_PELDANOS", "HUELLA", "FONDO_MESETA", "ANCHURA", "PERFIL_PATA", "ESPESOR_PLACA_BASE", this.support_param,
+          "MATERIAL_ESTRUCTURAL", "ACABADO");
+        const bplate = platePart("placa_base", `Placa base ${fx(a)}x${fx(a)}x${g(d.tp)}`, a, a, d.tp, "S235JR", fin, Math.min(3.0, a / 10),
+          [[a / 2, a / 2, thread + 1.0]]);
+        const nut = standardPart("tuerca_soldar", nutCode);
+        for (let j = 0; j <= n; j++) {
+          const ztop = d.leg_top[j];
+          const lname = j === 0 ? "delantera" : j === n ? "trasera" : `intermedia ${j}`;
+          const part = profilePart("pata", `Pata ${leg.code}`, leg.code, pyRound(ztop - d.z_leg0, 3), mat_s, fin);
+          for (const [s, x] of [["I", a / 2], ["D", W - a / 2]]) {
+            const k = `${j}${s}`, iid = `EST.PATA.${k}`, side = s === "I" ? "izquierda" : "derecha";
+            const p0 = [x, Y[j], d.z_leg0], p1 = [x, Y[j], ztop];
+            model.add(iid, `Pata ${lname} ${side}`, part, axisFrame(p0, p1, [0, 1, 0]), "EST", { axis: [p0, p1], up: [0, 1, 0], structural: true });
+            legs[k] = iid; corners[k] = [x, Y[j]]; cname[k] = `${lname} ${side}`;
+            model.add(`EST.PLACA.${k}`, `Placa base ${lname} ${side}`, bplate, translation(x - a / 2, Y[j] - a / 2, d.hn), "EST");
+            model.add(`EST.TUERCA.${k}`, `Tuerca soldada ${lname} ${side}`, nut, translation(x, Y[j], d.hn + d.tp), "EST");
+            model.joint({ id: `J.PLACA.${k}`, kind: "soldadura", members: [iid, `EST.PLACA.${k}`], location: [x, Y[j], d.z_leg0], description: "Placa base a pata",
+              weld: { type: "fillet", a: weldA(Math.min(leg.t, d.tp)), all_around: true, process: "135 (MAG)", length: pyRound(roundedPerimeter(a, a, leg.r_out), 1) } });
+            const ns = +C.component(nutCode).s;
+            model.joint({ id: `J.TUERCA.${k}`, kind: "soldadura", members: [`EST.TUERCA.${k}`, `EST.PLACA.${k}`], location: [x, Y[j], d.hn + d.tp],
+              description: "Tuerca de soldar a placa base", weld: { type: "fillet", a: 2.0, all_around: false, process: "135 (MAG)",
+                length: pyRound((3 * ns) / Math.sqrt(3), 1), note: "3 cordones en caras alternas de la tuerca" } });
+          }
+        }
+      });
+      for (let k = 1; k <= n; k++) {
+        const lid = k === n ? "SUP" : `P${k}`;
+        ctx.feature(`F2${k}`, k === n ? "Bastidor de la meseta" : `Bastidor del peldaño ${k}`, () => {
+          ctx.uses("PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ANCHURA", "ALTURA", "NUMERO_PELDANOS", "HUELLA", "FONDO_MESETA", "PERFIL_PATA",
+            "ESPESOR_PLACA", "NUMERO_TRAVESANOS", "SEPARACION_MAX_APOYOS", "MATERIAL_ESTRUCTURAL");
+          this._stepFrame(model, d, k, lid, legs, weld, mat_s, fin);
+        });
+      }
+    });
+    ctx.feature("F30", "Chapas de peldaños y meseta", () => {
+      ctx.uses("ANCHURA", "ALTURA", "NUMERO_PELDANOS", "HUELLA", "FONDO_MESETA", "ESPESOR_PLACA", "MATERIAL_PLACA", "ACABADO", "PERFIL_PATA");
+      for (let k = 1; k <= n; k++) {
+        const land = k === n;
+        const y0 = Y[k - 1] - a / 2, y1 = land ? Y[n] + a / 2 : Y[k] - a / 2;
+        const part = platePart(land ? "chapa_meseta" : "chapa_peldano", `Chapa de ${land ? "meseta" : "peldaño"} ${fx(W)}x${fx(y1 - y0)}x${g(t)}`, W, y1 - y0, t,
+          V.MATERIAL_PLACA, fin, PLATE_CORNER_R, []);
+        const pid = land ? "PEL.MESETA" : `PEL.PELDANO.${k}`;
+        model.add(pid, land ? "Meseta" : `Peldaño ${k}`, part, translation(0, y0, k * d.h - t), "PEL");
+        this._plateWelds(model, d, pid, land ? "SUP" : `P${k}`, t);
+      }
+    });
+    ctx.feature("F40", this.support_group[1], () => {
+      ctx.uses(this.support_param, "ANCHURA", "NUMERO_PELDANOS", "HUELLA", "FONDO_MESETA");
+      feet(model, d, corners, cname, V[this.support_param], foot, gr);
+      addAnchors(model, V, corners, cname, gr);
+    });
+    model.structure = this._stepStructure(model, d, legs);
+    const q = V.CARGA_REPARTIDA, Pk = V.CARGA_PUNTUAL, area = W * d.D * 1e-6;
+    const plates = model.instances.filter((i) => i.group === "PEL").map((i) => i.id);
+    model.dims = { ANCHURA: W, ALTURA: H, FONDO: d.D,
+      envelope: { ids: [...Object.values(legs), ...plates], dx: W, dy: d.D, zmax: H, names: ["ANCHURA", "FONDO"] },
+      levels: plates.map((pid, i) => [`PELDANO_${i + 1}`, pid, (i + 1) * d.h]),
+      drawing_expected: { ...Object.fromEntries(range(n).map((i) => [`DIST_NIVEL_${i + 1}`, d.h])),
+        ...Object.fromEntries(range(n - 1).map((i) => [`HUELLA_${i + 1}`, d.g])), FONDO_MESETA: d.P },
+      structure_profile: [...range(n - 1).map((i) => [Y[i] - a / 2, Y[i + 1] - a / 2, `HUELLA_${i + 1}`]), [Y[n - 1] - a / 2, Y[n] + a / 2, "FONDO_MESETA"]],
+      structure_notes: ["Estructura soldada (subconjunto EST).", `Clase de ejecución ${V.CLASE_EJECUCION} según EN 1090-2.`, "Cotas a caras exteriores de perfil.",
+        `Contrahuella ${fx(d.h, 1)} mm y huella ${g(d.g)} mm (EN ISO 14122-3).`, "Planitud de los apoyos de chapa: EN ISO 13920 clase F.",
+        "Detalle de uniones soldadas: plano 05.", "Longitudes de corte y mecanizados: plano 02B."],
+      load_text: q || Pk ? `Carga repartida de proyecto: ${g(q)} kN/m² (${fx((q * area) / 9.81e-3)} kg sobre ${fx(area, 2)} m²) y ${g(Pk)} kg concentrados en cada peldaño`
+        : "Sin carga de uso" };
+    model.numberParts();
+    return model;
+  }
+
+  _deriveStep(ctx) {
+    const v = ctx.params.values;
+    const notes = [], rule_fixes = {};
+    const d = { notes, rule_fixes };
+    ctx.feature("F00", "Parámetros derivados y reglas constructivas", () => {
+      const leg = C.profile(ctx.get("PERFIL_PATA")), rail = C.profile(ctx.get("PERFIL_LARGUERO")), trv = C.profile(ctx.get("PERFIL_TRAVESANO"));
+      if (leg.B !== leg.H) throw new Error("Las patas deben ser de tubo cuadrado");
+      const a = leg.B;
+      const foot = C.component(ctx.get(this.support_param));
+      const hn = +foot.nominal_height, tp = ctx.get("ESPESOR_PLACA_BASE");
+      const W = ctx.get("ANCHURA"), H = ctx.get("ALTURA"), P = ctx.get("FONDO_MESETA");
+      const t = ctx.derive("ESP_PLACA", (p) => p.get("ESPESOR_PLACA"), "mm", "Espesor de la chapa de los peldaños");
+      const n = ctx.derive("N_PELDANOS", (p) => risers(p.get("ALTURA"), p.get("NUMERO_PELDANOS")), "ud", "Número de peldaños (contando la meseta)");
+      const h = ctx.derive("CONTRAHUELLA", (p) => p.get("ALTURA") / p.get("N_PELDANOS"), "mm", "Contrahuella");
+      const gg = ctx.derive("HUELLA_PELDANO", (p) => going(p.get("CONTRAHUELLA"), p.get("HUELLA")), "mm", "Huella");
+      const sp = this.support_param;
+      const z_leg0 = ctx.derive("COTA_INICIO_PATA", (p) => +C.component(p.get(sp)).nominal_height + p.get("ESPESOR_PLACA_BASE"), "mm", "Cota inicio de pata");
+      if (!(RISER_MIN - 1e-9 <= h && h <= RISER_MAX + 1e-9))
+        notes.push(["advertencia", "NORMA-14122-CONTRAHUELLA", `Contrahuella de ${fx(h)} mm fuera del intervalo de 150 a 250 mm de EN ISO 14122-3: cambie `
+          + "el número de peldaños ('auto' elige el adecuado) o la altura."]);
+      if (n > 1 && !(STEP_RULE[0] - 1e-9 <= 2 * h + gg && 2 * h + gg <= STEP_RULE[1] + 1e-9))
+        notes.push(["advertencia", "NORMA-14122-PASO", `2h + g = ${fx(2 * h + gg)} mm fuera de 600–660 mm (EN ISO 14122-3): la huella cómoda con `
+          + `esta contrahuella es ${g(going(h, null))} mm ('auto').`]);
+      if (W < 600) notes.push(["advertencia", "NORMA-14122-ANCHURA", `Anchura de ${g(W)} mm: EN ISO 14122-3 pide al menos 600 mm (800 mm recomendado).`]);
+      if (P < gg) throw new ParamError(`FONDO_MESETA de ${g(P)} mm menor que la huella de ${g(gg)} mm.`);
+      if (rail.B > a || trv.B > a) notes.push(["error", "DFM-ANCHO-BASTIDOR", "El ancho de largueros/travesaños supera el de la pata: no pueden enrasarse con su cara exterior."]);
+      const frameH = Math.max(rail.H, trv.H);
+      if (h - t - frameH < z_leg0 + 10) {
+        notes.push(["error", "GEO-ESCALON-BAJO", `Contrahuella de ${fx(h)} mm insuficiente para el bastidor de ${g(frameH)} mm de canto sobre el pie y la `
+          + "placa base (bajo el primer peldaño): menos peldaños, pies o perfiles más bajos."]);
+        if (n > 1) rule_fixes.NUMERO_PELDANOS = [n - 1, `${n - 1} peldaño(s) (regla de diseño): con ${n} no cabía el bastidor del primer peldaño sobre los apoyos.`];
+      }
+      if (h - t - rail.H < 0) notes.push(["error", "GEO-PELDANO-SOLAPE", "El larguero delantero de un peldaño no cabe sobre el peldaño anterior: perfiles de menos canto."]);
+      // líneas de patas: una bajo el borde delantero de cada peldaño y otra al fondo de la meseta
+      const Y = [...range(n).map((k) => a / 2 + k * gg), (n - 1) * gg + P - a / 2];
+      if (Y[n] - Y[n - 1] < a + 2 * trv.B) throw new ParamError(`FONDO_MESETA de ${g(P)} mm demasiado corto para las patas y el bastidor.`);
+      const leg_top = [...range(n).map((j) => (j + 1) * h - t), n * h - t];
+      const D = (n - 1) * gg + P;
+      ctx.setDerived("FONDO_TOTAL", D, "mm", "Fondo total del escalón", ["NUMERO_PELDANOS", "HUELLA", "FONDO_MESETA", "ALTURA"]);
+      const x_l = trv.B / 2, x_r = W - trv.B / 2;
+      let n_int = ctx.get("NUMERO_TRAVESANOS");
+      if (n_int === AUTO) n_int = Math.max(0, Math.ceil((x_r - x_l) / ctx.get("SEPARACION_MAX_APOYOS")) - 1);
+      ctx.setDerived("N_TRAVESANOS_MESETA", n_int, "ud", "Travesaños intermedios de la meseta", ["NUMERO_TRAVESANOS", "SEPARACION_MAX_APOYOS", "ANCHURA"]);
+      const q = v.CARGA_REPARTIDA;
+      if (q != null && q < EA_SERVICE_KN_M2 - 1e-9)
+        notes.push(["advertencia", "NORMA-14122-CARGA", `Carga repartida de ${g(q)} kN/m², inferior a la de servicio de ${g(EA_SERVICE_KN_M2)} kN/m² de EN ISO 14122-2.`]);
+      const Pk = v.CARGA_PUNTUAL;
+      if (Pk != null && Pk < EA_POINT_KG - 1e-9)
+        notes.push(["advertencia", "NORMA-14122-PUNTUAL", `Carga concentrada de ${g(Pk)} kg, inferior a la de 1,5 kN (${g(EA_POINT_KG)} kg) de EN ISO 14122-3.`]);
+      notes.push(["advertencia", "ERG-ANTIDESLIZANTE", "Chapa lisa: EN ISO 14122-2/-3 exige peldaños antideslizantes; prever chapa lagrimada, recubrimiento "
+        + "antideslizante o nariz de peldaño contrastada (no modelado)."]);
+      Object.assign(d, { leg, rail, trv, a, hn, tp, t, n, h, g: gg, P, D, W, H, Y, z_leg0, leg_top, x_l, x_r, n_int });
+    });
+    return d;
+  }
+
+  /** Bastidor del peldaño k (k = n: meseta): largueros delantero y trasero, travesaños laterales y, en la meseta, intermedios. */
+  _stepFrame(model, d, k, lid, legs, weld, mat, fin) {
+    const { n, a, W, Y, rail, trv } = d;
+    const land = k === n, lab = land ? "de la meseta" : `del peldaño ${k}`;
+    const zt = k * d.h - d.t, zl = zt - rail.H / 2, ze = zt - trv.H / 2;
+    const role = land ? "sup" : "pel";
+    // larguero delantero, entre las patas del borde del peldaño y enrasado con su cara delantera
+    const yf = Y[k - 1] - a / 2 + rail.B / 2;
+    const fpart = profilePart(`larguero_${role}`, `Larguero ${rail.code}`, rail.code, W - 2 * a, mat, fin);
+    const fid = `EST.LAR_${lid}.D`;
+    let p0 = [a, yf, zl], p1 = [W - a, yf, zl];
+    model.add(fid, `Larguero delantero ${lab}`, fpart, axisFrame(p0, p1, [0, 0, 1]), "EST", { axis: [p0, p1], up: [0, 0, 1], structural: true });
+    weld(`J.${fid}.0`, fid, 0, legs[`${k - 1}I`], rail, "Larguero a pata");
+    weld(`J.${fid}.1`, fid, 1, legs[`${k - 1}D`], rail, "Larguero a pata");
+    // larguero trasero: en la meseta entre las patas traseras (enrasado detrás); en un peldaño, soldado a la cara delantera de las patas
+    // del peldaño siguiente, a todo lo ancho
+    const rid = `EST.LAR_${lid}.T`;
+    let yb, rpart;
+    if (land) { yb = Y[n] + a / 2 - rail.B / 2; p0 = [W - a, yb, zl]; p1 = [a, yb, zl]; rpart = fpart; }
+    else {
+      yb = Y[k] - a / 2 - rail.B / 2; p0 = [W, yb, zl]; p1 = [0.0, yb, zl];
+      rpart = profilePart(`larguero_${role}_t`, `Larguero trasero de peldaño ${rail.code}`, rail.code, W, mat, fin);
+    }
+    model.add(rid, `Larguero trasero ${lab}`, rpart, axisFrame(p0, p1, [0, 0, 1]), "EST", { axis: [p0, p1], up: [0, 0, 1], structural: true });
+    weld(`J.${rid}.0`, rid, 0, legs[`${k}D`], rail, land ? "Larguero a pata" : "Larguero trasero a cara de pata");
+    weld(`J.${rid}.1`, rid, 1, legs[`${k}I`], rail, land ? "Larguero a pata" : "Larguero trasero a cara de pata");
+    // travesaños laterales, enrasados por fuera
+    const y0 = Y[k - 1] + a / 2, y1 = land ? Y[n] - a / 2 : yb - rail.B / 2;
+    const tpart = profilePart(`travesano_${role}`, `Travesaño ${trv.code}`, trv.code, pyRound(y1 - y0, 3), mat, fin);
+    const endIds = [];
+    for (const [s, x] of [["I", d.x_l], ["D", d.x_r]]) {
+      const iid = `EST.TRV_${lid}.${s}`;
+      const q0 = [x, y0, ze], q1 = [x, y1, ze];
+      model.add(iid, `Travesaño ${s === "I" ? "izquierdo" : "derecho"} ${lab}`, tpart, axisFrame(q0, q1, [0, 0, 1]), "EST", { axis: [q0, q1], up: [0, 0, 1], structural: true });
+      weld(`J.${iid}.0`, iid, 0, legs[`${k - 1}${s}`], trv, "Travesaño a pata");
+      weld(`J.${iid}.1`, iid, 1, land ? legs[`${k}${s}`] : rid, trv, land ? "Travesaño a pata" : "Travesaño a larguero trasero");
+      endIds.push(iid);
+    }
+    const intIds = [];
+    let xs = [];
+    if (land && d.n_int) {
+      xs = range(d.n_int).map((i) => d.x_l + ((i + 1) * (d.x_r - d.x_l)) / (d.n_int + 1));
+      const yi0 = yf + rail.B / 2, yi1 = yb - rail.B / 2;
+      const ipart = profilePart("travesano_int", `Travesaño intermedio ${trv.code}`, trv.code, pyRound(yi1 - yi0, 3), mat, fin);
+      xs.forEach((x, i) => {
+        const iid = `EST.TRI_${lid}.${pad2(i + 1)}`;
+        const q0 = [x, yi0, ze], q1 = [x, yi1, ze];
+        model.add(iid, `Travesaño intermedio de la meseta ${i + 1}`, ipart, axisFrame(q0, q1, [0, 0, 1]), "EST", { axis: [q0, q1], up: [0, 0, 1], structural: true });
+        weld(`J.${iid}.0`, iid, 0, fid, trv, "Travesaño intermedio a larguero");
+        weld(`J.${iid}.1`, iid, 1, rid, trv, "Travesaño intermedio a larguero");
+        intIds.push(iid);
+      });
+      if ((d.x_r - d.x_l) / (d.n_int + 1) - trv.B < 5.0)
+        model.note("error", "DFM-TRAVESANOS", `Los ${d.n_int} travesaños intermedios de la meseta no caben: se solapan o no dejan 5 mm para soldar.`);
+    }
+    (model.structure.levels ??= {})[lid] = { long: [fid, rid], end: endIds, int: intIds, grid_x: [d.x_l, ...xs, d.x_r], grid_y: [yf, yb], z: k * d.h };
+  }
+
+  /** Cordones discontinuos chapa–bastidor en largueros y travesaños laterales. */
+  _plateWelds(model, d, pid, lid, t) {
+    const lv = model.structure.levels[lid];
+    for (const mid of [...lv.long, ...lv.end]) {
+      const inst = model.instance(mid);
+      const [p0, p1] = inst.axis;
+      const Lm = Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]);
+      const nw = Math.max(2, Math.ceil(Lm / STITCH_PITCH));
+      const loc = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2 + inst.part.profile.H / 2];
+      model.joint({ id: `J.PLACA_SOLD.${mid.split(".").slice(1).join(".")}`, kind: "soldadura", members: [pid, mid], location: loc,
+        description: "Chapa de peldaño a bastidor", weld: { type: "fillet", a: weldA(Math.min(t, inst.part.profile.t)), all_around: false,
+          process: "135 (MAG)", length: pyRound(nw * STITCH_L, 1), note: `${nw} cordones de ${g(STITCH_L)} mm cada ${g(STITCH_PITCH)} mm, alternos` } });
+    }
+  }
+
+  _stepStructure(model, d, legs) {
+    const ps = model.params.values, n = d.n, q = ps.CARGA_REPARTIDA;
+    const surfaces = range(n).map((i) => {
+      const k = i + 1, land = k === n, pid = land ? "PEL.MESETA" : `PEL.PELDANO.${k}`;
+      const part = model.instance(pid).part, area = part.w * part.h;
+      return { id: land ? "meseta" : `peldano_${k}`, label: land ? "Meseta" : `Peldaño ${k}`, level: land ? "SUP" : `P${k}`, load_param: "CARGA_REPARTIDA",
+        load_kg: q == null ? null : pyRound((q * area * 1e-6) / 9.81e-3, 1), sheet_instance: pid, area_mm2: area, point_load: true,
+        patch_mm: land ? LANDING_PATCH : TREAD_PATCH, ...(land ? { count_param: "NUMERO_TRAVESANOS" } : {}) };
+    });
+    const gr = this.support_group[0];
+    const sups = Object.keys(legs).map((k) => ({ instance: `${gr}.PIE.${k}`, leg: legs[k], point: [...model.instance(legs[k]).axis[0]],
+      component: model.instance(`${gr}.PIE.${k}`).part.code }));
+    const H = ps.ALTURA;
+    const topLegs = [n - 1, n].flatMap((j) => ["I", "D"].map((s) => legs[`${j}${s}`]));
+    return { levels: model.structure.levels ?? {}, surfaces, supports: sups, push_points: topLegs.map((m) => ({ member: m, z: H })),
+      push_label: "Empuje horizontal en el canto de la meseta (direcciones X e Y)", push_where: "en la meseta",
+      worktop_height: H, push_height: H, sway_height: H, leg_ids: Object.values(legs), product_word: "escalón", member_roles: memberRoles(model),
+      dfm_weld_notes: [["SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: puntear cada bastidor en mesa plana "
+        + "con escuadras, soldar en secuencia simétrica alterna y verificar el nivel de cada peldaño y la planitud de los apoyos de chapa (EN ISO 13920 clase F)."]],
+      weld_sequence: "Secuencia: 1) puntear las patas sobre sus placas base y soldar las tuercas; 2) bastidor de la meseta y de cada peldaño en mesa plana con "
+        + "escuadras; 3) unir los bastidores con las patas verificando el nivel y la contrahuella; 4) soldar alternando lados; 5) chapas con cordones "
+        + "discontinuos alternos; 6) enderezar y verificar planitud.",
+      assembly_texts: {
+        EST: "Recepción de la estructura soldada y pintada. Colocarla frente a la máquina o el puesto, con la meseta hacia el lado de trabajo.",
+        APO: "Roscar los pies niveladores en las tuercas soldadas. Nivelar la meseta y los peldaños (nivel de burbuja) y, si está previsto, anclar al "
+          + "suelo antes de usar el escalón.",
+        PEL: `Colocar las chapas sobre cada bastidor, enrasadas con él, y soldarlas con cordones discontinuos de ${g(STITCH_L)} mm cada ${g(STITCH_PITCH)} mm, `
+          + "alternos. Aplicar el recubrimiento antideslizante antes del montaje." },
+      assembly_notes: ["HERRAMIENTAS:", "· Llave fija 17/19 para contratuerca de pies", "· Nivel de burbuja", "· Equipo de soldadura MAG (chapas)", "",
+        "USO:", "· Carga de proyecto: personas con herramienta de mano", "· Mantener los peldaños limpios y secos", "",
+        "SEGURIDAD:", "Por encima de 500 mm EN ISO 14122-3 exige barandilla.", "Señalizar el borde de los peldaños (contraste)."] };
+  }
+}
+
 export const REGISTRY = { mesa_industrial: new MesaIndustrial(), estanteria: new Estanteria(), puesto_trabajo: new PuestoTrabajo("puesto_trabajo"),
   carro_taller: new CarroTaller("carro_taller"), carro_estanteria: new CarroEstanteria(), mesa_soldadura: new MesaSoldadura(), estanteria_bateria: new EstanteriaBateria(),
-  tarima: new Tarima(), carro_plataforma: new CarroPlataforma(), armario: new Armario(), cantilever: new Cantilever() };
+  tarima: new Tarima(), carro_plataforma: new CarroPlataforma(), armario: new Armario(), cantilever: new Cantilever(), escalon: new Escalon() };
 export function family(fid) {
   const f = REGISTRY[fid];
   if (!f) {

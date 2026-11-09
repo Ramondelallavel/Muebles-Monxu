@@ -257,18 +257,19 @@ def plan_structure(d: Drawing, X: _Ctx):
     x1, _ = _P(a, "alzado", (hi[0], 0, hi[2]))
     d.dim_h(x0, x1, yz, yz, yz + 9, hi[0] - lo[0], "EST_LONGITUD")
     _, yb = _P(a, "alzado", (0, 0, lo[2]))
-    d.dim_v(yb, yz, a.ox, a.ox, a.ox - 9, hi[2] - lo[2], "EST_ALTURA")
-    # niveles inferiores del primer módulo (en batería, los demás módulos repiten las cotas: claves "_M<j>")
+    # niveles inferiores del primer módulo (en batería, los demás módulos repiten las cotas: claves "_M<j>"); la
+    # altura total va por fuera de su cadena (como en el motor del navegador)
     lower = sorted((X.inst(lv[k]["long"][0]).bbox[1][2], k) for k in lv if k != "SUP" and "_M" not in k)
+    d.dim_v(yb, yz, a.ox, a.ox, a.ox - (17 if lower else 9), hi[2] - lo[2], "EST_ALTURA")
     if len(lower) == 1:
         z, k = lower[0]
         _, yr = _P(a, "alzado", (0, 0, z))
-        d.dim_v(yb, yr, a.ox, a.ox, a.ox - 17, z - lo[2], f"COTA_BASTIDOR_{k}")
+        d.dim_v(yb, yr, a.ox, a.ox, a.ox - 9, z - lo[2], f"COTA_BASTIDOR_{k}")
     elif lower:
         zs = [lo[2]] + [z for z, _ in lower]
         for k in range(len(zs) - 1):
             ya_, yb_ = _P(a, "alzado", (0, 0, zs[k]))[1], _P(a, "alzado", (0, 0, zs[k + 1]))[1]
-            d.dim_v(ya_, yb_, a.ox, a.ox, a.ox - 17, zs[k + 1] - zs[k])
+            d.dim_v(ya_, yb_, a.ox, a.ox, a.ox - 9, zs[k + 1] - zs[k])
     # planta: paso de travesaños intermedios (cadena); sin bastidor superior (cantilever), paso de columnas
     if "SUP" in lv:
         top = lv["SUP"]

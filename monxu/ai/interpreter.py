@@ -30,6 +30,7 @@ FAMILY_KEYWORDS = [
     ("cantilever", r"cantilever|estanterias? (?:\w+ ){0,2}(?:de|con) brazos|(?:estanterias?|racks?) (?:\w+ ){0,2}para "
                    r"(?:barras|tubos|perfiles|tableros|chapas)|porta ?(?:barras|tubos|perfiles)|almacen (?:vertical )?de "
                    r"(?:barras|tubos|perfiles)"),
+    ("escalon", r"\bescalon(?:es)?\b|\bpeldan|escaler(?:a|illa)s? de acceso|escalerillas?\b"),
     ("puesto_trabajo", r"puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion|embalaje)"),
     ("carro_taller", r"\bcarros?\b|\bcarritos?\b|carro de (taller|transporte)"),
     ("estanteria", r"estanteri"),
@@ -154,7 +155,7 @@ def parse(text: str, pending: list[str] | None = None, context_family: str | Non
     if it.family == "carro_plataforma" and re.search(r"de trabajo|operari|podio", t) and not re.search(r"\bcarros?\b", t):
         it.family = "tarima"
     for word, n in NUM_WORDS.items():
-        t = re.sub(rf"\b{word}\b(?=\s+(niveles|baldas|estantes|cajones|travesanos|columnas|{MODULE_WORDS}))", str(n), t)
+        t = re.sub(rf"\b{word}\b(?=\s+(niveles|baldas|estantes|cajones|travesanos|columnas|peldanos|escalones|{MODULE_WORDS}))", str(n), t)
     # ------------------------------------------------------------- dimensiones
     m = re.search(rf"{NUM}\s*{UNIT}?\s*x\s*{NUM}\s*{UNIT}?\s*x\s*{NUM}\s*{UNIT}?", t)
     if m:
@@ -402,7 +403,58 @@ def parse(text: str, pending: list[str] | None = None, context_family: str | Non
         _cabinet(it, t)
     if it.family == "cantilever":
         _cantilever(it, t)
+    if it.family == "escalon":
+        _step(it, t)
     return it
+
+
+def _step(it: Interpretation, t: str) -> None:
+    """Escalón de acceso: peldaños, meseta, huella y cargas de EN ISO 14122. «A × B × C» es anchura × fondo total ×
+    altura; el fondo total da la meseta restando los peldaños; una carga en kg es la de una persona (concentrada)."""
+    from ..families.escalon import going, risers
+    mm = re.search(r"(\d+)\s+(?:peldanos|escalones)", t)
+    if mm:
+        it.set("NUMERO_PELDANOS", int(mm.group(1)), mm.group(0))
+    mm = re.search(rf"meseta\s+(?:de\s+|:\s*)?(?:fondo\s+)?{NUM}(?!\d|[.,]\d)\s*{UNIT}?", t)
+    if mm:
+        it.set("FONDO_MESETA", to_mm(to_number(mm.group(1)), mm.group(2)), mm.group(0))
+    if "ALTURA" not in it.values:         # «peldaño a 250 mm»: la altura de la meseta
+        mm = re.search(rf"\ba\s+{NUM}(?!\d|[.,]\d)\s*{UNIT}?(?!\s*(?:de\s+)?(?:ancho|anchura|fondo|huella|kg|kilos?))", t)
+        if mm:
+            it.set("ALTURA", to_mm(to_number(mm.group(1)), mm.group(2)), mm.group(0))
+    mm = re.search(rf"huella\s+(?:de\s+|:\s*)?{NUM}(?!\d|[.,]\d)\s*{UNIT}?", t)
+    if mm:
+        it.set("HUELLA", to_mm(to_number(mm.group(1)), mm.group(2)), mm.group(0))
+    W = it.values.pop("LONGITUD", None)
+    ev_w = it.evidence.pop("LONGITUD", "")
+    D = it.values.pop("ANCHURA", None)
+    ev_d = it.evidence.pop("ANCHURA", "")
+    if W and D and ev_w == ev_d:          # «800 x 1000 x 400»: anchura × fondo total × altura
+        it.set("ANCHURA", W, ev_w)
+        if "FONDO_MESETA" not in it.values and it.values.get("ALTURA"):
+            H = it.values["ALTURA"]
+            n = risers(H, it.values.get("NUMERO_PELDANOS"))
+            g = going(H / n, it.values.get("HUELLA"))
+            P = min(max(D - (n - 1) * g, 300.0), 1200.0)
+            it.set("FONDO_MESETA", P, ev_d)
+            it.notes.append(f"Fondo total de {D:,.0f} mm: {n} peldaño(s) de {g:g} mm de huella y meseta de "
+                            f"{P:,.0f} mm.".replace(",", "."))
+    elif W or D:                          # una sola medida en planta: la anchura de los peldaños
+        it.set("ANCHURA", W or D, ev_w or ev_d)
+    mm = re.search(rf"{NUM}\s*(kn|kg)\s*/\s*m(?:2|²|\s*cuadrado)", t)
+    if mm:
+        q = to_number(mm.group(1)) * (1.0 if mm.group(2) == "kn" else 9.81e-3)
+        it.set("CARGA_REPARTIDA", round(q, 2), mm.group(0))
+    kg = it.values.get("CARGA_TOTAL") or it.values.get("CARGA_PUNTUAL")
+    if kg and not mm:
+        it.set("CARGA_PUNTUAL", kg, it.evidence.get("CARGA_TOTAL") or it.evidence.get("CARGA_PUNTUAL", ""))
+        it.notes.append(f"Carga de {kg:g} kg tomada como concentrada (persona con carga) sobre cada peldaño; la repartida "
+                        "es la de EN ISO 14122-2 (2 kN/m²).")
+    for k in ("NUMERO_BALDAS", "CARGA_BALDA", "PETO_TRASERO", "MATERIAL_CHAPA", "ESPESOR_CHAPA", "CARGA_TOTAL",
+              "CARGA_POR_NIVEL", "PROFUNDIDAD", "ALTURA_BALDA", "USO", "FRECUENCIA", "NUMERO_NIVELES"):
+        it.values.pop(k, None)
+        it.evidence.pop(k, None)
+    it.notes = [x for x in it.notes if "total de la mesa" not in x]
 
 
 CV_SEP_RANGE = (500.0, 1200.0)       # ParamSpec de SEPARACION_COLUMNAS
@@ -416,8 +468,8 @@ def _cantilever(it: Interpretation, t: str) -> None:
     mm = re.search(r"(\d+)\s+columnas", t)
     if mm:
         it.set("NUMERO_COLUMNAS", int(mm.group(1)), mm.group(0))
-    mm = (re.search(rf"brazos?\s+(?:de\s+|:\s*|=\s*)?{NUM}(?![\d.,])\s*{UNIT}?(?!\s*(?:kg|kilos?))", t)
-          or re.search(rf"voladizo\s+(?:de\s+)?{NUM}(?![\d.,])\s*{UNIT}?(?!\s*(?:kg|kilos?))", t))
+    mm = (re.search(rf"brazos?\s+(?:de\s+|:\s*|=\s*)?{NUM}(?!\d|[.,]\d)\s*{UNIT}?(?!\s*(?:kg|kilos?))", t)
+          or re.search(rf"voladizo\s+(?:de\s+)?{NUM}(?!\d|[.,]\d)\s*{UNIT}?(?!\s*(?:kg|kilos?))", t))
     if mm:
         it.set("LONGITUD_BRAZO", to_mm(to_number(mm.group(1)), mm.group(2)), mm.group(0))
     if re.search(r"dos caras|doble cara|dos lados|ambos lados|doble faz", t):
@@ -549,6 +601,7 @@ LABELS = {"mesa_industrial": "Mesa industrial", "estanteria": "Estantería indus
           "carro_estanteria": "Carro estantería", "mesa_soldadura": "Mesa de soldadura",
           "estanteria_bateria": "Estantería en batería", "tarima": "Tarima / plataforma de trabajo",
           "carro_plataforma": "Carro plataforma", "armario": "Armario industrial", "cantilever": "Estantería cantilever",
+          "escalon": "Escalón de acceso",
 }
 DIM_PROPOSAL = {"mesa_industrial": (1800.0, 800.0, 900.0), "puesto_trabajo": (1500.0, 750.0, 900.0),
                 "carro_taller": (1000.0, 600.0, 900.0), "mesa_soldadura": (1500.0, 1000.0, 850.0)}
@@ -566,6 +619,8 @@ def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = N
         return _missing_platform(values, asked)
     if family == "cantilever":
         return _missing_cantilever(values, asked)
+    if family == "escalon":
+        return _missing_step(values, asked)
     if family not in MESA_LIKE:
         return q
     dL, dW, dH = DIM_PROPOSAL[family]
@@ -654,6 +709,28 @@ def _missing_platform(values: dict[str, Any], asked: set[str]) -> list[Question]
                           [{"label": "Interior seco", "value": "interior_seco"},
                            {"label": "Interior húmedo", "value": "interior_humedo"},
                            {"label": "Alimentario", "value": "alimentario"}], "confirmacion", "interior_seco"))
+    return q
+
+
+def _missing_step(values: dict[str, Any], asked: set[str]) -> list[Question]:
+    q: list[Question] = []
+    for p, lbl, prop in (("ALTURA", "altura de la meseta sobre el suelo (hasta 500 mm)", 400.0),
+                         ("ANCHURA", "anchura de los peldaños", 800.0)):
+        if p not in values:
+            q.append(Question(p, f"¿Qué {lbl} necesita (mm)?", "Dimensión principal necesaria para generar la geometría.",
+                              blocking="generacion", proposal=prop))
+    if "FONDO_MESETA" not in values and "FONDO_MESETA" not in asked:
+        q.append(Question("FONDO_MESETA", "¿Qué fondo de meseta necesita para trabajar de pie (mm)?",
+                          "Superficie del operario en lo alto del escalón.",
+                          [{"label": f"{v:g} mm", "value": v} for v in (400.0, 600.0, 800.0)], "confirmacion", 600.0))
+    if "ANCLAJE" not in values and "ANCLAJE" not in asked:
+        q.append(Question("ANCLAJE", "¿Se anclará el escalón al suelo?", "Evita desplazamientos y vuelco con empujes.",
+                          [{"label": "Anclado al suelo", "value": "al_suelo"}, {"label": "Sin anclaje", "value": "ninguno"}],
+                          "confirmacion", "ninguno"))
+    if "ENTORNO" not in values and "ENTORNO" not in asked:
+        q.append(Question("ENTORNO", "¿Entorno de uso (interior seco, húmedo, exterior)?", "Afecta al acabado (corrosión).",
+                          [{"label": "Interior seco", "value": "interior_seco"},
+                           {"label": "Exterior", "value": "exterior"}], "confirmacion", "interior_seco"))
     return q
 
 
@@ -778,6 +855,12 @@ def _missing_shelf(values: dict[str, Any], asked: set[str], family: str = "estan
 
 def proposal_for(family: str, values: dict[str, Any]) -> dict[str, Any]:
     """Configuración constructiva preliminar (propuesta IA) para completar lo no indicado."""
+    if family == "escalon":
+        p = {k: v for k, v in (("ALTURA", 400.0), ("ANCHURA", 800.0), ("FONDO_MESETA", 600.0)) if k not in values}
+        for k in ("PERFIL_PATA", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ESPESOR_PLACA"):
+            if k not in values:
+                p[k] = "auto"
+        return p
     if family == "cantilever":
         p = {k: v for k, v in (("ALTURA", 2000.0), ("LONGITUD_BRAZO", 600.0), ("NUMERO_COLUMNAS", 3),
                                ("NUMERO_NIVELES", 4)) if k not in values}
@@ -850,7 +933,8 @@ def describe(it: Interpretation) -> list[str]:
     out = [f"Familia: {LABELS.get(it.family, 'no identificada')}."]
     bat = it.family == "estanteria_bateria"
     lab = {"LONGITUD": "Longitud", "ANCHURA": "Anchura de módulo (entre ejes)" if bat else "Anchura (frente)"
-           if it.family in SHELF_LIKE else "Anchura/fondo", "PROFUNDIDAD": "Profundidad", "ALTURA": "Altura"}
+           if it.family in SHELF_LIKE else "Anchura de los peldaños" if it.family == "escalon" else "Anchura/fondo",
+           "PROFUNDIDAD": "Profundidad", "ALTURA": "Altura de la meseta" if it.family == "escalon" else "Altura"}
     for k, l in lab.items():
         if k in v:
             out.append(f"{l}: {v[k]:,.0f} mm.".replace(",", "."))
@@ -895,7 +979,18 @@ def describe(it: Interpretation) -> list[str]:
             if nc and v.get("NUMERO_NIVELES"):
                 na = nc * v["NUMERO_NIVELES"] * (2 if v.get("CARAS") == "dos" else 1)
                 out.append(f"Carga total nominal solicitada: {v['CARGA_POR_BRAZO'] * na:g} kg en {na} brazos.")
-    if it.family in ("estanteria", "estanteria_bateria", "tarima", "armario", "cantilever"):
+    if it.family == "escalon":
+        from ..families.escalon import going, risers
+        H = v.get("ALTURA")
+        if H:
+            n = risers(H, v.get("NUMERO_PELDANOS"))
+            out.append(f"Peldaños: {n} (contando la meseta), contrahuella {H / n:.0f} mm y huella "
+                       f"{going(H / n, v.get('HUELLA')):g} mm (EN ISO 14122-3).")
+        if v.get("FONDO_MESETA"):
+            out.append(f"Meseta: {v['FONDO_MESETA']:,.0f} mm de fondo.".replace(",", "."))
+        out.append(f"Cargas: {v.get('CARGA_REPARTIDA', 2.0):g} kN/m² repartida y {v.get('CARGA_PUNTUAL', 153.0):g} kg "
+                   "concentrados en cada peldaño (EN ISO 14122-2/-3); chapa de acero soldada (antideslizante a prever).")
+    if it.family in ("estanteria", "estanteria_bateria", "tarima", "armario", "cantilever", "escalon"):
         out.append("Anclaje: " + {"al_suelo": "al suelo", "ninguno": "sin anclaje"}.get(
             v.get("ANCLAJE"), "lo decide el cálculo de vuelco") + ".")
     if it.family in MESA_LIKE:

@@ -10,7 +10,7 @@ export const OK = "CUMPLE", FAIL = "NO_CUMPLE", PENDING = "PENDIENTE";
 export const G_ACC = 9.81;
 const MAX_ELEMENT = 100.0;
 const N_ZERO = 1e-3;   // N: axil por debajo del cual la barra se considera sin compresión
-const MASCULINE_WORDS = ["carro", "puesto", "armario"];     // concordancia del texto de vuelco ("del carro vacío", "de la mesa vacía")
+const MASCULINE_WORDS = ["carro", "puesto", "armario", "escalón"];     // concordancia del texto de vuelco ("del carro vacío", "de la mesa vacía")
 
 const status = (u) => (u === null || u === undefined ? PENDING : u <= 1.0 + 1e-9 ? OK : FAIL);
 const check = (id, category, element, description, standard, value, limit, unit, utilization, st, combination = "", details = {}) =>
@@ -278,7 +278,9 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     const scale = area / ((gx.at(-1) - gx[0]) * (gy[1] - gy[0]));
     const q_g = (sheetMass * G_ACC) / area;
     gSheets += sm.surfaceLoad("G", lvl, q_g * scale);
-    const loadKg = ps[surf.load_param] ? ps[surf.load_param] * phi : ps[surf.load_param];     // coeficiente dinámico (carros)
+    // carga propia de la superficie (p. ej. kN/m² por su área, en un peldaño) o la del parámetro; coeficiente dinámico (carros)
+    const raw = "load_kg" in surf ? surf.load_kg : ps[surf.load_param];
+    const loadKg = raw ? raw * phi : raw;
     const info = { surface: surf, level: lvl, q_g, sheet_mass: sheetMass, load_kg: loadKg, scale, part };
     if (loadKg) {
       const q = (loadKg * G_ACC) / area;
@@ -550,7 +552,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
         pyRound(rs.w, 3), pyRound(lim, 3), "mm", pyRound(rs.w / lim, 4), status(rs.w / lim), "ELS-1", det));
     } else checks.push(check(`PL.${sid}`, "placa", surf.label, `${surf.label}: verificación de chapa`, "—", null, null, "-", null, PENDING, "",
       { motivo: `${surf.load_param} sin definir` }));
-    if (sid === "encimera" && P_kg) {
+    if ((sid === "encimera" || surf.point_load) && P_kg) {
       const size = patchSize(ps, surf);        // huella de la carga concentrada
       const rp0 = navier(a, b, t, mat.E, mat.nu, gG * info.q_g, [gQ * P_kg * G_ACC, size, size, a / 2, b / 2], null, 121);
       const rp = { ...rp0, sigma: rp0.sigma / eta };

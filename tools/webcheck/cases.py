@@ -44,6 +44,13 @@ def random_case(rng: random.Random) -> tuple[str, dict]:
              "ESPESOR_PLACA": rng.choice(["auto", "auto", 12.0, 15.0, 20.0]), "VUELO": rng.choice([40, 60, 100]),
              "NUMERO_BALDAS": rng.choice([0, 1]), "CARGA_BALDA": rng.choice([None, 100]),
              "CARGA_HORIZONTAL": rng.choice([200, 300, 500]), "ANCLAJE": rng.choice(["ninguno", "al_suelo"])}
+    elif u >= 0.37 and u < 0.4:
+        fid = "escalon"
+        H = rng.choice(range(200, 501, 25))
+        v = {"ANCHURA": rng.choice(range(600, 1501, 100)), "ALTURA": H, "FONDO_MESETA": rng.choice(range(400, 1201, 100)),
+             "NUMERO_PELDANOS": rng.choice(["auto", "auto", 1, 2, 3]) if H >= 300 else "auto",
+             "CARGA_REPARTIDA": rng.choice([2.0, 2.0, 3.0, 5.0]), "CARGA_PUNTUAL": rng.choice([153, 153, 200]),
+             "ANCLAJE": rng.choice(["ninguno", "al_suelo"]), "CARGA_HORIZONTAL": rng.choice([100, 150, 300])}
     elif u < 0.4:
         fid = "mesa_industrial"
         v = {"LONGITUD": rng.choice(range(800, 3001, 100)), "ANCHURA": rng.choice(range(500, 1201, 50)),
@@ -100,14 +107,14 @@ def random_case(rng: random.Random) -> tuple[str, dict]:
         v = {"ANCHURA": rng.choice(range(800, 3001, 100)), "PROFUNDIDAD": rng.choice(range(300, 1001, 50)),
              "ALTURA": rng.choice(range(1200, 3001, 100)), "NUMERO_NIVELES": rng.randint(2, 7),
              "CARGA_POR_NIVEL": rng.choice([None, 50, 100, 150, 250, 400]), "ANCLAJE": rng.choice(["al_suelo", "ninguno"])}
-    if fid in ("mesa_soldadura", "tarima") and m[0] != "S235JRH":
+    if fid in ("mesa_soldadura", "tarima", "escalon") and m[0] != "S235JRH":
         m = MATS[0]                       # placa de acero soldada: estructura de acero al carbono
     if fid == "armario" and m[1] == "S235JR":
         m = MATS[2]                       # armario pintado: chapa DC01 (S235JR no existe en 1 mm)
     if fid == "carro_plataforma" and m[1] == "DC01":
         m = MATS[0]                       # plataforma de carga: chapa estructural, no DC01 (sin límite elástico garantizado)
     v.update({"MATERIAL_ESTRUCTURAL": m[0], "MATERIAL_CHAPA": m[1], "ACABADO": m[2]})
-    if fid in ("tarima", "cantilever"):
+    if fid in ("tarima", "cantilever", "escalon"):
         v.pop("MATERIAL_CHAPA")           # sin chapa plegada
     return fid, v
 
