@@ -10,3 +10,4 @@ from . import estanteria_bateria  # noqa: F401
 from . import tarima  # noqa: F401
 from . import carro_plataforma  # noqa: F401
 from . import armario  # noqa: F401
+from . import cantilever  # noqa: F401

@@ -666,17 +666,22 @@ function planStructure(d, X) {
     const zs = [lo[2], ...lower.map((l) => l[0])];
     d.dimChain(false, zs.map((z) => a.at([0, 0, z])[1]), zs.slice(1).map((z, k) => z - zs[k]), a.ox, a.ox - 9);
   }
-  const top = lv.SUP, ids = [top.end[0], ...top.int, top.end[1]];
+  // planta: paso de travesaños intermedios (cadena); sin bastidor superior (cantilever), paso de columnas
+  const top = lv.SUP;
+  const ids = top ? [top.end[0], ...top.int, top.end[1]] : [...m.structure.leg_ids], pname = top ? "PASO_TRAVESANO" : "PASO_COLUMNA";
   const xs = ids.map((i) => { const [l, h] = instanceBBox(X.inst(i)); return (l[0] + h[0]) / 2; });
   d.dimChain(true, xs.map((x) => pl.at([x, lo[1], 0])[0]), xs.slice(1).map((x, k) => x - xs[k]), pl.at([0, lo[1], 0])[1], pl.oy - 9,
-    xs.slice(1).map((_, k) => `PASO_TRAVESANO_${k + 1}`));
+    xs.slice(1).map((_, k) => `${pname}_${k + 1}`));
   d.dimV(pl.at([0, lo[1], 0])[1], pl.at([0, hi[1], 0])[1], pl.ox, pl.ox, pl.ox - 9, hi[1] - lo[1], "EST_ANCHURA");
-  const yL2 = instanceBBox(legs[2])[1][1], yL0 = instanceBBox(legs[0])[0][1];
-  const [pu0, pzt] = p.at([0, yL2, hi[2]]), [pu1] = p.at([0, yL0, hi[2]]);
-  d.dimH(pu0, pu1, pzt, pzt, pzt + 9, yL2 - yL0);
+  // perfil: separación de patas (o las cotas en fondo que declare la familia: p. ej. la longitud de los brazos)
+  for (const [y0, y1, name] of m.dims.structure_profile ?? [[instanceBBox(legs[0])[0][1], instanceBBox(legs[2])[1][1], null]]) {
+    const [pu0, pzt] = p.at([0, y1, hi[2]]), [pu1] = p.at([0, y0, hi[2]]);
+    d.dimH(pu0, pu1, pzt, pzt, pzt + 9, y1 - y0, name ?? undefined);
+  }
   d.flushLabels();
-  const nl = ["Estructura soldada (subconjunto EST).", `Clase de ejecución ${m.params.values.CLASE_EJECUCION} según EN 1090-2.`, "Cotas a caras exteriores de perfil.",
-    "Planitud del plano de apoyo de encimera: EN ISO 13920 clase F.", "Detalle de uniones soldadas: plano 05.", "Longitudes de corte y mecanizados: plano 02B."];
+  const nl = m.dims.structure_notes ?? ["Estructura soldada (subconjunto EST).", `Clase de ejecución ${m.params.values.CLASE_EJECUCION} según EN 1090-2.`,
+    "Cotas a caras exteriores de perfil.", "Planitud del plano de apoyo de encimera: EN ISO 13920 clase F.", "Detalle de uniones soldadas: plano 05.",
+    "Longitudes de corte y mecanizados: plano 02B."];
   const nc = [];
   for (let k = 0; k < 30; k++) nc.push([305, 268 - k * 3, 100]);
   for (let k = 0; k < 30; k++) nc.push([Math.max(p.ox + p.w + 14, 230), 268 - k * 3, 400 - Math.max(p.ox + p.w + 14, 230)]);
@@ -1023,16 +1028,25 @@ function planWelds(d, X) {
   placeWelds(d, items, region, { cols, view: v.box });
   d.flushLabels();
   d.table(32, 140, [["Nº", 8, "c"], ["Unión", 76, "l"], ["Garganta", 19, "c"], ["Tipo", 19, "c"], ["L unit. mm", 18, "r"], ["Uds", 9, "c"], ["L total mm", 19, "r"], ["Proceso", 22, "c"]], rows, 4.4, 6, 2.2);
-  const topLong = m.structure.levels.SUP.long[0];
-  const jl = m.joints.find((j) => j.id === `J.${topLong}.0`), jp = m.joints.find((j) => j.id.startsWith("J.PLACA."));
-  if (jl) detail(d, X, jl, jl.members, [300, 205, 405, 268], "DETALLE A: LARGUERO–PATA", 70);
-  if (jp) detail(d, X, jp, [...jp.members, jp.id.replace("J.PLACA", "EST.TUERCA")], [300, 140, 405, 203], "DETALLE B: PLACA BASE", 45);
+  // detalles de las uniones: los que declare la familia o, por defecto, larguero–pata y placa base
+  let details = m.structure.weld_details;
+  if (!details) {
+    details = [];
+    const topLong = m.structure.levels.SUP.long[0];
+    if (m.joints.some((j) => j.id === `J.${topLong}.0`)) details.push([`J.${topLong}.0`, [], "DETALLE A: LARGUERO–PATA", 70]);
+    const jp = m.joints.find((j) => j.id.startsWith("J.PLACA."));
+    if (jp) details.push([jp.id, [jp.id.replace("J.PLACA", "EST.TUERCA")], "DETALLE B: PLACA BASE", 45]);
+  }
+  details.slice(0, 2).forEach(([jid, extra, title, half], k) => {
+    const jd = m.joints.find((j) => j.id === jid);
+    if (jd) detail(d, X, jd, [...jd.members, ...extra], k === 0 ? [300, 205, 405, 268] : [300, 140, 405, 203], title, half);
+  });
   const w = X.plan.welding;
   d.notes(300, 134, ["NOTAS DE SOLDADURA", "Representación simbólica EN ISO 2553. Proceso 135 (MAG, hilo macizo G3Si1).",
     `Cordón total ${fmt(w.total_length_mm / 1000, 2)} m · depositado ${fmt(w.deposit_kg, 3)} kg · hilo ${fmt(w.wire_kg, 3)} kg · gas ${fmt(w.gas_l, 0)} l.`,
     `Calidad EN ISO 5817-C · ${m.params.values.CLASE_EJECUCION} (EN 1090-2).`,
-    "Secuencia: 1) puntear bastidor superior en mesa plana con escuadras; 2) puntear patas y verificar diagonales; 3) bastidores inferiores; 4) soldar alternando esquinas opuestas; "
-    + "5) placas base y tuercas; 6) enderezar, amolar caras enrasadas y verificar planitud.",
+    m.structure.weld_sequence ?? ("Secuencia: 1) puntear bastidor superior en mesa plana con escuadras; 2) puntear patas y verificar diagonales; "
+      + "3) bastidores inferiores; 4) soldar alternando esquinas opuestas; 5) placas base y tuercas; 6) enderezar, amolar caras enrasadas y verificar planitud."),
     "Pared delgada: cordones cortos alternos para limitar la distorsión.",
     m.joints.some((j) => j.kind === "soldadura" && j.weld.a < 3) ? "Garganta a < 3 mm: requiere WPS cualificada (EN ISO 15614-1)." : ""], 2.2, 104, true);
 }
@@ -1106,6 +1120,7 @@ function withAnchorText(m, texts) {
 }
 /** Herramientas, pares y avisos de montaje según el tipo de apoyo (pies niveladores o ruedas). */
 const toolsFor = (m) => {
+  if (m.structure.assembly_notes) return m.structure.assembly_notes;
   const sup = m.structure.supports?.[0];
   const castor = !!sup && C.component(sup.component).category.startsWith("ruedas");
   return ["HERRAMIENTAS:", "· Remachadora para tuercas M6", "· Llave Allen 4 mm (dinamométrica)",

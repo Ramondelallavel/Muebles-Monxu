@@ -89,25 +89,32 @@ def overturning(model, ps: dict, st: dict | None = None) -> dict | None:
     Wtot, cog = own_weight(model)          # los tacos de anclaje quedan en el suelo: su peso no estabiliza
     levers = support_levers(sups, cog)
     pts = np.array([s["point"] for s in sups])
-    bx, by = pts[:, 0].max() - pts[:, 0].min(), pts[:, 1].max() - pts[:, 1].min()
-    base = {"+X": bx, "-X": bx, "+Y": by, "-Y": by}
     hgt = st.get("push_height", st["worktop_height"])     # altura de empuje (carros: asa o mano)
     mobile = bool(st.get("mobile"))
     force = {d: H_N * (LATERAL_FACTOR_MOBILE if mobile and d in ("+Y", "-Y") else 1.0) for d in DIRS}
+    # distancia de cada apoyo a la arista de vuelco de cada dirección
+    dist = {"+X": pts[:, 0].max() - pts[:, 0], "-X": pts[:, 0] - pts[:, 0].min(),
+            "+Y": pts[:, 1].max() - pts[:, 1], "-Y": pts[:, 1] - pts[:, 1].min()}
     res = {}
     for d in DIRS:
         Mstb = pf["gamma_G_stb"] * Wtot * levers[d]
         Mdst = pf["gamma_Q_dst"] * force[d] * hgt
-        T = max(0.0, (Mdst - Mstb) / base[d]) if base[d] > 0 else float("inf")
-        res[d] = {"ratio": Mdst / Mstb if Mstb > 0 else float("inf"), "Mstb": Mstb, "Mdst": Mdst, "T": T}
+        # giro rígido alrededor de la arista: tracción de cada taco proporcional a su distancia a ella
+        # (T_i = M·d_i / Σd²). Con cuatro esquinas es M/base repartido entre los dos tacos del lado traccionado; con
+        # más apoyos (baterías, cantilever) el taco más alejado lleva más que la media
+        M_net = max(0.0, Mdst - Mstb)
+        s2 = float((dist[d] ** 2).sum())
+        T_per = M_net * float(dist[d].max()) / s2 if s2 > 0 else (float("inf") if M_net > 0 else 0.0)
+        T = M_net * float(dist[d].sum()) / s2 if s2 > 0 else (float("inf") if M_net > 0 else 0.0)
+        res[d] = {"ratio": Mdst / Mstb if Mstb > 0 else float("inf"), "Mstb": Mstb, "Mdst": Mdst, "T": T,
+                  "T_per": T_per, "n": int((dist[d] > 1e-6).sum())}
     dirn = max(DIRS, key=lambda d: res[d]["ratio"])
-    dT = max(DIRS, key=lambda d: res[d]["T"])
-    n_anchor = max(1, len(sups) // 2)
+    dT = max(DIRS, key=lambda d: res[d]["T_per"])
     r = res[dirn]
     return {"dirn": dirn, "ratio": r["ratio"], "Mstb": r["Mstb"], "Mdst": r["Mdst"], "lever": levers[dirn],
             "force": force[dirn], "H_N": H_N, "hgt": hgt, "mobile": mobile, "Wtot": Wtot, "cog": cog,
-            "levers": levers, "T": res[dT]["T"], "dirn_T": dT, "n_anchor": n_anchor,
-            "T_per": res[dT]["T"] / n_anchor,
+            "levers": levers, "T": res[dT]["T"], "dirn_T": dT, "n_anchor": max(1, res[dT]["n"]),
+            "T_per": res[dT]["T_per"],
             "admissible_N": max(0, math.floor(r["Mstb"] / (pf["gamma_Q_dst"] * hgt) / (force[dirn] / H_N)))}
 
 
@@ -280,6 +287,17 @@ class StructuralModel:
                                         breaks=(yf + a / 2, yb - a / 2, (yf + yb) / 2))
         return total
 
+    def cantilever_deflection(self, mid: str, u: np.ndarray) -> float:
+        """Flecha propia de un voladizo: desplazamiento de la punta respecto a la tangente en su arranque (extremo 0),
+        perpendicular a la barra. El giro de la columna que lo sostiene se comprueba aparte (desplome bajo carga)."""
+        chain = self.chains[mid]
+        x = self.members[mid]["x"]
+        n0, n1 = chain[0][1], chain[-1][1]
+        r = np.asarray(self.frame.nodes[n1], float) - np.asarray(self.frame.nodes[n0], float)
+        rigid = np.asarray(u[6 * n0:6 * n0 + 3]) + np.cross(np.asarray(u[6 * n0 + 3:6 * n0 + 6]), r)
+        rel = np.asarray(u[6 * n1:6 * n1 + 3]) - rigid
+        return float(np.linalg.norm(rel - np.dot(rel, x) * x))
+
     def member_deflection(self, mid: str, u: np.ndarray) -> float:
         """Flecha relativa máxima respecto a la cuerda entre extremos (perpendicular a la barra)."""
         chain = self.chains[mid]
@@ -362,6 +380,42 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             pending.append(f"Carga de uso sobre {surf['label'].lower()} no definida ({surf['load_param']}): "
                            f"verificación de {surf['label'].lower()} pendiente.")
         surfaces_info.append(info)
+    # cargas lineales uniformes sobre barras (p. ej. los brazos de una cantilever), en su tramo útil; a dos caras, además,
+    # el caso asimétrico con sólo los brazos delanteros cargados (el que más flecta la columna)
+    lls = st.get("line_loads", [])
+    asym = any(ll.get("side") == "T" for ll in lls)
+    ll_tot = {"Q": 0.0, "QA": 0.0}
+    ll_kg = {}
+    for ll in lls:
+        kg = ps.get(ll["load_param"])
+        if kg is None:
+            if ll["load_param"] not in undefined_loads:
+                undefined_loads.append(ll["load_param"])
+                pending.append(f"{st.get('line_load_label', 'Carga lineal')} no definida ({ll['load_param']}): "
+                               "verificación pendiente.")
+            continue
+        ll_kg[ll["load_param"]] = kg
+        if not kg:
+            continue
+        y0, y1 = ll["span"]
+        w = kg * phi * G_ACC / (y1 - y0)
+        ll_tot["Q"] += sm.line_load("Q", ll["member"], lambda s, w=w: w, y0, y1, ll.get("axis", 1))
+        if asym and ll.get("side") != "T":
+            ll_tot["QA"] += sm.line_load("QA", ll["member"], lambda s, w=w: w, y0, y1, ll.get("axis", 1))
+    for prm, kg in ll_kg.items():
+        lab = st.get("line_load_label", "Carga lineal uniforme")
+        if kg:
+            n_ll = sum(1 for ll in lls if ll["load_param"] == prm)
+            cases.append({"id": "Q_" + prm, "label": f"{lab} (todas las barras cargadas)",
+                          "value": f"{kg * phi:g} kg × {n_ll}", "total_N": round(ll_tot["Q"], 1)})
+            if ll_tot["QA"]:
+                cases.append({"id": "QA", "label": f"{lab}: sólo {st.get('line_load_side_label', 'una cara')} "
+                                                   "(carga asimétrica)",
+                              "value": f"{kg * phi:g} kg × {n_ll // 2}", "total_N": round(ll_tot["QA"], 1)})
+                hyp.append(f"Carga asimétrica: sólo {st.get('line_load_side_label', 'una cara')} cargados (descarga de "
+                           "la cara opuesta), además de todos los brazos cargados.")
+        else:
+            hyp.append(f"{lab}: sin sobrecarga de uso (0 kg indicados); se verifica con el peso propio.")
     cases.insert(0, {"id": "G", "label": "Peso propio (perfiles y chapas, calculado desde la geometría)",
                      "value": f"{(Gm + g_sheets) / G_ACC:.1f} kg", "total_N": round(Gm + g_sheets, 1)})
     has_Q = "Q" in fr.loads
@@ -420,11 +474,15 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             combos_uls["ELU-4"] = {"G": gG, "Q": gQ, "HX": gQ * psi}
     if "P" in fr.loads:
         combos_uls["ELU-5"] = {"G": gG, "P": gQ}
+    if "QA" in fr.loads:
+        combos_uls["ELU-QA"] = {"G": gG, "QA": gQ}
     # sin sobrecarga (0 kg indicados) la combinación de servicio es la del peso propio: reacciones en los apoyos y
     # flechas también se comprueban
     combos_sls = {"ELS-1": {"G": 1.0, "Q": 1.0}} if has_Q else {"ELS-1": {"G": 1.0}}
     if "P" in fr.loads:
         combos_sls["ELS-2"] = {"G": 1.0, "P": 1.0}
+    if "QA" in fr.loads:
+        combos_sls["ELS-QA"] = {"G": 1.0, "QA": 1.0}
     for pl in st.get("point_loads", []):
         if pl["id"] in fr.loads:
             combos_uls[f"ELU-{pl['id']}"] = {"G": gG, pl["id"]: gQ}
@@ -442,6 +500,11 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
     member_results = []
     class4: set[str] = set()
     r_member, _r_panel, r_sway = deflection_ratios(ps)
+    cantilevers = set(st.get("cantilevers", []))
+    if cantilevers:
+        hyp.append(f"Brazos en voladizo: flecha propia en punta (respecto a la tangente en el arranque) limitada a "
+                   f"2L/{r_member:g} = L/{r_member / 2:g}; el desplome de las columnas bajo la carga vertical se limita "
+                   f"a H/{r_sway:g}.")
     for mid, mm in sm.members.items():
         mat, prof, sp = mm["material"], mm["profile"], mm["props"]
         fy, gM0, gM1 = mat.fy, mat.gamma_M0, mat.gamma_M1
@@ -501,16 +564,22 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         member_results.append((mid, best["u"]))
         # flecha
         if not is_leg and combos_sls:
+            cant = mid in cantilevers
             dmax, cmax = 0.0, ""
             for cname in combos_sls:
-                if cname in ("ELS-1", "ELS-2") or cname.startswith("ELS-F"):
-                    dv = sm.member_deflection(mid, U[cname])
+                if cname in ("ELS-1", "ELS-2", "ELS-QA") or cname.startswith("ELS-F"):
+                    dv = sm.cantilever_deflection(mid, U[cname]) if cant else sm.member_deflection(mid, U[cname])
                     if dv > dmax:
                         dmax, cmax = dv, cname
             if cmax:
-                lim = mm["length"] / r_member
-                checks.append(Check(f"D.{mid}", "deformacion", mid, f"{mm['instance'].name}: flecha relativa",
-                                    f"EN 1990 A1.4 (límite L/{r_member:g} adoptado)",
+                if cant:     # voladizo: luz física del brazo (desde la cara de la columna)
+                    lim = 2 * mm["instance"].part.length / r_member
+                    desc, std = f"{mm['instance'].name}: flecha en punta del voladizo", \
+                        f"EN 1990 A1.4 (límite 2L/{r_member:g} adoptado en voladizo)"
+                else:
+                    lim = mm["length"] / r_member
+                    desc, std = f"{mm['instance'].name}: flecha relativa", f"EN 1990 A1.4 (límite L/{r_member:g} adoptado)"
+                checks.append(Check(f"D.{mid}", "deformacion", mid, desc, std,
                                     round(dmax, 3), round(lim, 3), "mm", round(dmax / lim, 4), _status(dmax / lim),
                                     cmax))
     if class4:
@@ -528,6 +597,28 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
                                 f"{'X' if comp == 0 else 'Y'} bajo empuje de servicio",
                                 f"Criterio adoptado H/{r_sway:g}",
                                 round(dx, 3), round(lim, 3), "mm", round(dx / lim, 4), _status(dx / lim), cname))
+
+    # voladizos: las columnas se desploman bajo la propia carga vertical (brazos a una cara, o cargados a un lado)
+    if cantilevers and st.get("push_points"):
+        h = st.get("sway_height", st["worktop_height"])
+        lim = h / r_sway
+        cnodes = []
+        for pp in st["push_points"]:
+            chain = sm.chains[pp["member"]]
+            cnodes.append(min(chain, key=lambda c: abs(fr.nodes[c[1]][2] - pp["z"]))[1])
+        worst = (0.0, "", 1)
+        for cname in ("ELS-1", "ELS-QA"):
+            if cname in U:
+                for comp in (0, 1):
+                    dv = max(abs(U[cname][6 * n + comp]) for n in cnodes)
+                    if dv > worst[0]:
+                        worst = (dv, cname, comp)
+        if worst[1]:
+            dv, cname, comp = worst
+            checks.append(Check("S.ELS-G", "deformacion", "Estructura", f"Desplome de las columnas en dirección "
+                                f"{'X' if comp == 0 else 'Y'} bajo la carga vertical de servicio (brazos en voladizo)",
+                                f"Criterio adoptado H/{r_sway:g}", round(dv, 3), round(lim, 3), "mm", round(dv / lim, 4),
+                                _status(dv / lim), cname))
 
     # ---------------------------------------------------------------- reacciones y apoyos
     reactions = []
@@ -603,7 +694,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
                 d["nota"] = ("Flecha superior a t/2: el efecto membrana (no considerado) reduce la flecha real; "
                              "el resultado lineal es conservador.")
             checks.append(Check(f"PL.{sid}.D", "placa", surf["label"], f"{surf['label']}: flecha del panel "
-                                f"{a:.0f}×{b:.0f} mm", f"Criterio adoptado L/{dl}", round(r_s["w"], 3), round(lim, 3),
+                                f"{a:.0f}×{b:.0f} mm", f"Criterio adoptado L/{dl:g}", round(r_s["w"], 3), round(lim, 3),
                                 "mm", round(r_s["w"] / lim, 4), _status(r_s["w"] / lim), "ELS-1", d))
         else:
             checks.append(Check(f"PL.{sid}", "placa", surf["label"], f"{surf['label']}: verificación de chapa",

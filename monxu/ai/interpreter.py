@@ -27,6 +27,9 @@ FAMILY_KEYWORDS = [
     ("estanteria_bateria", r"estanterias? (?:\w+ ){0,3}en bateria|baterias? de (?:\w+ )?(?:estanterias|modulos)|"
                            r"estanterias? (?:\w+ ){0,3}de \w+ (?:modulos|cuerpos|vanos)|\w+ (?:modulos|cuerpos|vanos) de estanteri|"
                            r"estanterias? modular|estanterias? (?:corrida|continua)s?\b"),
+    ("cantilever", r"cantilever|estanterias? (?:\w+ ){0,2}(?:de|con) brazos|(?:estanterias?|racks?) (?:\w+ ){0,2}para "
+                   r"(?:barras|tubos|perfiles|tableros|chapas)|porta ?(?:barras|tubos|perfiles)|almacen (?:vertical )?de "
+                   r"(?:barras|tubos|perfiles)"),
     ("puesto_trabajo", r"puesto de trabajo|estacion de trabajo|puesto ergonomico|puesto de (montaje|inspeccion|embalaje)"),
     ("carro_taller", r"\bcarros?\b|\bcarritos?\b|carro de (taller|transporte)"),
     ("estanteria", r"estanteri"),
@@ -151,7 +154,7 @@ def parse(text: str, pending: list[str] | None = None, context_family: str | Non
     if it.family == "carro_plataforma" and re.search(r"de trabajo|operari|podio", t) and not re.search(r"\bcarros?\b", t):
         it.family = "tarima"
     for word, n in NUM_WORDS.items():
-        t = re.sub(rf"\b{word}\b(?=\s+(niveles|baldas|estantes|cajones|travesanos|{MODULE_WORDS}))", str(n), t)
+        t = re.sub(rf"\b{word}\b(?=\s+(niveles|baldas|estantes|cajones|travesanos|columnas|{MODULE_WORDS}))", str(n), t)
     # ------------------------------------------------------------- dimensiones
     m = re.search(rf"{NUM}\s*{UNIT}?\s*x\s*{NUM}\s*{UNIT}?\s*x\s*{NUM}\s*{UNIT}?", t)
     if m:
@@ -397,7 +400,80 @@ def parse(text: str, pending: list[str] | None = None, context_family: str | Non
         _tarima_loads(it, t)
     if it.family == "armario":
         _cabinet(it, t)
+    if it.family == "cantilever":
+        _cantilever(it, t)
     return it
+
+
+CV_SEP_RANGE = (500.0, 1200.0)       # ParamSpec de SEPARACION_COLUMNAS
+CV_ARM_RANGE = (250.0, 1200.0)       # ParamSpec de LONGITUD_BRAZO
+CV_COL_W = 100.0                     # ancho aproximado de columna para pasar de longitud total a separación entre ejes
+
+
+def _cantilever(it: Interpretation, t: str) -> None:
+    """Cantilever: columnas, separación, brazos (longitud y caras) y carga por brazo. Una longitud total se reparte entre
+    las columnas; el fondo indicado se toma como longitud de brazo; una carga por nivel o total se reparte por brazo."""
+    mm = re.search(r"(\d+)\s+columnas", t)
+    if mm:
+        it.set("NUMERO_COLUMNAS", int(mm.group(1)), mm.group(0))
+    mm = (re.search(rf"brazos?\s+(?:de\s+|:\s*|=\s*)?{NUM}(?![\d.,])\s*{UNIT}?(?!\s*(?:kg|kilos?))", t)
+          or re.search(rf"voladizo\s+(?:de\s+)?{NUM}(?![\d.,])\s*{UNIT}?(?!\s*(?:kg|kilos?))", t))
+    if mm:
+        it.set("LONGITUD_BRAZO", to_mm(to_number(mm.group(1)), mm.group(2)), mm.group(0))
+    if re.search(r"dos caras|doble cara|dos lados|ambos lados|doble faz", t):
+        it.set("CARAS", "dos", "brazos a dos caras")
+    elif re.search(r"una cara|un solo lado|cara simple|simple cara", t):
+        it.set("CARAS", "una", "brazos a una cara")
+    mm = (re.search(rf"(?:separacion|distancia|paso)\s+(?:entre\s+)?(?:las\s+)?columnas\s*(?:de|:|=)?\s*{NUM}\s*{UNIT}?", t)
+          or re.search(rf"columnas\s+(?:cada|separadas|a)\s+{NUM}\s*{UNIT}?", t))
+    if mm:
+        it.set("SEPARACION_COLUMNAS", to_mm(to_number(mm.group(1)), mm.group(2)), mm.group(0))
+    if re.search(r"sin tope", t):
+        it.set("TOPE_BRAZO", False, "sin tope")
+    elif re.search(r"\btopes?\b", t):
+        it.set("TOPE_BRAZO", True, "tope en la punta")
+    # medidas generales: el fondo es la longitud de brazo; la longitud total fija la separación entre columnas
+    W = it.values.pop("ANCHURA", None)
+    ev_w = it.evidence.pop("ANCHURA", "")
+    if W and "LONGITUD_BRAZO" not in it.values:
+        la = min(max(W, CV_ARM_RANGE[0]), CV_ARM_RANGE[1])
+        it.set("LONGITUD_BRAZO", la, ev_w)
+        it.notes.append(f"Fondo de {W:,.0f} mm tomado como longitud útil de los brazos ({la:,.0f} mm).".replace(",", "."))
+    L = it.values.pop("LONGITUD", None)
+    ev_l = it.evidence.pop("LONGITUD", "")
+    if L and "SEPARACION_COLUMNAS" not in it.values:
+        nc = it.values.get("NUMERO_COLUMNAS")
+        if not nc:
+            nc = min(4, max(2, math.ceil((L - CV_COL_W) / 1000.0) + 1))
+            it.set("NUMERO_COLUMNAS", nc, ev_l)
+        sep = round((L - CV_COL_W) / (nc - 1) / 10.0) * 10.0
+        sep = min(max(sep, CV_SEP_RANGE[0]), CV_SEP_RANGE[1])
+        it.set("SEPARACION_COLUMNAS", sep, ev_l)
+        it.notes.append(f"Longitud total de {L:,.0f} mm: {nc} columnas a {sep:,.0f} mm entre ejes.".replace(",", "."))
+    # carga: por brazo, o repartida desde la carga por nivel o total
+    mm = (re.search(rf"{NUM}\s*(?:kg|kilos?)\s*(?:por|cada|en cada|de cada)\s+brazo", t)
+          or re.search(rf"brazos?\s+(?:de|para|con|que (?:aguanten|soporten))\s+{NUM}\s*(?:kg|kilos?)", t))
+    nc = it.values.get("NUMERO_COLUMNAS", 3)
+    n = it.values.get("NUMERO_NIVELES", 4)
+    sides = 2 if it.values.get("CARAS") == "dos" else 1
+    if mm:
+        it.set("CARGA_POR_BRAZO", to_number(mm.group(1)), mm.group(0))
+    elif re.search(r"por nivel|cada nivel", t) and ("CARGA_TOTAL" in it.values or "CARGA_POR_NIVEL" in it.values):
+        q = it.values.pop("CARGA_POR_NIVEL", None) or it.values.pop("CARGA_TOTAL")
+        per = round(q / (nc * sides), 1)
+        it.set("CARGA_POR_BRAZO", per, f"{q:g} kg por nivel")
+        it.notes.append(f"Carga de {q:g} kg por nivel repartida entre sus {nc * sides} brazos: {per:g} kg por brazo.")
+    elif "CARGA_TOTAL" in it.values:
+        q = it.values["CARGA_TOTAL"]
+        per = round(q / (nc * n * sides), 1)
+        it.set("CARGA_POR_BRAZO", per, it.evidence.get("CARGA_TOTAL", f"{q:g} kg"))
+        it.notes.append(f"Carga total de {q:g} kg repartida entre los {nc * n * sides} brazos ({nc} columnas × {n} niveles"
+                        + (" × 2 caras" if sides == 2 else "") + f"): {per:g} kg por brazo.")
+    for k in ("NUMERO_BALDAS", "CARGA_BALDA", "PETO_TRASERO", "MATERIAL_CHAPA", "ESPESOR_CHAPA", "CARGA_TOTAL",
+              "CARGA_POR_NIVEL", "PROFUNDIDAD", "ALTURA_BALDA", "CARGA_PUNTUAL", "USO", "FRECUENCIA"):
+        it.values.pop(k, None)
+        it.evidence.pop(k, None)
+    it.notes = [x for x in it.notes if "total de la mesa" not in x]
 
 
 def _cabinet(it: Interpretation, t: str) -> None:
@@ -472,7 +548,7 @@ LABELS = {"mesa_industrial": "Mesa industrial", "estanteria": "Estantería indus
           "puesto_trabajo": "Puesto de trabajo industrial", "carro_taller": "Carro de taller",
           "carro_estanteria": "Carro estantería", "mesa_soldadura": "Mesa de soldadura",
           "estanteria_bateria": "Estantería en batería", "tarima": "Tarima / plataforma de trabajo",
-          "carro_plataforma": "Carro plataforma", "armario": "Armario industrial",
+          "carro_plataforma": "Carro plataforma", "armario": "Armario industrial", "cantilever": "Estantería cantilever",
 }
 DIM_PROPOSAL = {"mesa_industrial": (1800.0, 800.0, 900.0), "puesto_trabajo": (1500.0, 750.0, 900.0),
                 "carro_taller": (1000.0, 600.0, 900.0), "mesa_soldadura": (1500.0, 1000.0, 850.0)}
@@ -488,6 +564,8 @@ def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = N
         return _missing_tarima(values, asked)
     if family == "carro_plataforma":
         return _missing_platform(values, asked)
+    if family == "cantilever":
+        return _missing_cantilever(values, asked)
     if family not in MESA_LIKE:
         return q
     dL, dW, dH = DIM_PROPOSAL[family]
@@ -579,6 +657,39 @@ def _missing_platform(values: dict[str, Any], asked: set[str]) -> list[Question]
     return q
 
 
+def _missing_cantilever(values: dict[str, Any], asked: set[str]) -> list[Question]:
+    q: list[Question] = []
+    for p, lbl, prop in (("ALTURA", "altura total de las columnas", 2000.0),
+                         ("LONGITUD_BRAZO", "longitud útil de los brazos (fondo de la carga)", 600.0)):
+        if p not in values:
+            q.append(Question(p, f"¿Qué {lbl} necesita (mm)?", "Dimensión principal necesaria para generar la geometría.",
+                              blocking="generacion", proposal=prop))
+    if "NUMERO_COLUMNAS" not in values and "NUMERO_COLUMNAS" not in asked:
+        q.append(Question("NUMERO_COLUMNAS", "¿Cuántas columnas? (las piezas largas deben apoyar en al menos dos brazos)",
+                          "Fija la longitud de la estantería y el número de brazos por nivel.",
+                          [{"label": f"{n} columnas", "value": n} for n in (2, 3, 4)], "confirmacion", 3))
+    if "CARAS" not in values and "CARAS" not in asked:
+        q.append(Question("CARAS", "¿Brazos a una cara o a dos caras?", "A dos caras la base es simétrica y se carga por ambos "
+                          "lados.", [{"label": "Una cara", "value": "una"}, {"label": "Dos caras", "value": "dos"}],
+                          "confirmacion", "una"))
+    if values.get("CARGA_POR_BRAZO") is None:
+        la = values.get("LONGITUD_BRAZO", 600.0)
+        q.append(Question("CARGA_POR_BRAZO", "¿Qué carga soportará cada brazo (kg, repartida a lo largo del brazo)?",
+                          "Dimensiona brazos, columnas, bases y pies; si no la indica, se adoptan 250 kg por metro de brazo.",
+                          [{"label": f"{v:g} kg", "value": v} for v in (100.0, 250.0, 500.0)], "verificacion",
+                          float(max(10, math.floor(0.25 * la / 10 + 0.5) * 10))))
+    if "ANCLAJE" not in values and "ANCLAJE" not in asked:
+        q.append(Question("ANCLAJE", "¿Se anclará al suelo? (recomendado en cantilever)", "Evita el vuelco con el empuje y "
+                          "al cargar o descargar.", [{"label": "Anclada al suelo", "value": "al_suelo"},
+                                                     {"label": "Sin anclaje", "value": "ninguno"}], "confirmacion",
+                          "al_suelo"))
+    if "ENTORNO" not in values and "ENTORNO" not in asked:
+        q.append(Question("ENTORNO", "¿Entorno de uso (almacén interior, húmedo, exterior)?", "Afecta al acabado (corrosión).",
+                          [{"label": "Interior seco", "value": "interior_seco"},
+                           {"label": "Exterior", "value": "exterior"}], "confirmacion", "interior_seco"))
+    return q
+
+
 def _missing_tarima(values: dict[str, Any], asked: set[str]) -> list[Question]:
     q: list[Question] = []
     for p, lbl, prop in (("LONGITUD", "longitud", 1200.0), ("ANCHURA", "anchura (fondo)", 800.0),
@@ -667,6 +778,13 @@ def _missing_shelf(values: dict[str, Any], asked: set[str], family: str = "estan
 
 def proposal_for(family: str, values: dict[str, Any]) -> dict[str, Any]:
     """Configuración constructiva preliminar (propuesta IA) para completar lo no indicado."""
+    if family == "cantilever":
+        p = {k: v for k, v in (("ALTURA", 2000.0), ("LONGITUD_BRAZO", 600.0), ("NUMERO_COLUMNAS", 3),
+                               ("NUMERO_NIVELES", 4)) if k not in values}
+        for k in ("PERFIL_COLUMNA", "PERFIL_BRAZO", "PERFIL_BASE", "PERFIL_ARRIOSTRAMIENTO"):
+            if k not in values:
+                p[k] = "auto"
+        return p
     if family == "tarima":
         p: dict[str, Any] = {k: v for k, v in (("LONGITUD", 1200.0), ("ANCHURA", 800.0), ("ALTURA", 200.0))
                              if k not in values}
@@ -762,7 +880,22 @@ def describe(it: Interpretation) -> list[str]:
                                   "anchura y dos por encima (propuesta)")) + ", con bisagras de pernio y maneta con "
                    "cerradura.")
         out.append("Cerramiento: laterales y fondo de chapa atornillados a los montantes; la bandeja superior es el techo.")
-    if it.family in ("estanteria", "estanteria_bateria", "tarima", "armario"):
+    if it.family == "cantilever":
+        nc, la = v.get("NUMERO_COLUMNAS"), v.get("LONGITUD_BRAZO")
+        if nc:
+            sep = f"{v['SEPARACION_COLUMNAS']:,.0f}".replace(",", ".") if v.get("SEPARACION_COLUMNAS") else None
+            out.append(f"Columnas: {nc}" + (f", a {sep} mm entre ejes" if sep else "") + ".")
+        if la:
+            out.append(f"Brazos: {la:,.0f} mm de longitud útil".replace(",", ".") + {"dos": ", a dos caras",
+                                                                                      "una": ", a una cara"}.get(
+                v.get("CARAS"), "") + (", sin tope en la punta" if v.get("TOPE_BRAZO") is False else
+                                       ", con tope en la punta") + ".")
+        if "CARGA_POR_BRAZO" in v:
+            out.append(f"Carga por brazo: {v['CARGA_POR_BRAZO']:g} kg (repartida a lo largo del brazo).")
+            if nc and v.get("NUMERO_NIVELES"):
+                na = nc * v["NUMERO_NIVELES"] * (2 if v.get("CARAS") == "dos" else 1)
+                out.append(f"Carga total nominal solicitada: {v['CARGA_POR_BRAZO'] * na:g} kg en {na} brazos.")
+    if it.family in ("estanteria", "estanteria_bateria", "tarima", "armario", "cantilever"):
         out.append("Anclaje: " + {"al_suelo": "al suelo", "ninguno": "sin anclaje"}.get(
             v.get("ANCLAJE"), "lo decide el cálculo de vuelco") + ".")
     if it.family in MESA_LIKE:

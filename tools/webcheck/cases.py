@@ -79,6 +79,15 @@ def random_case(rng: random.Random) -> tuple[str, dict]:
              "CARGA_TOTAL": None if q is None else round(q * L * W * 1e-6 / 9.81e-3),
              "CARGA_PUNTUAL": rng.choice([153, 153, 250, 100]), "ANCLAJE": rng.choice(["ninguno", "al_suelo"]),
              "CARGA_HORIZONTAL": rng.choice([100, 150, 300])}
+    elif u >= 0.40 and u < 0.42:
+        fid = "cantilever"
+        H, z1 = rng.choice(range(1200, 3001, 100)), rng.choice([300, 400, 500])
+        v = {"NUMERO_COLUMNAS": rng.randint(2, 4), "SEPARACION_COLUMNAS": rng.choice(range(600, 1201, 100)), "ALTURA": H,
+             "LONGITUD_BRAZO": rng.choice(range(300, 1201, 100)), "CARAS": rng.choice(["una", "dos"]),
+             "NUMERO_NIVELES": rng.randint(1, max(1, min(6, int((H - z1) // 350) + 1))), "ALTURA_PRIMER_NIVEL": z1,
+             "CARGA_POR_BRAZO": rng.choice([None, 0, 50, 100, 200, 300]), "ANCLAJE": rng.choice(["al_suelo", "ninguno"]),
+             "TOPE_BRAZO": rng.choice([True, True, False]), "VUELO_BASE": rng.choice([0, 0, 100]),
+             "CARGA_HORIZONTAL": rng.choice([150, 300])}
     elif u >= 0.58:
         fid = "estanteria_bateria"
         v = {"NUMERO_MODULOS": rng.randint(2, 5), "ANCHURA": rng.choice(range(600, 1601, 100)),
@@ -98,7 +107,7 @@ def random_case(rng: random.Random) -> tuple[str, dict]:
     if fid == "carro_plataforma" and m[1] == "DC01":
         m = MATS[0]                       # plataforma de carga: chapa estructural, no DC01 (sin límite elástico garantizado)
     v.update({"MATERIAL_ESTRUCTURAL": m[0], "MATERIAL_CHAPA": m[1], "ACABADO": m[2]})
-    if fid == "tarima":
+    if fid in ("tarima", "cantilever"):
         v.pop("MATERIAL_CHAPA")           # sin chapa plegada
     return fid, v
 

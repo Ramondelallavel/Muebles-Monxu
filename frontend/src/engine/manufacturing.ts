@@ -298,7 +298,7 @@ export function dfmCheck(model, plan = null) {
       + `rosca útil ${g(sc.length - clamp)} mm).`);
   }
   const legIds = model.structure.leg_ids ?? [];
-  if (legIds.length) {
+  if (legIds.length && (model.structure.nuts_inside_legs ?? true)) {     // tuerca dentro del tubo de la pata
     const leg = model.instance(legIds[0]).part.profile;
     const nut = Object.values(model.parts).find((p) => p.kind === "normalizado" && p.role === "tuerca_soldar");
     if (nut) {
@@ -327,10 +327,13 @@ export function dfmCheck(model, plan = null) {
   if (dissimilar.length) add("advertencia", "SOL-DISIMILAR", "Uniones soldadas", `${dissimilar.length} uniones soldadas entre acero al `
     + `carbono e inoxidable (p. ej. ${dissimilar[0]}): soldadura disimilar con aporte austenítico (tipo 309L) y riesgo de corrosión en ambiente húmedo.`,
     "Usar el mismo material en las piezas soldadas.");
-  add("advertencia", "SOL-ENRASE", "Bastidores", "Largueros y travesaños extremos enrasados con la cara exterior de las patas: en la cara enrasada el "
-    + "cordón es en ángulo exterior/borde y debe amolarse antes de pintar.");
-  add("advertencia", "SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: puntear en mesa plana con "
-    + "escuadras, soldar en secuencia simétrica alterna y verificar planitud de la superficie de apoyo de la encimera (EN ISO 13920 clase F).");
+  // advertencias de soldeo propias de la familia o, por defecto, las de los bastidores con encimera
+  const weldNotes = model.structure.dfm_weld_notes ?? [
+    ["SOL-ENRASE", "Bastidores", "Largueros y travesaños extremos enrasados con la cara exterior de las patas: en la cara enrasada el "
+      + "cordón es en ángulo exterior/borde y debe amolarse antes de pintar."],
+    ["SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: puntear en mesa plana con "
+      + "escuadras, soldar en secuencia simétrica alterna y verificar planitud de la superficie de apoyo de la encimera (EN ISO 13920 clase F)."]];
+  for (const [code, elem, msg] of weldNotes) add("advertencia", code, elem, msg);
   // galvanizado en caliente: los tubos cerrados por soldadura necesitan venteo y drenaje (no modelados)
   const galv = [...new Set(model.instances.filter((i) => i.part.kind === "perfil" && i.part.finish === "GALVANIZADO").map((i) => i.part.ref))].sort();
   if (galv.length) add("advertencia", "GAL-VENTEO", "Perfiles huecos", `Galvanizado en caliente (EN ISO 1461) de ${galv.length} perfiles huecos cerrados por `

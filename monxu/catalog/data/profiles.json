@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026.11-2",
+    "version": "2026.11-3",
     "note": "Perfiles huecos conformados en frío EN 10219-2:2006. Radios para cálculo y modelado según EN 10219-2 Anexo B (t <= 6 mm): radio exterior ro = 2t, radio interior ri = t. Las propiedades de sección se calculan a partir de la geometría real de la sección, no se toman de tabla. Convención de designación h x b x t: H = canto (primera cota), B = ancho.",
     "bar_lengths_mm": [
       6000,
@@ -190,6 +190,41 @@
       "B": 80,
       "H": 120,
       "t": 5.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 140x80x4": {
+      "type": "RHS",
+      "B": 80,
+      "H": 140,
+      "t": 4.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 150x100x5": {
+      "type": "RHS",
+      "B": 100,
+      "H": 150,
+      "t": 5.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 160x80x5": {
+      "type": "RHS",
+      "B": 80,
+      "H": 160,
+      "t": 5.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 200x100x5": {
+      "type": "RHS",
+      "B": 100,
+      "H": 200,
+      "t": 5.0,
+      "standard": "EN 10219-2"
+    },
+    "RHS 200x100x6": {
+      "type": "RHS",
+      "B": 100,
+      "H": 200,
+      "t": 6.0,
       "standard": "EN 10219-2"
     },
     "SHS 20x20x1.5": {

@@ -1,7 +1,7 @@
 // @ts-nocheck
 // Familias de producto (port exacto de monxu/families/mesa_industrial.py y estanteria.py).
 import * as C from "./catalog";
-import { AUTO, ParamContext, ParamError, ProductModel, axisFrame, frameZ, newParams, platePart, profilePart, sheetPart,
+import { AUTO, ParamContext, ParamError, ProductModel, axisFrame, frame, frameZ, newParams, platePart, profilePart, sheetPart,
   standardPart, translation, sub, scale } from "./model";
 import { EDGES, bendDeduction, makeSpec, perforationGrid } from "./sheet";
 import { f as fx, g, pad2, pyRound, range } from "./util";
@@ -1940,9 +1940,315 @@ class Tarima extends MesaSoldadura {
   }
 }
 
+// ============================================================================ estantería cantilever (port de cantilever.py)
+const ARM_LOAD_KG_M = 250.0;          // carga de uso por defecto de cada brazo (kg por metro de brazo)
+const CAP_T = 3.0;                    // espesor de la tapa de cabeza de columna
+const MIN_BACK_REACH = 250.0;         // base trasera mínima de una cantilever de una cara (desde el eje de la columna)
+const BACK_REACH_RATIO = 0.35;        // fracción de la base delantera que se prolonga hacia atrás ('auto', una cara)
+const TRANSPORT_MAX = 2600.0;         // tamaño máximo razonable de un conjunto soldado de una pieza
+const CV_SIDES = { D: ["delantero", -1.0], T: ["trasero", 1.0] };
+const ceil5 = (x) => 5.0 * Math.ceil(x / 5.0 - 1e-9);
+class Cantilever extends MesaIndustrial {
+  constructor() { super("cantilever"); }
+  /** Los brazos y el arriostramiento caben en la cara de la columna (para soldarlos a su contorno). */
+  legFits(v) {
+    if (["PERFIL_COLUMNA", "PERFIL_BRAZO", "PERFIL_ARRIOSTRAMIENTO"].some((k) => v[k] === AUTO || v[k] == null)) return true;
+    const col = C.profile(v.PERFIL_COLUMNA), arm = C.profile(v.PERFIL_BRAZO), rail = C.profile(v.PERFIL_ARRIOSTRAMIENTO);
+    return arm.B <= col.B + 1e-9 && rail.H <= col.H + 1e-9 && rail.B <= col.H + 1e-9;
+  }
+  /** La base es al menos tan ancha como la columna que se suelda encima (sube la base 'auto' de la serie). */
+  fitProfiles(v, profAutos) {
+    if (!profAutos.includes("PERFIL_BASE") || v.PERFIL_COLUMNA === AUTO || v.PERFIL_COLUMNA == null) return false;
+    const series = this.candidates.PERFIL_BASE;
+    if (!series.includes(v.PERFIL_BASE)) return false;
+    const col = C.profile(v.PERFIL_COLUMNA);
+    let changed = false;
+    while (C.profile(v.PERFIL_BASE).B < col.B - 1e-9 && series.indexOf(v.PERFIL_BASE) + 1 < series.length) {
+      v.PERFIL_BASE = series[series.indexOf(v.PERFIL_BASE) + 1];
+      changed = true;
+    }
+    return changed;
+  }
+  /** Desplome longitudinal (X): arriostramiento entre columnas; transversal (Y): la base que empotra la columna. */
+  swayBeamParam(axis) { return axis === 0 ? "PERFIL_ARRIOSTRAMIENTO" : "PERFIL_BASE"; }
+  paramForRole(role) {
+    return { montante: "PERFIL_COLUMNA", brazo: "PERFIL_BRAZO", base: "PERFIL_BASE", arriostramiento: "PERFIL_ARRIOSTRAMIENTO" }[role] ?? null;
+  }
+  defaultLoads(v) {
+    const la = v.LONGITUD_BRAZO || 0;
+    return { CARGA_POR_BRAZO: [r10(ARM_LOAD_KG_M * la * 1e-3), `${g(ARM_LOAD_KG_M)} kg por metro de brazo de ${g(la)} mm, repartida uniformemente`] };
+  }
+  verticalLoadPresent(v) { return !!v.CARGA_POR_BRAZO; }
+  plateTargets(v) { return []; }
+  sheetDefaultsWithoutLoad(v) { return {}; }
+
+  construct(ps) {
+    this.checkResolved(ps);
+    const ctx = new ParamContext(ps);
+    const V = ps.values;
+    const nc = V.NUMERO_COLUMNAS, S = V.SEPARACION_COLUMNAS, H = V.ALTURA, La = V.LONGITUD_BRAZO;
+    const model = new ProductModel(this.id, this.name, `${this.def.prefix}${nc}-${fx(H)}-${fx(La)}${V.CARAS === "dos" ? "-D" : ""}`, ps, ctx);
+    model.requested = ps;
+    const d = this._deriveCv(ctx, model);
+    const mat_s = V.MATERIAL_ESTRUCTURAL, fin = V.ACABADO;
+    const { col, arm, base, rail } = d;
+    model.addSub("EST", "Estructura soldada", { welded: true, step: 1 });
+    const gr = this.support_group[0];
+    model.addSub(gr, this.support_group[1], { explode: [0, 0, -160], step: 2 });
+    const foot = C.component(V[this.support_param]);
+    const thread = parseFloat(foot.thread.slice(1));
+    const nutCode = weldNutCode(thread, mat_s);
+    const weld = makeWelder(model);
+    const sides = d.sides;
+    const cols = {}, corners = {}, cname = {};
+    const plateMat = C.material(mat_s).family === "acero_carbono" ? "S235JR" : mat_s;
+    ctx.feature("F10", "Estructura soldada", () => {
+      for (let c = 1; c <= nc; c++) {
+        const x = d.xs[c - 1];
+        ctx.feature(`F1${c}`, `Columna ${c}: base, placas, columna y brazos`, () => {
+          ctx.uses("PERFIL_COLUMNA", "PERFIL_BASE", "PERFIL_BRAZO", "ALTURA", "LONGITUD_BRAZO", "CARAS", "VUELO_BASE",
+            "LONGITUD_BASE_TRASERA", "ESPESOR_PLACA_BASE", this.support_param, "SEPARACION_COLUMNAS", "MATERIAL_ESTRUCTURAL",
+            "ACABADO", "TOPE_BRAZO", "ALTURA_TOPE", "ESPESOR_TOPE");
+          // base: viga a lo largo de Y sobre las dos placas; su eje de cálculo va de pie a pie
+          const bid = `EST.BASE.C${c}`;
+          const zb = d.z_base0 + base.H / 2;
+          const p0 = [x, d.y_base0, zb], p1 = [x, d.y_base1, zb];
+          model.add(bid, `Base de la columna ${c}`, profilePart("base", `Base ${base.code}`, base.code, d.base_len, mat_s, fin),
+            axisFrame(p0, p1, [0, 0, 1]), "EST", { axis: [[x, d.y_foot.D, zb], [x, d.y_foot.T, zb]], up: [0, 0, 1], structural: true });
+          // columna sobre la base, con tapa en cabeza
+          const cid = `EST.COL.C${c}`;
+          const q0 = [x, d.yc, d.z_col0], q1 = [x, d.yc, d.z_col1];
+          model.add(cid, `Columna ${c}`, profilePart("montante", `Columna ${col.code}`, col.code, d.col_len, mat_s, fin),
+            axisFrame(q0, q1, [0, 1, 0]), "EST", { axis: [q0, q1], up: [0, 1, 0], structural: true });
+          cols[c] = cid;
+          weld(`J.${cid}.0`, cid, 0, bid, col, "Columna a base");
+          const cap = platePart("tapa_columna", `Tapa de columna ${fx(col.B)}x${fx(col.H)}x${g(CAP_T)}`, col.B, col.H, CAP_T, plateMat, fin);
+          model.add(`EST.TAPA.C${c}`, `Tapa de la columna ${c}`, cap, translation(x - col.B / 2, d.yc - col.H / 2, d.z_col1), "EST");
+          model.joint({ id: `J.TAPA.C${c}`, kind: "soldadura", members: [`EST.TAPA.C${c}`, cid], location: [x, d.yc, d.z_col1],
+            description: "Tapa a columna", weld: { type: "fillet", a: weldA(Math.min(col.t, CAP_T)), all_around: true,
+              process: "135 (MAG)", length: pyRound(2 * (col.B + col.H), 1) } });
+          // placas base con tuerca soldada en el vuelo, delante y detrás
+          const pw = d.plate_w, pl = d.plate_l, tp = d.tp;
+          const plate = platePart("placa_base", `Placa base ${fx(pw)}x${fx(pl)}x${g(tp)}`, pw, pl, tp, plateMat, fin, Math.min(3.0, pw / 10),
+            [[pw / 2, d.foot_off, thread + 1.0]]);
+          for (const [s, [sname]] of Object.entries(CV_SIDES)) {
+            const k = `C${c}${s}`, yf = d.y_foot[s];
+            corners[k] = [x, yf];
+            cname[k] = `${sname} de la columna ${c}`;
+            // placa: el taladro del pie a foot_off del borde exterior (Y local hacia el interior)
+            const T = s === "D" ? translation(x - pw / 2, yf - d.foot_off, d.hn) : frame([x + pw / 2, yf + d.foot_off, d.hn], [-1, 0, 0], [0, -1, 0]);
+            model.add(`EST.PLACA.${k}`, `Placa base ${sname} de la columna ${c}`, plate, T, "EST");
+            model.joint({ id: `J.PLACA.${k}`, kind: "soldadura", members: [bid, `EST.PLACA.${k}`],
+              location: [x, s === "D" ? d.y_base0 : d.y_base1, d.z_base0], description: "Placa base a base",
+              weld: { type: "fillet", a: weldA(Math.min(base.t, tp)), all_around: false, process: "135 (MAG)",
+                length: pyRound(2 * d.plate_in + base.B, 1), note: "Cordón en U: laterales y testa de la base" } });
+            model.add(`EST.TUERCA.${k}`, `Tuerca soldada ${sname} de la columna ${c}`, standardPart("tuerca_soldar", nutCode),
+              translation(x, yf, d.hn + tp), "EST");
+            const ns = +C.component(nutCode).s;
+            model.joint({ id: `J.TUERCA.${k}`, kind: "soldadura", members: [`EST.TUERCA.${k}`, `EST.PLACA.${k}`], location: [x, yf, d.hn + tp],
+              description: "Tuerca de soldar a placa base", weld: { type: "fillet", a: 2.0, all_around: false, process: "135 (MAG)",
+                length: pyRound((3 * ns) / Math.sqrt(3), 1), note: "3 cordones en caras alternas de la tuerca" } });
+          }
+          // brazos en voladizo con su tope
+          d.z_levels.forEach((z, i0) => {
+            const i = i0 + 1, zc = z - arm.H / 2;
+            for (const s of sides) {
+              const [sname, sgn] = CV_SIDES[s];
+              const aid = `EST.BRAZO.C${c}.N${i}.${s}`;
+              const y_root = d.yc + (sgn * col.H) / 2, y_tip = y_root + sgn * La;
+              const a0 = [x, y_root, zc], a1 = [x, y_tip, zc];
+              model.add(aid, `Brazo ${sname} de la columna ${c} (nivel ${i})`, profilePart("brazo", `Brazo ${arm.code}`, arm.code, La, mat_s, fin),
+                axisFrame(a0, a1, [0, 0, 1]), "EST", { axis: [a0, a1], up: [0, 0, 1], structural: true });
+              weld(`J.${aid}.0`, aid, 0, cid, arm, "Brazo a columna");
+              const stop = d.stop, sid = `EST.TOPE.C${c}.N${i}.${s}`, zb_arm = z - arm.H;
+              const Tst = s === "D" ? frame([x - arm.B / 2, y_tip, zb_arm], [1, 0, 0], [0, 0, 1]) : frame([x + arm.B / 2, y_tip, zb_arm], [-1, 0, 0], [0, 0, 1]);
+              model.add(sid, `${d.has_stop ? "Tope" : "Tapa"} del brazo ${sname} de la columna ${c} (nivel ${i})`, stop, Tst, "EST");
+              model.joint({ id: `J.TOPE.C${c}.N${i}.${s}`, kind: "soldadura", members: [sid, aid], location: [x, y_tip, zc],
+                description: d.has_stop ? "Tope a punta de brazo" : "Tapa a punta de brazo",
+                weld: { type: "fillet", a: weldA(Math.min(arm.t, stop.t)), all_around: true, process: "135 (MAG)",
+                  length: pyRound(2 * (arm.B + arm.H), 1) } });
+            }
+          });
+        });
+      }
+      // arriostramiento entre columnas (a media altura y en cabeza)
+      ctx.feature("F20", "Arriostramiento entre columnas", () => {
+        ctx.uses("PERFIL_ARRIOSTRAMIENTO", "SEPARACION_COLUMNAS", "PERFIL_COLUMNA", "ALTURA", "NUMERO_COLUMNAS");
+        for (let c = 1; c < nc; c++) {
+          const x0 = d.xs[c - 1] + col.B / 2, x1 = d.xs[c] - col.B / 2;
+          d.z_rails.forEach((zr, j0) => {
+            const j = j0 + 1, rid = `EST.ARR.C${c}.${j}`;
+            const r0 = [x0, d.yc, zr], r1 = [x1, d.yc, zr];
+            model.add(rid, `Arriostramiento ${j === d.z_rails.length ? "superior" : "intermedio"} entre columnas ${c} y ${c + 1}`,
+              profilePart("arriostramiento", `Arriostramiento ${rail.code}`, rail.code, x1 - x0, mat_s, fin),
+              axisFrame(r0, r1, [0, 0, 1]), "EST", { axis: [r0, r1], up: [0, 0, 1], structural: true });
+            weld(`J.${rid}.0`, rid, 0, cols[c], rail, "Arriostramiento a columna");
+            weld(`J.${rid}.1`, rid, 1, cols[c + 1], rail, "Arriostramiento a columna");
+          });
+        }
+      });
+    });
+    ctx.feature("F40", this.support_group[1], () => {
+      ctx.uses(this.support_param, "NUMERO_COLUMNAS", "SEPARACION_COLUMNAS", "LONGITUD_BRAZO");
+      feet(model, d, corners, cname, V[this.support_param], foot, gr);
+      addAnchors(model, V, corners, cname, gr);
+    });
+    model.structure = this._cvStructure(model, d, cols, corners);
+    const q = V.CARGA_POR_BRAZO, n = d.z_levels.length, nArms = nc * n * sides.length;
+    model.dims = { NUMERO_COLUMNAS: nc, ALTURA: H, LONGITUD_BRAZO: La,
+      envelope: { ids: model.instances.filter((i) => i.group === "EST").map((i) => i.id), dx: d.dx, dy: d.dy, zmax: H, names: ["LONGITUD", "FONDO"] },
+      levels: d.z_levels.map((z, i0) => [`NIVEL_${i0 + 1}`, `EST.BRAZO.C1.N${i0 + 1}.${sides[0]}`, z]),
+      drawing_expected: { ...Object.fromEntries(range(n).map((k) => [`DIST_NIVEL_${k + 1}`, k === 0 ? d.z_levels[0] : d.z_levels[k] - d.z_levels[k - 1]])),
+        ...Object.fromEntries(range(nc - 1).map((c) => [`PASO_COLUMNA_${c + 1}`, S])), LONGITUD_BRAZO: La },
+      structure_profile: [[d.yc - col.H / 2 - La, d.yc - col.H / 2, "LONGITUD_BRAZO"]],
+      structure_notes: ["Estructura soldada (subconjunto EST).", `Clase de ejecución ${V.CLASE_EJECUCION} según EN 1090-2.`,
+        "Cotas a caras exteriores de perfil.", "Brazos perpendiculares a la columna (±1 mm en la punta) y alineados entre columnas "
+          + "(desnivel ≤ 2 mm por nivel).", "Detalle de uniones soldadas: plano 05.", "Longitudes de corte y mecanizados: plano 02B."],
+      load_text: q ? `Carga uniforme por brazo de proyecto: ${g(q)} kg (${nArms} brazos, total ${g(nArms * q)} kg)`
+        : q === 0 ? "Sin carga de uso (0 kg por brazo)" : "Carga por brazo: NO DEFINIDA" };
+    d.z_levels.forEach((z, i0) => { model.dims[`NIVEL_${i0 + 1}`] = z; });
+    if (Math.max(d.dx, H) > TRANSPORT_MAX)
+      model.note("advertencia", "DFM-TRANSPORTE", `Conjunto soldado de una pieza de ${fx(d.dx)} × ${fx(d.dy)} × ${fx(H)} mm: prever el `
+        + "transporte y el acceso al emplazamiento (o fabricarlo en dos tramos).");
+    model.numberParts();
+    return model;
+  }
+
+  _deriveCv(ctx, model) {
+    const v = ctx.params.values;
+    const d = {};
+    ctx.feature("F00", "Parámetros derivados y reglas constructivas", () => {
+      const col = C.profile(ctx.get("PERFIL_COLUMNA")), arm = C.profile(ctx.get("PERFIL_BRAZO"));
+      const base = C.profile(ctx.get("PERFIL_BASE")), rail = C.profile(ctx.get("PERFIL_ARRIOSTRAMIENTO"));
+      const sp = this.support_param;
+      const foot = C.component(ctx.get(sp));
+      const thread = parseFloat(foot.thread.slice(1));
+      const nut = C.component(weldNutCode(thread, v.MATERIAL_ESTRUCTURAL));
+      const hn = +foot.nominal_height, tp = ctx.get("ESPESOR_PLACA_BASE");
+      const nc = ctx.get("NUMERO_COLUMNAS"), S = ctx.get("SEPARACION_COLUMNAS"), H = ctx.get("ALTURA"), La = ctx.get("LONGITUD_BRAZO");
+      const two = ctx.get("CARAS") === "dos";
+      const sides = two ? ["D", "T"] : ["D"];
+      if (base.B < col.B - 1e-9)
+        model.note("error", "DFM-BASE-COLUMNA", `La base ${base.code} (${g(base.B)} mm) es más estrecha que la columna ${col.code} `
+          + `(${g(col.B)} mm): use una base al menos tan ancha (o 'auto').`);
+      if (arm.B > col.B + 1e-9)
+        model.note("error", "DFM-BRAZO-COLUMNA", `El brazo ${arm.code} (${g(arm.B)} mm) es más ancho que la cara de la columna ${col.code} `
+          + `(${g(col.B)} mm): no puede soldarse a su contorno.`);
+      if (rail.H > col.H + 1e-9 || rail.B > col.H + 1e-9)
+        model.note("error", "DFM-ARRIOSTRAMIENTO", `El arriostramiento ${rail.code} no cabe en el canto de la columna ${col.code}.`);
+      // pie en el vuelo de la placa: la tuerca (entre caras) no toca la base y queda margen de soldadura
+      const nut_ac = +nut.s / Math.cos(Math.PI / 6);
+      // del borde exterior de la placa al eje del pie: la tuerca con margen y la base del pie sin sobresalir
+      const foot_off = ceil5(Math.max(nut_ac / 2 + 8, +foot.base_d / 2));
+      const plate_out = ceil5(foot_off + nut_ac / 2 + 8);
+      const plate_in = 50.0;
+      const plate_w = Math.max(ceil5(base.B + 20), ceil5(nut_ac + 20), ceil5(+foot.base_d));
+      const plate_l = plate_out + plate_in;
+      ctx.setDerived("VUELO_PLACA_BASE", plate_out, "mm", "Vuelo de la placa base más allá de la base", [sp, "PERFIL_BASE", "MATERIAL_ESTRUCTURAL"]);
+      const reach_f = ctx.derive("BASE_DELANTERA", (p) => C.profile(p.get("PERFIL_COLUMNA")).H / 2 + p.get("LONGITUD_BRAZO") + p.get("VUELO_BASE"),
+        "mm", "Base delantera desde el eje de la columna (hasta la testa)");
+      let reach_b;
+      if (two) reach_b = ctx.derive("BASE_TRASERA", (p) => p.get("BASE_DELANTERA"), "mm", "Base trasera desde el eje de la columna (simétrica a dos caras)");
+      else {
+        reach_b = ctx.derive("BASE_TRASERA", (p) => (p.get("LONGITUD_BASE_TRASERA") === AUTO
+          ? pyRound(Math.max(MIN_BACK_REACH, BACK_REACH_RATIO * p.get("BASE_DELANTERA")), 0) : p.get("LONGITUD_BASE_TRASERA")),
+        "mm", "Base trasera desde el eje de la columna");
+        if (reach_b < col.H / 2 + plate_in)
+          throw new ParamError(`LONGITUD_BASE_TRASERA de ${g(reach_b)} mm: menor que la media columna más el apoyo de la placa (${g(col.H / 2 + plate_in)} mm).`);
+      }
+      const yc = plate_out + reach_f;
+      const y_base0 = yc - reach_f, y_base1 = yc + reach_b;
+      const y_foot = { D: foot_off, T: y_base1 + plate_out - foot_off };
+      const z_base0 = hn + tp, z_col0 = z_base0 + base.H, z_col1 = H - CAP_T;
+      const col_len = ctx.derive("LONGITUD_COLUMNA", (p) => pyRound(p.get("ALTURA") - CAP_T - z_col0, 3), "mm", "Longitud de corte de columna");
+      const base_len = ctx.derive("LONGITUD_BASE", (p) => p.get("BASE_DELANTERA") + p.get("BASE_TRASERA"), "mm", "Longitud de corte de base");
+      const n = ctx.get("NUMERO_NIVELES"), z1 = ctx.get("ALTURA_PRIMER_NIVEL");
+      const has_stop = !!ctx.get("TOPE_BRAZO");
+      // el tope del último nivel queda enrasado con la cabeza de la columna
+      const z_max = ctx.derive("COTA_MAX_NIVEL", (p) => p.get("ALTURA") - (p.get("TOPE_BRAZO") ? p.get("ALTURA_TOPE") : 0.0), "mm",
+        "Cota máxima de la cara superior del último nivel");
+      const dist = ctx.derive("PASO_NIVELES", (p) => (p.get("DISTANCIA_NIVELES") === AUTO
+        ? (p.get("NUMERO_NIVELES") > 1 ? (p.get("COTA_MAX_NIVEL") - p.get("ALTURA_PRIMER_NIVEL")) / (p.get("NUMERO_NIVELES") - 1) : 0.0)
+        : p.get("DISTANCIA_NIVELES")), "mm", "Distancia entre niveles de brazos");
+      const zs = range(n).map((i) => ctx.derive(`COTA_NIVEL_${i + 1}`, (p) => p.get("ALTURA_PRIMER_NIVEL") + i * p.get("PASO_NIVELES"),
+        "mm", `Cota cara superior de los brazos del nivel ${i + 1}`));
+      if (zs.at(-1) > z_max + 1e-6 * H)
+        throw new ParamError(`Los ${n} niveles a ${g(dist)} mm superan la altura útil de ${g(z_max)} mm (altura total menos el tope): `
+          + `reduzca DISTANCIA_NIVELES a ${fx(Math.floor((z_max - z1) / Math.max(n - 1, 1)))} mm o menos, o use 'auto'.`);
+      if (z1 > z_max + 1e-9) throw new ParamError(`ALTURA_PRIMER_NIVEL de ${g(z1)} mm por encima de la altura útil de ${g(z_max)} mm.`);
+      if (n > 1 && dist < arm.H + 100)
+        throw new ParamError(`Distancia entre niveles de ${fx(dist)} mm: menor que el canto del brazo más 100 mm de hueco (${g(arm.H + 100)} mm).`);
+      if (zs[0] - arm.H < z_col0 + 20) {
+        const z1min = ceil5(z_col0 + 20 + arm.H);
+        const fits = ctx.get("DISTANCIA_NIVELES") === AUTO || z1min + (n - 1) * dist <= H;
+        if (z1min <= 1500 && fits)
+          model.rule_fixes.ALTURA_PRIMER_NIVEL = [z1min, `Primer nivel a ${g(z1min)} mm (regla de diseño): a ${g(z1)} mm el brazo no cabía `
+            + "sobre la base y los apoyos."];
+        model.note("error", "GEO-NIVEL-BAJO", `El primer nivel de brazos está demasiado bajo: ALTURA_PRIMER_NIVEL de ${g(z1min)} mm como mínimo.`);
+      }
+      if (n > 1) ctx.setDerived("HUECO_LIBRE", pyRound(dist - arm.H, 1), "mm", "Altura libre entre niveles de brazos",
+        ["DISTANCIA_NIVELES", "ALTURA", "NUMERO_NIVELES", "PERFIL_BRAZO"]);
+      // arriostramiento: en cabeza y a media altura de la columna
+      const z_top_rail = z_col1 - rail.H / 2, z_mid_rail = z_col0 + 0.5 * (z_col1 - z_col0);
+      const z_rails = z_top_rail - z_mid_rail > rail.H + 100 ? [z_mid_rail, z_top_rail] : [z_top_rail];
+      const t_stop = ctx.get("ESPESOR_TOPE");
+      const h_stop = arm.H + (has_stop ? ctx.get("ALTURA_TOPE") : 0.0);
+      const plateMat = C.material(v.MATERIAL_ESTRUCTURAL).family === "acero_carbono" ? "S235JR" : v.MATERIAL_ESTRUCTURAL;
+      const stop = platePart(has_stop ? "tope_brazo" : "tapa_brazo", `${has_stop ? "Tope" : "Tapa"} de brazo ${fx(arm.B)}x${fx(h_stop)}x${g(t_stop)}`,
+        arm.B, h_stop, t_stop, plateMat, v.ACABADO, has_stop ? Math.min(3.0, arm.B / 10) : 0.0);
+      const wmax = Math.max(col.B, base.B, plate_w, arm.B);
+      const xs = range(nc).map((c) => wmax / 2 + c * S);          // X=0 en el canto izquierdo del conjunto
+      const dx = (nc - 1) * S + wmax;
+      const dy = y_base1 + plate_out;          // el vuelo de la placa es mayor que el tope: las puntas no salen de las placas
+      Object.assign(d, { col, arm, base, rail, hn, tp, sides, two, foot_off, plate_out, plate_in, plate_w, plate_l, yc, y_base0, y_base1,
+        y_foot, z_base0, z_col0, z_col1, col_len, base_len, z_levels: zs, z_rails, stop, has_stop, xs, dx, dy, reach_f, reach_b });
+    });
+    return d;
+  }
+
+  _cvStructure(model, d, cols, corners) {
+    const gr = this.support_group[0];
+    const sups = Object.keys(corners).map((k) => {
+      const c = parseInt(k.slice(1, -1), 10);
+      const base = model.instance(`EST.BASE.C${c}`);
+      const p = k.endsWith("D") ? base.axis[0] : base.axis[1];
+      return { instance: `${gr}.PIE.${k}`, leg: base.id, point: pt(p), component: model.instance(`${gr}.PIE.${k}`).part.code };
+    });
+    const H = model.params.values.ALTURA;
+    const arms = model.instances.filter((i) => i.role === "brazo").map((i) => i.id);
+    const line_loads = arms.map((aid) => {
+      const inst = model.instance(aid);
+      const ys = [inst.axis[0][1], inst.axis[1][1]].sort((a, b) => a - b);
+      return { member: aid, load_param: "CARGA_POR_BRAZO", axis: 1, span: ys, side: aid.split(".").at(-1) };
+    });
+    return { levels: {}, surfaces: [], supports: sups, line_loads, cantilevers: arms,
+      line_load_label: "Carga uniforme por brazo", line_load_side_label: "brazos delanteros",
+      push_points: Object.values(cols).map((cid) => ({ member: cid, z: H })),
+      push_label: "Empuje horizontal en cabeza de columnas (direcciones X e Y)", push_where: "en cabeza de columnas",
+      worktop_height: H, push_height: H, sway_height: H, leg_ids: Object.values(cols), product_word: "estantería",
+      member_roles: memberRoles(model), nuts_inside_legs: false,
+      dfm_weld_notes: [["SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión de las columnas al soldar los brazos por una cara: "
+        + "puntear con plantilla de nivel, soldar alternando niveles y caras y verificar la perpendicularidad y el nivel de los brazos "
+        + "entre columnas (EN ISO 13920 clase F)."]],
+      weld_details: [[`J.EST.BRAZO.C1.N1.${d.sides[0]}.0`, [], "DETALLE A: BRAZO–COLUMNA", 70],
+        ["J.EST.COL.C1.0", ["EST.PLACA.C1D"], "DETALLE B: COLUMNA–BASE", 70]],
+      weld_sequence: "Secuencia: 1) puntear las bases sobre las placas base y soldar las tuercas; 2) puntear las columnas a escuadra sobre "
+        + "las bases; 3) puntear los brazos con plantilla de nivel y verificar su alineación entre columnas; 4) arriostramiento; 5) soldar "
+        + "alternando lados; 6) topes y tapas; 7) enderezar y verificar plomo y nivel.",
+      assembly_texts: {
+        EST: "Recepción de la estructura soldada y pintada. Colocarla en su emplazamiento con los brazos hacia la zona de carga, sin cargarla.",
+        APO: "Roscar los pies niveladores en las tuercas soldadas de las placas base. Nivelar los brazos (nivel de burbuja sobre los brazos "
+          + "de un mismo nivel) y anclar al suelo antes de cargar." },
+      assembly_notes: ["HERRAMIENTAS:", "· Llave fija 17/19 para contratuerca de pies", "· Nivel de burbuja",
+        "· Taladro percutor y llave para los tacos de anclaje", "", "CARGA:", "· Repartir la carga por igual entre los brazos de un nivel",
+        "· Cargar de abajo arriba y descargar de arriba abajo", "· Piezas largas apoyadas al menos en dos brazos", "",
+        "SEGURIDAD:", "Señalizar la carga máxima por brazo en cada columna (EN 15635).", "No trepar por los brazos."] };
+  }
+}
+
 export const REGISTRY = { mesa_industrial: new MesaIndustrial(), estanteria: new Estanteria(), puesto_trabajo: new PuestoTrabajo("puesto_trabajo"),
   carro_taller: new CarroTaller("carro_taller"), carro_estanteria: new CarroEstanteria(), mesa_soldadura: new MesaSoldadura(), estanteria_bateria: new EstanteriaBateria(),
-  tarima: new Tarima(), carro_plataforma: new CarroPlataforma(), armario: new Armario() };
+  tarima: new Tarima(), carro_plataforma: new CarroPlataforma(), armario: new Armario(), cantilever: new Cantilever() };
 export function family(fid) {
   const f = REGISTRY[fid];
   if (!f) {

@@ -213,7 +213,7 @@ def dfm_check(model, plan: dict[str, Any] | None = None) -> list[dict[str, Any]]
             f"paquete {clamp:g} mm, rosca útil {sc['length'] - clamp:g} mm).")
     # soldadura
     leg_ids = model.structure.get("leg_ids", [])
-    if leg_ids:
+    if leg_ids and model.structure.get("nuts_inside_legs", True):     # tuerca dentro del tubo de la pata
         leg = model.instance(leg_ids[0]).part.profile
         nut = next((p for p in model.parts.values() if isinstance(p, StandardPart) and p.role == "tuerca_soldar"), None)
         if nut:
@@ -248,11 +248,16 @@ def dfm_check(model, plan: dict[str, Any] | None = None) -> list[dict[str, Any]]
         add("advertencia", "SOL-DISIMILAR", "Uniones soldadas", f"{len(dissimilar)} uniones soldadas entre acero al "
             f"carbono e inoxidable (p. ej. {dissimilar[0]}): soldadura disimilar con aporte austenítico (tipo 309L) y "
             "riesgo de corrosión en ambiente húmedo.", "Usar el mismo material en las piezas soldadas.")
-    add("advertencia", "SOL-ENRASE", "Bastidores", "Largueros y travesaños extremos enrasados con la cara exterior de "
-        "las patas: en la cara enrasada el cordón es en ángulo exterior/borde y debe amolarse antes de pintar.")
-    add("advertencia", "SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: "
-        "puntear en mesa plana con escuadras, soldar en secuencia simétrica alterna y verificar planitud de la "
-        "superficie de apoyo de la encimera (EN ISO 13920 clase F).")
+    weld_notes = model.structure.get("dfm_weld_notes")     # advertencias de soldeo propias de la familia
+    if weld_notes is None:
+        weld_notes = [
+            ("SOL-ENRASE", "Bastidores", "Largueros y travesaños extremos enrasados con la cara exterior de las patas: en "
+             "la cara enrasada el cordón es en ángulo exterior/borde y debe amolarse antes de pintar."),
+            ("SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: puntear en "
+             "mesa plana con escuadras, soldar en secuencia simétrica alterna y verificar planitud de la superficie de "
+             "apoyo de la encimera (EN ISO 13920 clase F).")]
+    for code, elem, msg in weld_notes:
+        add("advertencia", code, elem, msg)
     # galvanizado en caliente: los tubos cerrados por soldadura necesitan venteo y drenaje (no modelados)
     galv = sorted({i.part.ref for i in model.instances if i.part.kind == "perfil" and i.part.finish == "GALVANIZADO"})
     if galv:

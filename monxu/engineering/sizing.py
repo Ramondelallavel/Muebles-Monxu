@@ -161,7 +161,7 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
         for k in prof_autos:
             ps.values[k] = cands[k][idx[k]]
         if _fit_leg(family, ps, prof_autos):
-            idx[family.leg_param] = cands[family.leg_param].index(ps.values[family.leg_param])
+            idx.update({k: cands[k].index(ps.values[k]) for k in prof_autos if ps.values[k] in cands[k]})
         iterations = 0
         for iterations in range(1, 41):
             m = family.construct(ps)
@@ -202,6 +202,9 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
                         ps.values[lp] = cands[lp][idx[lp]]
                 _fit_leg(family, ps, prof_autos)
                 idx[lp] = cands[lp].index(ps.values[lp])
+            else:
+                _fit_leg(family, ps, prof_autos)
+            idx.update({k: cands[k].index(ps.values[k]) for k in prof_autos if ps.values[k] in cands[k]})
             if not bumped:
                 notes.append({"level": "error", "code": "DIM-PERFILES",
                               "message": "Se han agotado los perfiles candidatos sin verificar todas las "
@@ -287,14 +290,18 @@ def _sway_member(family, m, ps: ParameterSet, prof_autos, idx, cands, axis: int)
 
 
 def _fit_leg(family, ps: ParameterSet, prof_autos) -> bool:
-    """Regla constructiva propia de la familia sobre la pata/montante (``leg_fits``): aumenta el perfil 'auto' de la
-    serie hasta cumplirla. Devuelve True si lo ha cambiado."""
+    """Reglas constructivas propias de la familia: sobre la pata/montante (``leg_fits``: aumenta el perfil 'auto' de la
+    serie hasta cumplirla) y sobre otros perfiles (``fit_profiles``, p. ej. una base al menos tan ancha como la columna
+    que lleva encima). Devuelve True si ha cambiado algún perfil."""
     fits, lp = getattr(family, "leg_fits", None), family.leg_param
-    if fits is None or lp not in prof_autos or ps.values.get(lp) not in family.candidates[lp]:
-        return False
-    series, changed = family.candidates[lp], False
-    while not fits(ps.values) and series.index(ps.values[lp]) + 1 < len(series):
-        ps.values[lp] = series[series.index(ps.values[lp]) + 1]
+    changed = False
+    if fits is not None and lp in prof_autos and ps.values.get(lp) in family.candidates[lp]:
+        series = family.candidates[lp]
+        while not fits(ps.values) and series.index(ps.values[lp]) + 1 < len(series):
+            ps.values[lp] = series[series.index(ps.values[lp]) + 1]
+            changed = True
+    extra = getattr(family, "fit_profiles", None)
+    if extra is not None and extra(ps.values, prof_autos):
         changed = True
     return changed
 

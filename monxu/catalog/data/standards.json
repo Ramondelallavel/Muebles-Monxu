@@ -306,7 +306,9 @@
         "producto"
       ],
       "families": [
-        "estanteria"
+        "estanteria",
+        "estanteria_bateria",
+        "cantilever"
       ],
       "markets": [
         "EU"

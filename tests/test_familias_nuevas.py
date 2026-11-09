@@ -19,6 +19,7 @@ def test_registered_and_implemented():
     assert lib["carro_estanteria"] == "implementada" and lib["mesa_soldadura"] == "implementada"
     assert lib["estanteria_bateria"] == "implementada" and lib["tarima"] == "implementada"
     assert lib["carro_plataforma"] == "implementada" and lib["armario"] == "implementada"
+    assert lib["cantilever"] == "implementada"
 
 
 def test_notch_only_in_selected_corners():
@@ -642,3 +643,114 @@ def test_verified_corrections_for_fixed_values():
     assert d.eng["status"] == "NO_CUMPLE" and d.fix["params"]["MATERIAL_CHAPA"] == "S235JR"
     # sin nada fijado que corregir no se ofrece nada
     assert regenerate("mesa_industrial", {}).fix is None
+
+
+# ------------------------------------------------------------------ estantería cantilever
+@pytest.mark.parametrize("tid", [t["id"] for t in family("cantilever").templates()])
+def test_cantilever_templates_verify(tid):
+    from monxu.engineering.analysis import analyze
+    m = _build("cantilever", _tpl("cantilever", tid))
+    assert not [n for n in m.design_notes if n["level"] == "error"]
+    eng = analyze(m)
+    assert eng["status"] == "CUMPLE", [c["id"] for c in eng["checks"] if c["status"] != "CUMPLE"]
+    ids = {c["id"] for c in eng["checks"]}
+    arms = m.structure["cantilevers"]
+    assert arms and all(f"D.{a}" in ids for a in arms)          # flecha en punta de cada brazo
+    assert "S.ELS-G" in ids                                     # desplome de las columnas bajo la carga vertical
+    # la carga de los brazos es la indicada: suma de las fuerzas del caso Q = brazos × carga × g
+    q = m.params.values["CARGA_POR_BRAZO"]
+    case = next(c for c in eng["load_cases"] if c["id"] == "Q_CARGA_POR_BRAZO")
+    assert case["total_N"] == pytest.approx(len(arms) * q * 9.81, rel=1e-6)
+
+
+def test_cantilever_geometry_and_double_sided_load_pattern():
+    from monxu.engineering.analysis import analyze
+    vals = _tpl("cantilever", "CV-3-2500-800-DOBLE")
+    m = _build("cantilever", vals)
+    assert m.product_code == "CV3-2500-800-D"
+    cols = [i for i in m.instances if i.role == "montante"]
+    arms = [i for i in m.instances if i.role == "brazo"]
+    assert len(cols) == 3 and len(arms) == 3 * 4 * 2
+    # brazos de 800 mm desde la cara de la columna y base simétrica a dos caras
+    col_h = cols[0].part.profile.H
+    yc = cols[0].axis[0][1]
+    for a in arms:
+        assert a.part.length == 800.0
+        assert abs(abs(a.axis[0][1] - yc) - col_h / 2) < 1e-6
+    base = m.instance("EST.BASE.C1")
+    assert base.axis[1][1] - yc == pytest.approx(yc - base.axis[0][1])
+    # el último nivel deja el tope enrasado con la cabeza de la columna
+    assert m.dims["levels"][-1][2] == pytest.approx(2500 - 60)
+    eng = analyze(m)
+    assert "ELU-QA" in eng["combinations"]["ELU"] and "ELS-QA" in eng["combinations"]["ELS"]
+    qa = next(c for c in eng["load_cases"] if c["id"] == "QA")
+    assert qa["total_N"] == pytest.approx(len(arms) / 2 * 200 * 9.81, rel=1e-6)
+    r = regenerate("cantilever", vals)
+    assert r.interferences["interferences"] == [] and r.qa.result()["blocking"] == 0
+    assert not any(i["code"] in ("SOL-TUERCA", "SOL-ENRASE") for i in r.dfm)
+
+
+def test_cantilever_base_follows_the_column_and_fixed_weak_arm_fails():
+    """La base 'auto' nunca es más estrecha que la columna; un brazo fijado demasiado débil no cumple y se ofrece la
+    corrección comprobada (devolverlo a 'auto')."""
+    from monxu import catalog
+    m = _build("cantilever", {"CARGA_POR_BRAZO": 300, "LONGITUD_BRAZO": 1000})
+    v = m.params.values
+    assert catalog.profile(v["PERFIL_BASE"]).B >= catalog.profile(v["PERFIL_COLUMNA"]).B
+    r = regenerate("cantilever", {"CARGA_POR_BRAZO": 300, "LONGITUD_BRAZO": 1000, "PERFIL_BRAZO": "RHS 40x20x2",
+                                  "ANCLAJE": "al_suelo"})
+    assert r.eng["status"] == "NO_CUMPLE"
+    assert r.fix and r.fix["params"].get("PERFIL_BRAZO") == "auto" and r.fix["status"] == "CUMPLE"
+
+
+def test_anchor_tension_with_many_supports():
+    """Tracción del taco más cargado con giro rígido alrededor de la arista de vuelco (T_i = M·d_i/Σd²): con cuatro
+    esquinas es M/(2·base), como antes; con tres líneas de apoyos la del extremo lleva M·L/(L² + (L/2)²)/2."""
+    from monxu.engineering.analysis import overturning
+
+    class FakeModel:
+        def __init__(self, pts):
+            self.structure = {"supports": [{"point": p} for p in pts], "worktop_height": 1000.0}
+            self.instances = []
+
+    import monxu.engineering.analysis as A
+    W = 1000.0
+    orig = A.own_weight
+    try:
+        A.own_weight = lambda m: (W, __import__("numpy").array([500.0, 250.0, 300.0]))
+        four = FakeModel([(0, 0, 0), (1000, 0, 0), (0, 500, 0), (1000, 500, 0)])
+        ov = overturning(four, {"CARGA_HORIZONTAL": 2000.0})
+        pf = catalog.criteria()["partial_factors"]
+        Mnet = pf["gamma_Q_dst"] * 2000.0 * 1000.0 - pf["gamma_G_stb"] * W * 250.0      # vuelco en Y (brazo 250)
+        assert ov["dirn_T"] in ("+Y", "-Y") and ov["T_per"] == pytest.approx(Mnet / (2 * 500.0))
+        six = FakeModel([(x, y, 0) for x in (0, 500, 1000) for y in (0, 2000)])
+        ov = overturning(six, {"CARGA_HORIZONTAL": 2000.0})
+        Mnet = pf["gamma_Q_dst"] * 2000.0 * 1000.0 - pf["gamma_G_stb"] * W * 500.0       # vuelco en X (brazo 500)
+        assert ov["dirn_T"] in ("+X", "-X")
+        assert ov["T_per"] == pytest.approx(Mnet * 1000.0 / (2 * (1000.0 ** 2 + 500.0 ** 2)))
+        assert ov["n_anchor"] == 4
+    finally:
+        A.own_weight = orig
+
+
+def test_assistant_cantilever():
+    r = assistant.handle(assistant.new_state(), "Necesito un portabarras de 3000 x 600 x 2000 con 4 niveles y 1200 kg en "
+                                                "total, anclado")
+    assert r["family"] == "cantilever" and r["family_implemented"]
+    p = r["parameters"]
+    assert p["NUMERO_COLUMNAS"] == 4 and p["SEPARACION_COLUMNAS"] == 970.0 and p["LONGITUD_BRAZO"] == 600.0
+    assert p["CARGA_POR_BRAZO"] == 75.0 and p["ANCLAJE"] == "al_suelo" and p["PERFIL_BRAZO"] == "auto"
+    r = assistant.handle(assistant.new_state(), "estantería cantilever con brazos de 800 a dos caras")
+    assert r["parameters"]["CARAS"] == "dos" and r["parameters"]["LONGITUD_BRAZO"] == 800.0
+    # sin carga indicada: el asistente adopta la de uso (250 kg por metro de brazo) y lo dice
+    a = next(x for x in r["assumptions"] if x["param"] == "CARGA_POR_BRAZO")
+    assert a["value"] == 200.0 and "250 kg por metro" in a["text"]
+
+
+@pytest.mark.slow
+def test_cantilever_dossier(tmp_path):
+    r = regenerate("cantilever", _tpl("cantilever", "CV-3-2000-600"))
+    res = generate_dossier(r, {"code": "P-CV", "revision": "A"}, tmp_path / "exp")
+    assert res["qa"]["blocking"] == 0
+    items = {i["code"]: i for i in res["qa"]["items"]}
+    assert items["EXP-STEP"]["level"] == "ok" and items["PLANO-GEOMETRIA"]["level"] == "ok"

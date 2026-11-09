@@ -269,22 +269,26 @@ def plan_structure(d: Drawing, X: _Ctx):
         for k in range(len(zs) - 1):
             ya_, yb_ = _P(a, "alzado", (0, 0, zs[k]))[1], _P(a, "alzado", (0, 0, zs[k + 1]))[1]
             d.dim_v(ya_, yb_, a.ox, a.ox, a.ox - 17, zs[k + 1] - zs[k])
-    # planta: paso de travesaños intermedios (cadena)
-    top = lv["SUP"]
-    ids = [top["end"][0]] + top["int"] + [top["end"][1]]
+    # planta: paso de travesaños intermedios (cadena); sin bastidor superior (cantilever), paso de columnas
+    if "SUP" in lv:
+        top = lv["SUP"]
+        ids, pname = [top["end"][0]] + top["int"] + [top["end"][1]], "PASO_TRAVESANO"
+    else:
+        ids, pname = list(m.structure["leg_ids"]), "PASO_COLUMNA"
     xs = [X.inst(i).bbox[0][0] + (X.inst(i).bbox[1][0] - X.inst(i).bbox[0][0]) / 2 for i in ids]
     yy = pl.oy - 9
     for k in range(len(xs) - 1):
         xa, ya = _P(pl, "planta", (xs[k], lo[1], 0))
         xb, _ = _P(pl, "planta", (xs[k + 1], lo[1], 0))
-        d.dim_h(xa, xb, ya, ya, yy, xs[k + 1] - xs[k], f"PASO_TRAVESANO_{k + 1}")
+        d.dim_h(xa, xb, ya, ya, yy, xs[k + 1] - xs[k], f"{pname}_{k + 1}")
     ya0 = _P(pl, "planta", (0, lo[1], 0))[1]
     ya1 = _P(pl, "planta", (0, hi[1], 0))[1]
     d.dim_v(ya0, ya1, pl.ox, pl.ox, pl.ox - 9, hi[1] - lo[1], "EST_ANCHURA")
-    # perfil: separación de patas
-    u0, zt = _P(p, "perfil", (0, legs[2].bbox[1][1], hi[2]))
-    u1, _ = _P(p, "perfil", (0, legs[0].bbox[0][1], hi[2]))
-    d.dim_h(u0, u1, zt, zt, zt + 9, legs[2].bbox[1][1] - legs[0].bbox[0][1])
+    # perfil: separación de patas (o las cotas en fondo que declare la familia: p. ej. la longitud de los brazos)
+    for y0, y1, name in m.dims.get("structure_profile") or [(legs[0].bbox[0][1], legs[2].bbox[1][1], None)]:
+        u0, zt = _P(p, "perfil", (0, y1, hi[2]))
+        u1, _ = _P(p, "perfil", (0, y0, hi[2]))
+        d.dim_h(u0, u1, zt, zt, zt + 9, y1 - y0, name)
     # globos en la planta
     reps = {}
     for i in est:
@@ -294,12 +298,13 @@ def plan_structure(d: Drawing, X: _Ctx):
                for i in reps.values() if i.part.kind == "perfil"]
     # la franja sobre el alzado y el perfil está libre hasta las notas de la derecha (x = 300)
     balloons(d, a, "alzado", targets, above=True, y_off=20, x_max=296)
-    d.notes(305, 268, ["Estructura soldada (subconjunto EST).",
-                       f"Clase de ejecución {m.params.values['CLASE_EJECUCION']} según EN 1090-2.",
-                       "Cotas a caras exteriores de perfil.",
-                       "Planitud del plano de apoyo de encimera: EN ISO 13920 clase F.",
-                       "Detalle de uniones soldadas: plano 05.",
-                       "Longitudes de corte y mecanizados: plano 02B."], width_chars=40)
+    d.notes(305, 268, m.dims.get("structure_notes") or [
+        "Estructura soldada (subconjunto EST).",
+        f"Clase de ejecución {m.params.values['CLASE_EJECUCION']} según EN 1090-2.",
+        "Cotas a caras exteriores de perfil.",
+        "Planitud del plano de apoyo de encimera: EN ISO 13920 clase F.",
+        "Detalle de uniones soldadas: plano 05.",
+        "Longitudes de corte y mecanizados: plano 02B."], width_chars=40)
 
 
 def plan_profiles(d: Drawing, X: _Ctx):
@@ -626,14 +631,20 @@ def plan_welds(d: Drawing, X: _Ctx):
     d.table(32, 140, [("Nº", 8, "c"), ("Unión", 80, "l"), ("Garganta", 15, "c"), ("Tipo", 19, "c"),
                       ("L unit. mm", 18, "r"), ("Uds", 9, "c"), ("L total mm", 19, "r"), ("Proceso", 22, "c")],
             rows, row_h=4.4, text_h=2.2)
-    top_long = m.structure["levels"]["SUP"]["long"][0]
-    jl = next((j for j in m.joints if j.id == f"J.{top_long}.0"), None)
-    jp = next((j for j in m.joints if j.id.startswith("J.PLACA.")), None)
-    if jl:
-        _detail(d, X, jl, jl.members, (300, 205, 405, 268), "DETALLE A: LARGUERO–PATA", 70)
-    if jp:
-        _detail(d, X, jp, jp.members + (jp.id.replace("J.PLACA", "EST.TUERCA"),), (300, 140, 405, 203),
-                "DETALLE B: PLACA BASE", 45)
+    # detalles de las uniones: los que declare la familia o, por defecto, larguero–pata y placa base
+    details = m.structure.get("weld_details")
+    if details is None:
+        details = []
+        top_long = m.structure["levels"]["SUP"]["long"][0]
+        if any(j.id == f"J.{top_long}.0" for j in m.joints):
+            details.append((f"J.{top_long}.0", (), "DETALLE A: LARGUERO–PATA", 70))
+        jp = next((j for j in m.joints if j.id.startswith("J.PLACA.")), None)
+        if jp:
+            details.append((jp.id, (jp.id.replace("J.PLACA", "EST.TUERCA"),), "DETALLE B: PLACA BASE", 45))
+    for (jid, extra, title, half), rect in zip(details, [(300, 205, 405, 268), (300, 140, 405, 203)]):
+        jd = next((j for j in m.joints if j.id == jid), None)
+        if jd:
+            _detail(d, X, jd, tuple(jd.members) + tuple(extra), rect, title, half)
     w = X.plan["welding"]
     d.notes(300, 134, [
         "NOTAS DE SOLDADURA",
@@ -641,9 +652,10 @@ def plan_welds(d: Drawing, X: _Ctx):
         f"Cordón total {fmt(w['total_length_mm'] / 1000, 2)} m · depositado {fmt(w['deposit_kg'], 3)} kg · hilo "
         f"{fmt(w['wire_kg'], 3)} kg · gas {fmt(w['gas_l'], 0)} l.",
         f"Calidad EN ISO 5817-C · {m.params.values['CLASE_EJECUCION']} (EN 1090-2).",
-        "Secuencia: 1) puntear bastidor superior en mesa plana con escuadras; 2) puntear patas y verificar "
-        "diagonales; 3) bastidor inferior; 4) soldar alternando esquinas opuestas; 5) placas base y tuercas; "
-        "6) enderezar, amolar caras enrasadas y verificar planitud.",
+        m.structure.get("weld_sequence") or (
+            "Secuencia: 1) puntear bastidor superior en mesa plana con escuadras; 2) puntear patas y verificar "
+            "diagonales; 3) bastidor inferior; 4) soldar alternando esquinas opuestas; 5) placas base y tuercas; "
+            "6) enderezar, amolar caras enrasadas y verificar planitud."),
         "Pared de 2 mm: cordones cortos alternos para limitar la distorsión.",
         "Garganta a < 3 mm: requiere WPS cualificada (EN ISO 15614-1)." if any(
             j.weld["a"] < 3 for j in m.joints if j.kind == "soldadura") else "",
@@ -713,13 +725,12 @@ def plan_assembly(d: Drawing, X: _Ctx):
     castor = bool(sups) and catalog.component(sups[0]["component"])["category"].startswith("ruedas")
     support_tools = (["· Llave fija 17/19 para contratuerca de ruedas"] if castor else
                      ["· Llave fija 17/19 para contratuerca de pies", "· Nivel de burbuja"])
-    d.notes(287, 170, ["HERRAMIENTAS:", "· Remachadora para tuercas M6", "· Llave Allen 4 mm (dinamométrica)",
-                       *support_tools, "",
-                       "PARES DE APRIETE:", "· ISO 7380 M6 8.8 en remachable de acero: 8 N·m", "",
-                       "DESMONTAJE:", "Encimera y balda desmontables (uniones atornilladas). La estructura es un",
-                       "subconjunto soldado no desmontable.", "",
-                       "SEGURIDAD:", "Manipular la encimera entre dos personas; usar guantes",
-                       "(cantos de chapa)."], h=2.2, width=118)
+    d.notes(287, 170, m.structure.get("assembly_notes") or [
+        "HERRAMIENTAS:", "· Remachadora para tuercas M6", "· Llave Allen 4 mm (dinamométrica)", *support_tools, "",
+        "PARES DE APRIETE:", "· ISO 7380 M6 8.8 en remachable de acero: 8 N·m", "",
+        "DESMONTAJE:", "Encimera y balda desmontables (uniones atornilladas). La estructura es un",
+        "subconjunto soldado no desmontable.", "",
+        "SEGURIDAD:", "Manipular la encimera entre dos personas; usar guantes", "(cantos de chapa)."], h=2.2, width=118)
 
 
 def plan_bom(d: Drawing, X: _Ctx):

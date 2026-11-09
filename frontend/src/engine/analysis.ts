@@ -68,22 +68,27 @@ export function overturning(model, ps, st = model.structure) {
   const [Wtot, cog] = ownWeight(model);
   const levers = supportLevers(sups, cog);
   const xs = sups.map((s) => s.point[0]), ys = sups.map((s) => s.point[1]);
-  const bx = Math.max(...xs) - Math.min(...xs), by = Math.max(...ys) - Math.min(...ys);
-  const base = { "+X": bx, "-X": bx, "+Y": by, "-Y": by };
+  // distancia de cada apoyo a la arista de vuelco de cada dirección
+  const xM = Math.max(...xs), xm = Math.min(...xs), yM = Math.max(...ys), ym = Math.min(...ys);
+  const dist = { "+X": xs.map((x) => xM - x), "-X": xs.map((x) => x - xm), "+Y": ys.map((y) => yM - y), "-Y": ys.map((y) => y - ym) };
   const hgt = st.push_height ?? st.worktop_height;
   const mobile = !!st.mobile;
   const force = {}, res = {};
   for (const d of DIRS) force[d] = H_N * (mobile && (d === "+Y" || d === "-Y") ? LATERAL_FACTOR_MOBILE : 1.0);
   for (const d of DIRS) {
     const Mstb = pf.gamma_G_stb * Wtot * levers[d], Mdst = pf.gamma_Q_dst * force[d] * hgt;
-    const T = base[d] > 0 ? Math.max(0.0, (Mdst - Mstb) / base[d]) : Infinity;
-    res[d] = { ratio: Mstb > 0 ? Mdst / Mstb : Infinity, Mstb, Mdst, T };
+    // giro rígido alrededor de la arista: tracción de cada taco proporcional a su distancia a ella (T_i = M·d_i / Σd²)
+    const Mnet = Math.max(0.0, Mdst - Mstb);
+    const s2 = dist[d].reduce((a, v) => a + v * v, 0), s1 = dist[d].reduce((a, v) => a + v, 0);
+    const T_per = s2 > 0 ? (Mnet * Math.max(...dist[d])) / s2 : (Mnet > 0 ? Infinity : 0.0);
+    const T = s2 > 0 ? (Mnet * s1) / s2 : (Mnet > 0 ? Infinity : 0.0);
+    res[d] = { ratio: Mstb > 0 ? Mdst / Mstb : Infinity, Mstb, Mdst, T, T_per, n: dist[d].filter((v) => v > 1e-6).length };
   }
   let dirn = DIRS[0], dT = DIRS[0];
-  for (const d of DIRS) { if (res[d].ratio > res[dirn].ratio) dirn = d; if (res[d].T > res[dT].T) dT = d; }
-  const nA = Math.max(1, Math.floor(sups.length / 2)), r = res[dirn];
+  for (const d of DIRS) { if (res[d].ratio > res[dirn].ratio) dirn = d; if (res[d].T_per > res[dT].T_per) dT = d; }
+  const r = res[dirn];
   return { dirn, ratio: r.ratio, Mstb: r.Mstb, Mdst: r.Mdst, lever: levers[dirn], force: force[dirn], H_N, hgt, mobile, Wtot, cog, levers,
-    T: res[dT].T, dirn_T: dT, n_anchor: nA, T_per: res[dT].T / nA,
+    T: res[dT].T, dirn_T: dT, n_anchor: Math.max(1, res[dT].n), T_per: res[dT].T_per,
     admissible_N: Math.max(0, Math.floor(r.Mstb / (pf.gamma_Q_dst * hgt) / (force[dirn] / H_N))) };
 }
 
@@ -198,6 +203,17 @@ export class StructuralModel {
     }
     return total;
   }
+  /** Flecha propia de un voladizo: punta respecto a la tangente en su arranque (extremo 0), perpendicular a la barra. */
+  cantileverDeflection(mid, u) {
+    const chain = this.chains[mid], x = this.members[mid].x;
+    const n0 = chain[0][1], n1 = chain.at(-1)[1];
+    const r = vsub(this.frame.nodes[n1], this.frame.nodes[n0]);
+    const th = [u[6 * n0 + 3], u[6 * n0 + 4], u[6 * n0 + 5]];
+    const cr = [th[1] * r[2] - th[2] * r[1], th[2] * r[0] - th[0] * r[2], th[0] * r[1] - th[1] * r[0]];
+    const rel = [0, 1, 2].map((k) => u[6 * n1 + k] - (u[6 * n0 + k] + cr[k]));
+    const a = vdot(rel, x);
+    return Math.hypot(rel[0] - a * x[0], rel[1] - a * x[1], rel[2] - a * x[2]);
+  }
   memberDeflection(mid, u) {
     const chain = this.chains[mid], x = this.members[mid].x;
     const disp = chain.map(([, n]) => [u[6 * n], u[6 * n + 1], u[6 * n + 2]]);
@@ -279,6 +295,39 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     }
     surfInfo.push(info);
   }
+  // cargas lineales uniformes sobre barras (p. ej. los brazos de una cantilever), en su tramo útil; a dos caras, además, el caso
+  // asimétrico con sólo los brazos delanteros cargados (el que más flecta la columna)
+  const lls = st.line_loads ?? [];
+  const asym = lls.some((ll) => ll.side === "T");
+  const llTot = { Q: 0.0, QA: 0.0 }, llKg = {};
+  for (const ll of lls) {
+    const kg = ps[ll.load_param];
+    if (kg == null) {
+      if (!undefinedLoads.includes(ll.load_param)) {
+        undefinedLoads.push(ll.load_param);
+        pending.push(`${st.line_load_label ?? "Carga lineal"} no definida (${ll.load_param}): verificación pendiente.`);
+      }
+      continue;
+    }
+    llKg[ll.load_param] = kg;
+    if (!kg) continue;
+    const [y0, y1] = ll.span;
+    const w = (kg * phi * G_ACC) / (y1 - y0);
+    llTot.Q += sm.lineLoad("Q", ll.member, () => w, y0, y1, ll.axis ?? 1);
+    if (asym && ll.side !== "T") llTot.QA += sm.lineLoad("QA", ll.member, () => w, y0, y1, ll.axis ?? 1);
+  }
+  for (const [prm, kg] of Object.entries(llKg)) {
+    const lab = st.line_load_label ?? "Carga lineal uniforme";
+    if (kg) {
+      const nLl = lls.filter((ll) => ll.load_param === prm).length;
+      cases.push({ id: `Q_${prm}`, label: `${lab} (todas las barras cargadas)`, value: `${g(kg * phi)} kg × ${nLl}`, total_N: pyRound(llTot.Q, 1) });
+      if (llTot.QA) {
+        cases.push({ id: "QA", label: `${lab}: sólo ${st.line_load_side_label ?? "una cara"} (carga asimétrica)`,
+          value: `${g(kg * phi)} kg × ${Math.floor(nLl / 2)}`, total_N: pyRound(llTot.QA, 1) });
+        hyp.push(`Carga asimétrica: sólo ${st.line_load_side_label ?? "una cara"} cargados (descarga de la cara opuesta), además de todos los brazos cargados.`);
+      }
+    } else hyp.push(`${lab}: sin sobrecarga de uso (0 kg indicados); se verifica con el peso propio.`);
+  }
   cases.unshift({ id: "G", label: "Peso propio (perfiles y chapas, calculado desde la geometría)", value: `${fx((Gm + gSheets) / G_ACC, 1)} kg`,
     total_N: pyRound(Gm + gSheets, 1) });
   const hasQ = "Q" in fr.loads;
@@ -329,9 +378,11 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     if (hasQ) uls["ELU-4"] = { G: gG, Q: gQ, HX: gQ * psi };
   }
   if ("P" in fr.loads) uls["ELU-5"] = { G: gG, P: gQ };
+  if ("QA" in fr.loads) uls["ELU-QA"] = { G: gG, QA: gQ };
   // sin sobrecarga (0 kg indicados) la combinación de servicio es la del peso propio: apoyos y flechas también se comprueban
   const sls = hasQ ? { "ELS-1": { G: 1.0, Q: 1.0 } } : { "ELS-1": { G: 1.0 } };
   if ("P" in fr.loads) sls["ELS-2"] = { G: 1.0, P: 1.0 };
+  if ("QA" in fr.loads) sls["ELS-QA"] = { G: 1.0, QA: 1.0 };
   for (const pl of st.point_loads ?? []) if (pl.id in fr.loads) { uls[`ELU-${pl.id}`] = { G: gG, [pl.id]: gQ }; sls[`ELS-${pl.id}`] = { G: 1.0, [pl.id]: 1.0 }; }
   if ("HX" in fr.loads) { sls["ELS-3"] = { HX: 1.0 }; sls["ELS-4"] = { HY: 1.0 }; }
   const all = { ...uls, ...sls };
@@ -343,6 +394,12 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   const betaLeg = crit.effective_length_factors.leg_sway;
   const memberResults = {};
   const class4 = new Set();
+  const cantilevers = new Set(st.cantilevers ?? []);
+  if (cantilevers.size) {
+    const [rm, , rs] = deflectionRatios(ps);
+    hyp.push(`Brazos en voladizo: flecha propia en punta (respecto a la tangente en el arranque) limitada a 2L/${g(rm)} = L/${g(rm / 2)}; `
+      + `el desplome de las columnas bajo la carga vertical se limita a H/${g(rs)}.`);
+  }
   for (const [mid, mm] of Object.entries(sm.members)) {
     const { material: mat, profile: prof, props: sp } = mm;
     const fy = mat.fy, gM0 = mat.gamma_M0, gM1 = mat.gamma_M1;
@@ -387,15 +444,18 @@ export function analyze(model, includeStability = true, includeWelds = true) {
       + (best.Nc < -N_ZERO ? " y pandeo por flexión" : ""), "EN 1993-1-1 §6.2, §6.3.1, §6.3.3", pyRound(best.u, 4), 1.0, "-", pyRound(best.u, 4), stt, best.combo, details));
     memberResults[mid] = best.u;
     if (!isLeg && Object.keys(sls).length) {
+      const cant = cantilevers.has(mid);
       let dmax = 0.0, cmax = "";
-      for (const cname of Object.keys(sls)) if (cname === "ELS-1" || cname === "ELS-2" || cname.startsWith("ELS-F")) {
-        const dv = sm.memberDeflection(mid, U[cname]);
+      for (const cname of Object.keys(sls)) if (cname === "ELS-1" || cname === "ELS-2" || cname === "ELS-QA" || cname.startsWith("ELS-F")) {
+        const dv = cant ? sm.cantileverDeflection(mid, U[cname]) : sm.memberDeflection(mid, U[cname]);
         if (dv > dmax) { dmax = dv; cmax = cname; }
       }
       if (cmax) {
         const r = deflectionRatios(ps)[0];
-        const lim = mm.length / r;
-        checks.push(check(`D.${mid}`, "deformacion", mid, `${mm.instance.name}: flecha relativa`, `EN 1990 A1.4 (límite L/${g(r)} adoptado)`,
+        // voladizo: luz física del brazo (desde la cara de la columna)
+        const lim = cant ? (2 * mm.instance.part.length) / r : mm.length / r;
+        checks.push(check(`D.${mid}`, "deformacion", mid, cant ? `${mm.instance.name}: flecha en punta del voladizo` : `${mm.instance.name}: flecha relativa`,
+          cant ? `EN 1990 A1.4 (límite 2L/${g(r)} adoptado en voladizo)` : `EN 1990 A1.4 (límite L/${g(r)} adoptado)`,
           pyRound(dmax, 3), pyRound(lim, 3), "mm", pyRound(dmax / lim, 4), status(dmax / lim), cmax));
       }
     }
@@ -410,6 +470,23 @@ export function analyze(model, includeStability = true, includeWelds = true) {
       const dx = Math.max(...topNodes.map((n) => Math.abs(U[cname][6 * n + comp])));
       checks.push(check(`S.${cname}`, "deformacion", "Estructura", `Desplome horizontal en dirección ${comp === 0 ? "X" : "Y"} bajo empuje de servicio`,
         `Criterio adoptado H/${g(r)}`, pyRound(dx, 3), pyRound(lim, 3), "mm", pyRound(dx / lim, 4), status(dx / lim), cname));
+    }
+  }
+  // voladizos: las columnas se desploman bajo la propia carga vertical (brazos a una cara, o cargados a un lado)
+  if (cantilevers.size && st.push_points?.length) {
+    const r = deflectionRatios(ps)[2];
+    const lim = (st.sway_height ?? st.worktop_height) / r;
+    const cnodes = st.push_points.map((pp) => nearest(sm.chains[pp.member], pp.z));
+    let worst = [0.0, "", 1];
+    for (const cname of ["ELS-1", "ELS-QA"]) if (U[cname]) for (const comp of [0, 1]) {
+      const dv = Math.max(...cnodes.map((n) => Math.abs(U[cname][6 * n + comp])));
+      if (dv > worst[0]) worst = [dv, cname, comp];
+    }
+    if (worst[1]) {
+      const [dv, cname, comp] = worst;
+      checks.push(check("S.ELS-G", "deformacion", "Estructura", `Desplome de las columnas en dirección ${comp === 0 ? "X" : "Y"} bajo la carga `
+        + "vertical de servicio (brazos en voladizo)", `Criterio adoptado H/${g(r)}`, pyRound(dv, 3), pyRound(lim, 3), "mm", pyRound(dv / lim, 4),
+      status(dv / lim), cname));
     }
   }
   // ---------------------------------------------------------------- reacciones y apoyos

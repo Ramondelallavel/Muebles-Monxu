@@ -14,9 +14,10 @@ from . import interpreter as I
 STRUCTURAL_KEYS = ("PROFUNDIDAD", "NUMERO_NIVELES", "CARGA_POR_NIVEL", "ALTURA_PRIMER_NIVEL", "DISTANCIA_BALDAS",
                    "PERFIL_MONTANTE", "LONGITUD", "ANCHURA", "ALTURA", "CARGA_TOTAL", "CARGA_BALDA", "CARGA_PUNTUAL", "CARGA_HORIZONTAL",
                    "MATERIAL_ESTRUCTURAL", "MATERIAL_CHAPA", "ACABADO", "ESPESOR_CHAPA", "NUMERO_BALDAS", "ALTURA_BALDA",
-                   "USO", "FRECUENCIA", "ENTORNO", "ANCLAJE", "TIPO_SUELO", "TIPO_APOYO", "PERFIL_PATA")
+                   "USO", "FRECUENCIA", "ENTORNO", "ANCLAJE", "TIPO_SUELO", "TIPO_APOYO", "PERFIL_PATA",
+                   "NUMERO_COLUMNAS", "SEPARACION_COLUMNAS", "LONGITUD_BRAZO", "CARAS", "CARGA_POR_BRAZO")
 #: cargas de uso que el motor adopta por el uso previsto cuando no se indican (ProductFamily.default_loads)
-LOAD_PARAMS = ("CARGA_TOTAL", "CARGA_BALDA", "CARGA_POR_NIVEL", "CARGA_ESTANTE")
+LOAD_PARAMS = ("CARGA_TOTAL", "CARGA_BALDA", "CARGA_POR_NIVEL", "CARGA_ESTANTE", "CARGA_POR_BRAZO")
 
 
 def new_state(family: str | None = None) -> dict[str, Any]:
@@ -26,7 +27,7 @@ def new_state(family: str | None = None) -> dict[str, Any]:
 
 def _llm_enabled() -> bool:
     return os.environ.get("MONXU_LLM", "").lower() in ("1", "true", "claude") and bool(
-        os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+        os.environ.get("MONXU_LLM_MODEL")) and bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
 
 def _fmt(spec, v) -> str:

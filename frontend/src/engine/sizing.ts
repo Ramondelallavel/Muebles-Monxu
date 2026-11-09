@@ -120,7 +120,7 @@ export function resolveAuto(family, params, autos, onProgress = null) {
   const sizeProfiles = () => {
     const idx = Object.fromEntries(profAutos.map((k) => [k, cands[k].includes(v[k]) ? cands[k].indexOf(v[k]) : 0]));
     for (const k of profAutos) ps.values[k] = cands[k][idx[k]];
-    if (fitLeg(family, ps, profAutos)) idx[family.leg_param] = cands[family.leg_param].indexOf(ps.values[family.leg_param]);
+    if (fitLeg(family, ps, profAutos)) for (const k of profAutos) if (cands[k].includes(ps.values[k])) idx[k] = cands[k].indexOf(ps.values[k]);
     let iterations = 0;
     for (iterations = 1; iterations <= 40; iterations++) {
       iterTotal++;
@@ -152,7 +152,8 @@ export function resolveAuto(family, params, autos, onProgress = null) {
           while (k in ps.values && C.profile(ps.values[k]).B > C.profile(ps.values[lp]).B && idx[lp] + 1 < cands[lp].length) { idx[lp]++; ps.values[lp] = cands[lp][idx[lp]]; }
         fitLeg(family, ps, profAutos);
         idx[lp] = cands[lp].indexOf(ps.values[lp]);
-      }
+      } else fitLeg(family, ps, profAutos);
+      for (const k of profAutos) if (cands[k].includes(ps.values[k])) idx[k] = cands[k].indexOf(ps.values[k]);
       if (!bumped) {
         notes.push({ level: "error", code: "DIM-PERFILES", message: "Se han agotado los perfiles candidatos sin verificar todas las comprobaciones: "
           + [...failing].sort().map((k) => `${k} = ${ps.values[k]} (${why[k]})`).join("; ")
@@ -230,15 +231,17 @@ function swayMember(family, m, ps, profAutos, idx, cands, axis) {
   return kBeam < kLeg ? beam : lp;
 }
 
-/** Regla constructiva propia de la familia sobre la pata/montante (legFits): aumenta el perfil 'auto' de la serie hasta cumplirla. */
+/** Reglas constructivas propias de la familia: sobre la pata/montante (legFits: aumenta el perfil 'auto' de la serie hasta
+ * cumplirla) y sobre otros perfiles (fitProfiles, p. ej. una base al menos tan ancha como la columna que lleva encima). */
 function fitLeg(family, ps, profAutos) {
   const lp = family.leg_param, series = family.candidates[lp];
-  if (!family.legFits || !profAutos.includes(lp) || !series.includes(ps.values[lp])) return false;
   let changed = false;
-  while (!family.legFits(ps.values) && series.indexOf(ps.values[lp]) + 1 < series.length) {
-    ps.values[lp] = series[series.indexOf(ps.values[lp]) + 1];
-    changed = true;
-  }
+  if (family.legFits && profAutos.includes(lp) && series.includes(ps.values[lp]))
+    while (!family.legFits(ps.values) && series.indexOf(ps.values[lp]) + 1 < series.length) {
+      ps.values[lp] = series[series.indexOf(ps.values[lp]) + 1];
+      changed = true;
+    }
+  if (family.fitProfiles && family.fitProfiles(ps.values, profAutos)) changed = true;
   return changed;
 }
 

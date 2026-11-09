@@ -1,28 +1,32 @@
 """Adaptador opcional a Claude para extraer parámetros con salida estructurada validada.
 
-Se activa con ``MONXU_LLM=1`` y credenciales de Anthropic. El modelo sólo devuelve valores
+Se activa con ``MONXU_LLM=1``, el modelo en ``MONXU_LLM_MODEL`` y credenciales de Anthropic. El modelo sólo devuelve valores
 de parámetros que se validan contra el esquema; nunca genera geometría. Si el modelo rechaza
 la petición o no está disponible, el asistente continúa con el intérprete determinista.
 """
 from __future__ import annotations
 
+import os
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-MODEL = "claude-opus-5-5"
+#: modelo de Claude que se usa (identificador de la API de Anthropic), configurable sin tocar el código
+MODEL = os.environ.get("MONXU_LLM_MODEL", "")
 
 SYSTEM = (
     "Eres un ingeniero de diseño de mobiliario industrial. Extrae de la solicitud del usuario los parámetros "
     "técnicos indicados explícitamente. No inventes valores: deja a null todo lo que el usuario no haya dicho. "
     "Dimensiones en milímetros; cargas en kg (fuerzas horizontales en N). Familias: mesa_industrial, estanteria, "
-    "estanteria_bateria, puesto_trabajo, carro_taller, carro_estanteria, carro_plataforma, mesa_soldadura, tarima, armario."
+    "estanteria_bateria, puesto_trabajo, carro_taller, carro_estanteria, carro_plataforma, mesa_soldadura, tarima, armario, "
+    "cantilever (estantería de brazos en voladizo para barras, tubos o tableros)."
 )
 
 
 class ExtractedRequest(BaseModel):
     family: Optional[Literal["mesa_industrial", "estanteria", "estanteria_bateria", "puesto_trabajo", "carro_taller",
-                             "carro_estanteria", "carro_plataforma", "mesa_soldadura", "tarima", "armario"]] = None
+                             "carro_estanteria", "carro_plataforma", "mesa_soldadura", "tarima", "armario",
+                             "cantilever"]] = None
     LONGITUD: Optional[float] = Field(None, description="Longitud en mm")
     ANCHURA: Optional[float] = Field(None, description="Anchura o fondo en mm")
     ALTURA: Optional[float] = Field(None, description="Altura de trabajo en mm")
@@ -38,6 +42,11 @@ class ExtractedRequest(BaseModel):
     USO: Optional[Literal["montaje_ligero", "montaje", "trabajo_pesado", "inspeccion", "laboratorio", "embalaje"]] = None
     ENTORNO: Optional[Literal["interior_seco", "interior_humedo", "exterior", "alimentario", "sala_limpia"]] = None
     ANCLAJE: Optional[Literal["ninguno", "al_suelo"]] = None
+    NUMERO_COLUMNAS: Optional[int] = Field(None, description="Columnas de una estantería cantilever")
+    SEPARACION_COLUMNAS: Optional[float] = Field(None, description="Separación entre ejes de columnas cantilever en mm")
+    LONGITUD_BRAZO: Optional[float] = Field(None, description="Longitud útil de los brazos cantilever en mm")
+    CARAS: Optional[Literal["una", "dos"]] = Field(None, description="Brazos a una o a dos caras (cantilever)")
+    CARGA_POR_BRAZO: Optional[float] = Field(None, description="Carga uniforme por brazo cantilever en kg")
 
 
 def extract(message: str, state: dict, client=None) -> dict:
