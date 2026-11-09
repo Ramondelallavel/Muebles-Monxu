@@ -50,6 +50,7 @@ class PuestoTrabajo(MesaIndustrial):
     constructive_defaults = CONSTRUCTIVE_DEFAULTS
     frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_BASTIDOR", "PERFIL_REPOSAPIES", "PERFIL_ALTILLO")
     auto_in_construct = MesaIndustrial.auto_in_construct + ("NUMERO_TRAVESANOS_ESTANTE",)
+    top_explode = (0.0, -380.0, 380.0)      # la encimera sale en diagonal: los montantes traseros llegan a la altura total
 
     def param_for_role(self, role):
         if role in ("montante",):

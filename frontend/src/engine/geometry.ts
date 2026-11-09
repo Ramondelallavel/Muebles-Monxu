@@ -286,6 +286,52 @@ function triangulateFace(loops, n) {
   return out;
 }
 
+/** Radios teselados (esquinas de tubo, pliegues de chapa, esquinas de pletina): tiras de facetas estrechas unidas por aristas
+ * suaves entre dos caras anchas. Cada radio se representa con su línea media («arista virtual»), que el plano dibuja cuando las
+ * dos caras anchas miran al observador: sin ella, un tubo cuadrado en perspectiva se veía como una cinta plana. */
+const NARROW_MM = 4.0, CREASE_MIN_DEG = 30;
+function filletCreases(B, V, smoothE) {
+  const F = B.faces;
+  const area = (fi) => {
+    let a = 0;
+    F[fi].loops.forEach((l, li) => {
+      let n = [0, 0, 0];
+      for (let k = 0; k < l.length; k++) { const p = V[l[k]], q = V[l[(k + 1) % l.length]]; const c = vcross(p, q); n = [n[0] + c[0], n[1] + c[1], n[2] + c[2]]; }
+      a += (li === 0 ? 1 : -1) * Math.abs(vdot(n, F[fi].n)) / 2;
+    });
+    return Math.abs(a);
+  };
+  const byFace = new Map();
+  for (const e of smoothE) for (const f of [e[2], e[3]]) { if (!byFace.has(f)) byFace.set(f, []); byFace.get(f).push(e); }
+  const len = (e) => Math.hypot(...vsub(V[e[0]], V[e[1]]));
+  const narrow = new Set();
+  for (const [f, es] of byFace) { const L = Math.max(...es.map(len)); if (L > 1e-9 && area(f) / L < NARROW_MM) narrow.add(f); }
+  const seen = new Set(), out = [];
+  for (const f0 of narrow) {
+    if (seen.has(f0)) continue;
+    const comp = [], stack = [f0]; seen.add(f0);
+    while (stack.length) {
+      const f = stack.pop(); comp.push(f);
+      for (const e of byFace.get(f)) { const g = e[2] === f ? e[3] : e[2]; if (narrow.has(g) && !seen.has(g)) { seen.add(g); stack.push(g); } }
+    }
+    const inComp = new Set(comp), internal = [], wide = new Set();
+    for (const f of comp) for (const e of byFace.get(f)) {
+      const g = e[2] === f ? e[3] : e[2];
+      if (inComp.has(g)) { if (e[2] === f) internal.push(e); } else wide.add(g);
+    }
+    if (wide.size !== 2 || !internal.length) continue;           // cilindros (sin caras anchas) o uniones ambiguas
+    const [fa, fb] = [...wide], na = F[fa].n, nb = F[fb].n;
+    const total = Math.acos(Math.max(-1, Math.min(1, vdot(na, nb))));
+    if (total < (CREASE_MIN_DEG * Math.PI) / 180) continue;
+    // arista interior cuya dirección de normal media está más cerca de la bisectriz de las dos caras anchas
+    const pos = (e) => { const m = vnorm(F[e[2]].n.map((v, i) => v + F[e[3]].n[i])); return Math.abs(Math.acos(Math.max(-1, Math.min(1, vdot(m, na)))) - total / 2); };
+    let best = Infinity;
+    for (const e of internal) best = Math.min(best, pos(e));
+    for (const e of internal) if (pos(e) <= best + 1e-3) out.push([e[0], e[1], fa, fb]);
+  }
+  return out;
+}
+
 function build(solids) {
   const B = fuse(solids);
   const V = B.verts;
@@ -334,7 +380,7 @@ function build(solids) {
   for (const p of V) for (let j = 0; j < 3; j++) { lo[j] = Math.min(lo[j], p[j]); hi[j] = Math.max(hi[j], p[j]); }
   return { positions: new Float32Array(pos), normals: new Float32Array(nor), indices: Uint32Array.from({ length: pos.length / 3 }, (_, k) => k),
     volume: vol, centroid: [cx / vol, cy / vol, cz / vol], bbox: [lo, hi], closed: open === 0, openEdges: open,
-    brep: { verts: V, faces: B.faces }, featureEdges: feature, smoothEdges: smoothE };
+    brep: { verts: V, faces: B.faces }, featureEdges: feature, smoothEdges: smoothE, creaseEdges: filletCreases(B, V, smoothE) };
 }
 
 /** Sólido, malla y propiedades de una definición de pieza (con caché en la propia pieza). */
@@ -381,6 +427,51 @@ export function colorOf(inst) {
   if (p.finish) return C.finish(p.finish).color;
   if (p.material) return C.material(p.material).render_color;
   return p.kind === "normalizado" ? [0.62, 0.64, 0.66] : [0.5, 0.5, 0.5];
+}
+/** Explosionado sin solapes (mismo algoritmo que ProductModel.auto_explode de Python): cada subconjunto, en su orden de
+ * montaje, se desplaza en la dirección de su vector lo justo para separarse, con margen, de los ya colocados. */
+export function autoExplode(model) {
+  const boxes = new Map();
+  for (const i of model.instances) {
+    const [lo, hi] = instanceBBox(i), ex = i.tags?.explode_extra ?? [0, 0, 0];
+    const a = lo.map((v, k) => v + ex[k]), b = hi.map((v, k) => v + ex[k]);
+    if (!boxes.has(i.group)) boxes.set(i.group, [a, b]);
+    else { const B = boxes.get(i.group); boxes.set(i.group, [B[0].map((v, k) => Math.min(v, a[k])), B[1].map((v, k) => Math.max(v, b[k]))]); }
+  }
+  if (!boxes.size) return;
+  const allLo = [0, 1, 2].map((k) => Math.min(...[...boxes.values()].map((b) => b[0][k]))), allHi = [0, 1, 2].map((k) => Math.max(...[...boxes.values()].map((b) => b[1][k])));
+  const m = Math.max(60.0, 10.0 * Math.ceil((0.04 * Math.hypot(...allHi.map((v, k) => v - allLo[k]))) / 10.0));
+  const subs = Object.values(model.subassemblies);
+  const order = subs.map((_, k) => k).sort((a, b) => subs[a].step - subs[b].step || a - b);
+  const placed = [];
+  for (const k of order) {
+    const sa = subs[k];
+    if (!boxes.has(sa.id)) continue;
+    const [lo, hi] = boxes.get(sa.id), e = sa.explode, L = Math.hypot(...e);
+    if (L < 1e-9) { placed.push([lo, hi]); continue; }
+    const d = e.map((v) => v / L);
+    let t = L;
+    for (let it = 0; it < 2 * placed.length + 2; it++) {
+      let moved = false;
+      for (const [blo, bhi] of placed) {
+        // intervalo de t en que las envolventes (con margen) se cortan: intersección por ejes
+        let a = -Infinity, b = Infinity;
+        for (let j = 0; j < 3; j++) {
+          if (Math.abs(d[j]) < 1e-12) {
+            if (!(lo[j] < bhi[j] + m && hi[j] > blo[j] - m)) { a = 1.0; b = 0.0; break; }
+            continue;
+          }
+          const t1 = (bhi[j] + m - lo[j]) / d[j], t2 = (blo[j] - m - hi[j]) / d[j];
+          a = Math.max(a, Math.min(t1, t2)); b = Math.min(b, Math.max(t1, t2));
+        }
+        if (a < b && a < t && t < b) { t = b; moved = true; }
+      }
+      if (!moved) break;
+    }
+    t = 10.0 * Math.ceil(t / 10.0 - 1e-9);
+    sa.explode = d.map((v) => v * t);
+    placed.push([lo.map((v, j) => v + t * d[j]), hi.map((v, j) => v + t * d[j])]);
+  }
 }
 export const explodeOf = (model, i) => model.subassemblies[i.group].explode.map((v, k) => v + (i.tags.explode_extra?.[k] ?? 0));
 

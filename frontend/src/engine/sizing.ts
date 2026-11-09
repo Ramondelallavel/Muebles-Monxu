@@ -3,6 +3,7 @@
 import * as C from "./catalog";
 import { analyze, overturning, surfaceSheet } from "./analysis";
 import { navier } from "./fem";
+import { autoExplode } from "./geometry";
 import { AUTO, copyParams } from "./model";
 import { f as fx, g, pyRound } from "./util";
 
@@ -315,5 +316,6 @@ export function build(family, params, onProgress = null) {
   }
   model.requested = params;
   for (const n of [...notes, ...ruleNotes]) model.design_notes.unshift(n);
+  autoExplode(model);          // explosionado sin solapes entre subconjuntos
   return model;
 }

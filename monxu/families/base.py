@@ -85,6 +85,7 @@ class ProductFamily(ABC):
         model.requested = params
         for n in notes + rule_notes:
             model.design_notes.insert(0, n)
+        model.auto_explode()          # explosionado sin solapes entre subconjuntos
         return model
 
     def templates(self) -> list[dict[str, Any]]:

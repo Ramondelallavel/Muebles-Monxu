@@ -289,6 +289,59 @@ class ProductModel:
     rule_fixes: dict[str, tuple[Any, str]] = field(default_factory=dict)
 
     # -- construcción
+    def auto_explode(self) -> None:
+        """Explosionado sin solapes: cada subconjunto, en su orden de montaje, se desplaza en la dirección de su vector
+        lo justo para que su envolvente (con los desplazamientos propios de sus piezas) quede separada, con un margen, de
+        la de los subconjuntos ya colocados. El vector de la familia fija la dirección y el desplazamiento mínimo. Antes
+        los desplazamientos eran fijos y, por ejemplo, las bandejas de una estantería seguían atravesando los montantes."""
+        boxes: dict[str, list[np.ndarray]] = {}
+        for i in self.instances:
+            lo, hi = i.part.local_bbox
+            R, t = i.T[:3, :3], i.T[:3, 3]
+            pts = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]) @ R.T + t
+            pts = pts + np.array(i.tags.get("explode_extra", (0.0, 0.0, 0.0)), float)
+            b = boxes.setdefault(i.group, [pts.min(axis=0), pts.max(axis=0)])
+            b[0], b[1] = np.minimum(b[0], pts.min(axis=0)), np.maximum(b[1], pts.max(axis=0))
+        if not boxes:
+            return
+        all_lo = np.min([b[0] for b in boxes.values()], axis=0)
+        all_hi = np.max([b[1] for b in boxes.values()], axis=0)
+        m = max(60.0, 10.0 * math.ceil(0.04 * float(np.linalg.norm(all_hi - all_lo)) / 10.0))
+        order = sorted(range(len(self.subassemblies)), key=lambda k: (list(self.subassemblies.values())[k].step, k))
+        placed: list[tuple[np.ndarray, np.ndarray]] = []
+        for k in order:
+            sa = list(self.subassemblies.values())[k]
+            if sa.id not in boxes:
+                continue
+            lo, hi = boxes[sa.id]
+            e = np.array(sa.explode, float)
+            L = float(np.linalg.norm(e))
+            if L < 1e-9:
+                placed.append((lo, hi))
+                continue
+            d = e / L
+            t = L
+            for _ in range(2 * len(placed) + 2):
+                moved = False
+                for blo, bhi in placed:
+                    # intervalo de t en que las envolventes (con margen) se cortan: intersección por ejes
+                    a, b = -math.inf, math.inf
+                    for j in range(3):
+                        if abs(d[j]) < 1e-12:
+                            if not (lo[j] < bhi[j] + m and hi[j] > blo[j] - m):
+                                a, b = 1.0, 0.0        # nunca se cortan
+                                break
+                            continue           # sin componente en este eje: se cortan siempre en él
+                        t1, t2 = (bhi[j] + m - lo[j]) / d[j], (blo[j] - m - hi[j]) / d[j]
+                        a, b = max(a, min(t1, t2)), min(b, max(t1, t2))
+                    if a < b and a < t < b:
+                        t, moved = b, True
+                if not moved:
+                    break
+            t = 10.0 * math.ceil(t / 10.0 - 1e-9)
+            sa.explode = tuple(float(v) for v in d * t)
+            placed.append((lo + t * d, hi + t * d))
+
     def add_subassembly(self, sid: str, name: str, **kw) -> Subassembly:
         sa = Subassembly(sid, name, **kw)
         self.subassemblies[sid] = sa

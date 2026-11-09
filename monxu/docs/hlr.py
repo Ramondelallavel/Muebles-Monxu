@@ -80,6 +80,10 @@ def project(shapes: Iterable[cq.Shape], view: str, hidden: bool = True, deflecti
     algo.Hide()
     h = HLRBRep_HLRToShape(algo)
     vis = _edges(h.VCompound(), deflection) + _edges(h.OutLineVCompound(), deflection)
+    if view.startswith("iso"):
+        # aristas de tangencia de los radios (esquinas de tubo, pliegues) en perspectiva: sin ellas un tubo cuadrado se
+        # ve como una cinta plana; en las vistas ortogonales duplicarían el contorno y no se dibujan
+        vis += _edges(h.Rg1LineVCompound(), deflection)
     hid = (_edges(h.HCompound(), deflection) + _edges(h.OutLineHCompound(), deflection)) if hidden else []
     pts = [p for pl in vis for p in pl] or [(0, 0)]
     xs, ys = [p[0] for p in pts], [p[1] for p in pts]

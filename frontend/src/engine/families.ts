@@ -126,8 +126,8 @@ class MesaIndustrial {
     const mat_s = V.MATERIAL_ESTRUCTURAL, mat_c = V.MATERIAL_CHAPA, fin = V.ACABADO;
     model.addSub("EST", "Estructura soldada", { welded: true, step: 1 });
     model.addSub(this.support_group[0], this.support_group[1], { explode: [0, 0, -160], step: 2 });
-    if (d.shelf) model.addSub("BAL", "Balda inferior", { explode: [0, 0, 90], step: 3 });
-    model.addSub("ENC", this.top_label, { explode: [0, 0, 380], step: 4 });
+    if (d.shelf) model.addSub("BAL", "Balda inferior", { explode: [0, -100, 0], step: 3 });     // sale por delante
+    model.addSub("ENC", this.top_label, { explode: [...(this.top_explode ?? [0, 0, 380])], step: 4 });
     const { leg, rail, trv, bas, c, a } = d;
     const legs = {};
     const corners = { DI: [c + a / 2, c + a / 2], DD: [L - c - a / 2, c + a / 2], TI: [c + a / 2, W - c - a / 2], TD: [L - c - a / 2, W - c - a / 2] };
@@ -790,6 +790,7 @@ class Estanteria extends MesaIndustrial {
 // ============================================================================ puesto de trabajo (port de puesto_trabajo.py)
 const PANEL_HOLE = 10.0, PANEL_PITCH = 38.0;
 class PuestoTrabajo extends MesaIndustrial {
+  get top_explode() { return [0.0, -380.0, 380.0]; }      // la encimera sale en diagonal: los montantes traseros llegan a la altura total
   paramForRole(role) {
     if (role === "montante") return "PERFIL_PATA";
     if (["travesano_alto", "larguero_est", "brazo_est", "travesano_int_est"].includes(role)) return "PERFIL_ALTILLO";

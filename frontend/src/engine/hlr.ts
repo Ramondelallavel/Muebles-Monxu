@@ -144,6 +144,8 @@ export function project(items, view, opts = {}) {
       const s1 = facing(f1), s2 = facing(f2);
       if ((s1 > 1e-9 && s2 <= 1e-9) || (s2 > 1e-9 && s1 <= 1e-9)) edge(it, a, b);
     }
+    // radios (esquinas de tubo, pliegues): su línea media si las dos caras que une miran al observador
+    for (const [a, b, fa, fb] of g.creaseEdges ?? []) if (facing(fa) > 0.02 && facing(fb) > 0.02) edge(it, a, b);
   }
   const visible = merge(vis);
   return { visible, hidden: hidden ? subtract(merge(hid), visible) : [], bbox: [u0, v0, u1, v1] };

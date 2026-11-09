@@ -137,6 +137,8 @@ class MesaIndustrial(ProductFamily):
     support_param = "PIE_NIVELADOR"
     support_category = "patas"
     support_group = ("APO", "Apoyos niveladores")
+    #: dirección (y desplazamiento mínimo) de la encimera en el explosionado
+    top_explode = (0.0, 0.0, 380.0)
 
     @staticmethod
     def sheet_inset(v, t_param, gap_param) -> float:
@@ -363,8 +365,8 @@ class MesaIndustrial(ProductFamily):
         model.add_subassembly("EST", "Estructura soldada", welded=True, step=1)
         model.add_subassembly(self.support_group[0], self.support_group[1], explode=(0, 0, -160), step=2)
         if d["shelf"]:
-            model.add_subassembly("BAL", "Balda inferior", explode=(0, 0, 90), step=3)
-        model.add_subassembly("ENC", self.top_label, explode=(0, 0, 380), step=4)
+            model.add_subassembly("BAL", "Balda inferior", explode=(0, -100, 0), step=3)     # sale por delante
+        model.add_subassembly("ENC", self.top_label, explode=self.top_explode, step=4)
 
         leg, rail, trv, bas = d["leg"], d["rail"], d["trv"], d["bas"]
         c, a = d["c"], d["a"]
