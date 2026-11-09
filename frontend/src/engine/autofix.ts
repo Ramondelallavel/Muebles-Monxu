@@ -60,20 +60,45 @@ function candidates(fam, values, eng) {
   return out;
 }
 
+/** Regenera y verifica con la corrección; el informe lleva los errores que queden en las notas del diseño. */
 function verify(fam, values, sources, fix) {
   const trial = { ...values, ...fix };
   const src = Object.fromEntries(Object.keys(trial).map((k) => [k, k in fix ? "correccion" : sources?.[k] ?? "usuario"]));
-  try { return analyze(build(fam, fam.newParams(trial, src))); } catch { return null; }
+  try {
+    const m = build(fam, fam.newParams(trial, src));
+    const r = analyze(m);
+    r._errors = m.design_notes.filter((n) => n.level === "error").map((n) => n.code);
+    return r;
+  } catch { return null; }
+}
+const ok = (r) => !!r && r.status === "CUMPLE" && !r._errors.length;
+
+/** Valores fijados que la geometría no admite: el valor válido más próximo que calcula la propia familia (rule_fixes). */
+export function geometricFixes(fam, values, model) {
+  const specs = Object.fromEntries(fam.specs().map((s) => [s.name, s]));
+  const fix = {}, why = [];
+  for (const [k, [v]] of Object.entries(model?.rule_fixes ?? {})) {
+    if (fixed(values, k) && values[k] !== v && specs[k]) {
+      fix[k] = v;
+      why.push(typeof v === "number" ? `${specs[k].label}: ${g(v)}${specs[k].unit ? ` ${specs[k].unit}` : ""}, el valor válido más próximo para la geometría`
+        : `${specs[k].label}: ${v}`);
+    }
+  }
+  return [fix, why];
 }
 
-/** Primera corrección que hace CUMPLIR el diseño (comprobada regenerando y verificando), o null. */
-export function proposeFix(fam, values, sources, eng) {
-  if (eng.status !== "NO_CUMPLE") return null;
-  for (let [fix, why] of candidates(fam, values, eng)) {
+/** Primera corrección que hace CUMPLIR el diseño sin errores (comprobada regenerando y verificando), o null. */
+export function proposeFix(fam, values, sources, eng, model = null) {
+  const [geo, geoWhy] = model ? geometricFixes(fam, values, model) : [{}, []];
+  const failing = eng.status === "NO_CUMPLE";
+  if (!failing && !Object.keys(geo).length) return null;
+  let cands = failing ? candidates(fam, values, eng).map(([f, w]) => [{ ...geo, ...f }, [...geoWhy, ...w]]) : [];
+  if (Object.keys(geo).length && !cands.length) cands = [[geo, geoWhy]];
+  const attempt = (fix, why) => {
     let r = verify(fam, values, sources, fix);
     // carro: con menos fuerza el dimensionado aligera el carro y su peso estabiliza menos; se itera la admisible
     for (let it = 0; it < 5; it++) {
-      if (!r || r.status === "CUMPLE" || !("CARGA_HORIZONTAL" in fix)) break;
+      if (!r || ok(r) || !("CARGA_HORIZONTAL" in fix)) break;
       const vu = r.checks.find((c) => c.id === "E.VUELCO" && c.status === "NO_CUMPLE");
       const adm = vu?.details?.empuje_admisible_N;
       if (adm == null || adm < 5 || Math.floor(adm / 5) * 5 >= fix.CARGA_HORIZONTAL) break;
@@ -82,7 +107,19 @@ export function proposeFix(fam, values, sources, eng) {
         + "(la admisible); indíquelo en las instrucciones de uso"];
       r = verify(fam, values, sources, fix);
     }
-    if (r && r.status === "CUMPLE") return { params: fix, reasons: why, status: r.status, governing: r.governing?.description ?? null };
+    return [fix, why, r];
+  };
+  const result = (fix, why, r) => ({ params: fix, reasons: why, status: r.status, governing: r.governing?.description ?? null });
+  for (const [fix0, why0] of cands) {
+    const [fix, why, r] = attempt(fix0, why0);
+    if (ok(r)) return result(fix, why, r);
+    // corregida la geometría, el cálculo puede no cumplir aún: se añade la corrección de cálculo sobre ella
+    if (Object.keys(geo).length && r && r.status === "NO_CUMPLE" && !r._errors.length) {
+      for (const [f2, w2] of candidates(fam, { ...values, ...fix }, r)) {
+        const [fix2, why2, r2] = attempt({ ...fix, ...f2 }, [...why, ...w2]);
+        if (ok(r2)) return result(fix2, why2, r2);
+      }
+    }
   }
   return null;
 }

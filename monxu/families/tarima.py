@@ -173,6 +173,8 @@ class Tarima(MesaSoldadura):
                 model.note("error", "GEO-TARIMA-BAJA", f"Con el pie {foot['name']} y el bastidor de {frame_h:g} mm de "
                            f"canto no cabe la tarima de {H:g} mm: altura mínima {h_min:g} mm, o pies y perfiles más "
                            "bajos.")
+                model.rule_fixes["ALTURA"] = (float(h_min), f"Tarima a {h_min:g} mm (regla de diseño): a {H:g} mm no "
+                                                            "cabían el pie y el bastidor.")
             xe0, xe1 = c + trv.B / 2, L - c - trv.B / 2
             n_top = ctx["NUMERO_TRAVESANOS"]
             if n_top == AUTO:

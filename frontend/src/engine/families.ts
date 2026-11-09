@@ -738,7 +738,7 @@ class Estanteria extends MesaIndustrial {
       if (z1 - ts - rail.H < z_leg0 + 20) {
         const z1min = Math.ceil((z_leg0 + 20 + ts + rail.H) / 5) * 5;
         const fits = ctx.get("DISTANCIA_BALDAS") === AUTO || z1min + (n - 1) * dist <= H;
-        if (ctx.params.sources.ALTURA_PRIMER_NIVEL === "defecto" && z1min <= 800 && fits)
+        if (z1min <= 800 && fits)     // la regla sólo se aplica sola si el valor es por defecto
           model.rule_fixes.ALTURA_PRIMER_NIVEL = [z1min, `Primer nivel a ${g(z1min)} mm (regla de diseño): a la altura por defecto, ${g(z1)} mm, `
             + "su bastidor no cabía sobre las placas base y los apoyos."];
         model.note("error", "GEO-NIVEL-BAJO", `El primer nivel está demasiado bajo para su bastidor: ALTURA_PRIMER_NIVEL de ${g(z1min)} mm como mínimo.`);
@@ -1443,7 +1443,7 @@ class CarroEstanteria extends Estanteria {
           const z = d.z_levels[i], lo_l = z - Math.max(ala, band);
           if (!(lo_b >= z + HAND_CLEARANCE || hi_b <= lo_l - HAND_CLEARANCE)) {
             const zOk = nearestHandle(d.z_levels, (zz) => zz - Math.max(ala, band), asa.H, H, za);
-            if (zOk !== null && ctx.params.sources.ALTURA_ASA === "defecto")
+            if (zOk !== null)     // la regla sólo se aplica sola si el valor es por defecto
               model.rule_fixes.ALTURA_ASA = [zOk, `Asa a ${g(zOk)} mm (regla de diseño): a la altura por defecto, ${g(za)} mm, no dejaba `
                 + `${g(HAND_CLEARANCE)} mm para la mano con el nivel ${i + 1}.`];
             model.note("error", "GEO-ASA-NIVEL", `El asa (${g(lo_b)}–${g(hi_b)} mm) no deja ${g(HAND_CLEARANCE)} mm de holgura para la mano `
@@ -1887,6 +1887,7 @@ class Tarima extends MesaSoldadura {
         const hMin = Math.ceil((z_leg0 + 10 + frameH + t) / 5) * 5;
         model.note("error", "GEO-TARIMA-BAJA", `Con el pie ${foot.name} y el bastidor de ${g(frameH)} mm de canto no cabe la tarima de ${g(H)} mm: `
           + `altura mínima ${g(hMin)} mm, o pies y perfiles más bajos.`);
+        model.rule_fixes.ALTURA = [hMin, `Tarima a ${g(hMin)} mm (regla de diseño): a ${g(H)} mm no cabían el pie y el bastidor.`];
       }
       const xe0 = c + trv.B / 2, xe1 = L - c - trv.B / 2;
       let n_top = ctx.get("NUMERO_TRAVESANOS");

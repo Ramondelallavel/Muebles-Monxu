@@ -343,7 +343,7 @@ class Estanteria(MesaIndustrial):
             if z1 - ts - rail.H < z_leg0 + 20:
                 z1_min = math.ceil((z_leg0 + 20 + ts + rail.H) / 5) * 5
                 fits = ctx["DISTANCIA_BALDAS"] == AUTO or z1_min + (n - 1) * dist <= H
-                if ctx.params.sources.get("ALTURA_PRIMER_NIVEL") == "defecto" and z1_min <= 800 and fits:
+                if z1_min <= 800 and fits:     # la regla sólo se aplica sola si el valor es por defecto
                     model.rule_fixes["ALTURA_PRIMER_NIVEL"] = (
                         float(z1_min), f"Primer nivel a {z1_min:g} mm (regla de diseño): a la altura por defecto, {z1:g} mm, "
                                        "su bastidor no cabía sobre las placas base y los apoyos.")

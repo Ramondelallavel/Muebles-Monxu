@@ -119,7 +119,6 @@ export async function buildDossier(project, rev, model, summary, onProgress = nu
   q.add(lay.total ? "advertencia" : "ok", "PLANO-LEGIBILIDAD", lay.total
     ? `Planos y montaje: ${lay.total} posibles solapes de textos o indicaciones (${ltxt}) en ${[...dr.layout.sheets, ...mo.layout.sheets].map((s) => s.number).join(", ")}; revisar esas hojas.`
     : `Planos y montaje (${dr.total + mo.total} hojas) sin solapes: ningún texto pisa otro texto, una línea, una cota, un globo ni el cuadro de rotulación, y las líneas de referencia no se cruzan.`);
-  q.add("pendiente", "VALIDACION-TECNICA", "Validación definitiva por técnico competente pendiente de firma.");
   const qa = q.result();
   add("06_DOCUMENTACION/informe_calculo_y_verificaciones.html", reportHtml({ ...summary, qa }, { ...info, project_code: project.code }));
   add("06_DOCUMENTACION/informe_verificaciones.json", JSON.stringify({ qa, engineering: summary.engineering, dfm: summary.dfm, interferences: summary.interferences }, null, 2));

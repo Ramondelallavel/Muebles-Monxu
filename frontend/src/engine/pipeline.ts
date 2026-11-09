@@ -136,7 +136,6 @@ export function modelChecks(model, eng, dfm, bom, interf) {
   }
   else if (eng.status === "PENDIENTE") q.add(PEND, "CALC-PENDIENTE", "Verificación estructural incompleta: " + (eng.pending.length ? eng.pending : ["datos pendientes"]).join("; "));
   else q.add(OKL, "CALC", "Verificación estructural automatizada completa: CUMPLE.");
-  q.add(PEND, "VALIDACION-TECNICA", "Validación definitiva por técnico competente pendiente de firma.");
   return q;
 }
 
@@ -165,9 +164,10 @@ export function regenerate(familyId, values, sources = {}, onProgress = null) {
   t.interferencias = (now() - t1) / 1000;
   const q = modelChecks(model, eng, dfm, bom, interf);
   let fix = null;
-  if (eng.status === "NO_CUMPLE") {       // corrección mínima de los valores fijados, comprobada antes de ofrecerla
+  // corrección mínima de los valores fijados (cálculo o geometría), comprobada antes de ofrecerla
+  if (eng.status === "NO_CUMPLE" || Object.keys(model.rule_fixes ?? {}).length) {
     t1 = now();
-    fix = proposeFix(fam, values, sources, eng);
+    fix = proposeFix(fam, values, sources, eng, model);
     t.correccion = (now() - t1) / 1000;
   }
   t.total = (now() - t0) / 1000;

@@ -657,6 +657,9 @@ familias salen CUMPLE. Lo que antes dejaba la verificación incompleta se calcul
   la chapa a S235JR o, en un carro, limitar la fuerza de maniobra a la admisible (iterada porque el redimensionado cambia
   el peso). Sólo se ofrece si, regenerado y verificado, el diseño CUMPLE. En el barrido aleatorio había 11 casos que no
   cumplían por valores impuestos y los 11 tienen corrección comprobada. Se aplica con un botón (`correccion`).
+  También se corrigen las geometrías imposibles por un valor fijado, con el valor válido más próximo que calcula la
+  familia: asa contra un nivel, primer nivel o tarima demasiado bajos. La corrección geométrica se combina con la de
+  cálculo si hace falta. Las dos implementaciones dan la misma corrección.
 - **Rendimiento**: búsqueda de nodos en rejilla y matriz de rigidez dispersa en el cálculo de barras (antes cuadrática y
   densa). La estantería en batería por defecto pasa de 30 s a 8 s.
 
@@ -675,8 +678,21 @@ familias salen CUMPLE. Lo que antes dejaba la verificación incompleta se calcul
     apartado ni al salir;
   - el borrador del formulario se guarda solo, 0,8 s después del último cambio;
   - al abrir un proyecto el diseño se regenera solo con sus parámetros guardados.
-- Paridad: `tools/webcheck/interp_cmp.py` compara también 12 conversaciones completas entre los dos motores (respuesta,
-  supuestos, preguntas y datos aplicados en cada turno).
+- Paridad: `tools/webcheck/interp_cmp.py` compara 66 frases y 15 conversaciones completas entre los dos motores
+  (respuesta, supuestos, preguntas y datos aplicados en cada turno), sin diferencias.
+
+### Validación de esta ronda
+
+| Prueba | Resultado |
+| --- | --- |
+| Validación cruzada Python ↔ navegador | 107 casos, 0 diferencias. Ningún PENDIENTE (plantillas y defectos CUMPLE). |
+| Invariantes de lógica | 183 casos, 0 incidencias. |
+| Barrido realista (300 casos aleatorios) | Todo «NO CUMPLE» por valores impuestos tiene corrección comprobada. Quedan 2 bloqueos de geometría sin un valor único: taladro Ø16 en placa de 20 mm y tarima sin perfil posible. |
+| Auditoría de planos y montaje | 73 casos (63 plantillas y los 10 diseños por defecto, con tacos), 0 solapes. |
+| Pruebas Python | 125 rápidas y 18 lentas superadas. |
+| Expediente del navegador con tacos | Verificado con las herramientas del servidor (STEP, DXF, STL), 0 errores. |
+| Flujos de interfaz | Diseño recuperado al abrir, asistente que aplica y regenera, conversación y borrador conservados, corrección aplicada con un botón: 14/14 sin errores de consola. |
+| Recorrido de las 63 plantillas en la interfaz | Sin errores de consola y 0 bloqueantes. |
 
 ## Datos que quedan como hipótesis o pendientes
 

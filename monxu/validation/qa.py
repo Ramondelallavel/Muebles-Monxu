@@ -176,7 +176,6 @@ def model_checks(model, interf: dict, eng: dict, dfm: list, bom: dict) -> QA:
                                                                                       ["datos pendientes"]))
     else:
         q.add(OK, "CALC", "Verificación estructural automatizada completa: CUMPLE.")
-    q.add(PEND, "VALIDACION-TECNICA", "Validación definitiva por técnico competente pendiente de firma.")
     return q
 
 

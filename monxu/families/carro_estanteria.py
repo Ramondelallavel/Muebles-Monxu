@@ -174,7 +174,7 @@ class CarroEstanteria(Estanteria):
                     lo_l = z - max(ala, band)
                     if not (lo_b >= z + HAND_CLEARANCE or hi_b <= lo_l - HAND_CLEARANCE):
                         z_ok = nearest_handle(d["z_levels"], lambda zz: zz - max(ala, band), asa.H, H, za)
-                        if z_ok is not None and ctx.params.sources.get("ALTURA_ASA") == "defecto":
+                        if z_ok is not None:     # la regla sólo se aplica sola si el valor es por defecto
                             model.rule_fixes["ALTURA_ASA"] = (
                                 z_ok, f"Asa a {z_ok:g} mm (regla de diseño): a la altura por defecto, {za:g} mm, no dejaba "
                                       f"{HAND_CLEARANCE:g} mm para la mano con el nivel {i}.")

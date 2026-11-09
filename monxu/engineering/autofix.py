@@ -80,6 +80,8 @@ def _candidates(fam, values: dict[str, Any], eng: dict) -> list[tuple[dict[str, 
 
 
 def _verify(fam, values: dict[str, Any], sources: dict[str, str] | None, fix: dict[str, Any]) -> dict | None:
+    """Regenera y verifica con la corrección: devuelve el informe de cálculo si CUMPLE y no queda ningún error
+    geométrico o de dimensionado en las notas del diseño; si no, None (o el informe, para iterar la maniobra)."""
     from .analysis import analyze
     ps = fam.new_params()
     by_src: dict[str, dict] = {}
@@ -88,22 +90,49 @@ def _verify(fam, values: dict[str, Any], sources: dict[str, str] | None, fix: di
     try:
         for src, vals in by_src.items():
             ps.update(vals, src)
-        return analyze(fam.build(ps))
+        m = fam.build(ps)
+        r = analyze(m)
     except (ParamError, ValueError):
         return None
+    r["_errors"] = [n["code"] for n in m.design_notes if n["level"] == "error"]
+    return r
 
 
-def propose_fix(family_id: str, values: dict[str, Any], sources: dict[str, str] | None, eng: dict) -> dict | None:
-    """Primera corrección que hace CUMPLIR el diseño (comprobada regenerando y verificando), o None."""
+def _ok(r: dict | None) -> bool:
+    return r is not None and r["status"] == "CUMPLE" and not r["_errors"]
+
+
+def geometric_fixes(fam, values: dict[str, Any], model) -> tuple[dict[str, Any], list[str]]:
+    """Valores fijados que la geometría no admite (asa contra un nivel, primer nivel o tarima demasiado bajos...):
+    el valor válido más próximo que la propia familia calcula (``rule_fixes``)."""
+    specs = {s.name: s for s in fam.param_specs()}
+    fix, why = {}, []
+    for k, (v, _reason) in (getattr(model, "rule_fixes", None) or {}).items():
+        if _fixed(values, k) and values[k] != v and k in specs:
+            fix[k] = v
+            unit = f" {specs[k].unit}" if specs[k].unit else ""
+            why.append(f"{specs[k].label}: {v:g}{unit}, el valor válido más próximo para la geometría"
+                       if isinstance(v, (int, float)) else f"{specs[k].label}: {v}")
+    return fix, why
+
+
+def propose_fix(family_id: str, values: dict[str, Any], sources: dict[str, str] | None, eng: dict,
+                model=None) -> dict | None:
+    """Primera corrección que hace CUMPLIR el diseño sin errores (comprobada regenerando y verificando), o None."""
     from ..families import family
-    if eng.get("status") != "NO_CUMPLE":
-        return None
     fam = family(family_id)
-    for fix, why in _candidates(fam, values, eng):
+    geo, geo_why = geometric_fixes(fam, values, model) if model is not None else ({}, [])
+    failing = eng.get("status") == "NO_CUMPLE"
+    if not failing and not geo:
+        return None
+    cands = [({**geo, **f}, geo_why + w) for f, w in _candidates(fam, values, eng)] if failing else []
+    if geo and not cands:
+        cands = [(geo, geo_why)]
+    def attempt(fix, why):
         r = _verify(fam, values, sources, fix)
         # carro: con menos fuerza el dimensionado aligera el carro y su peso estabiliza menos; se itera la admisible
         for _ in range(5):
-            if r is None or r["status"] == "CUMPLE" or "CARGA_HORIZONTAL" not in fix:
+            if r is None or _ok(r) or "CARGA_HORIZONTAL" not in fix:
                 break
             vu = next((c for c in r["checks"] if c["id"] == "E.VUELCO" and c["status"] == "NO_CUMPLE"), None)
             adm = (vu or {}).get("details", {}).get("empuje_admisible_N")
@@ -114,7 +143,18 @@ def propose_fix(family_id: str, values: dict[str, Any], sources: dict[str, str] 
                 f"Vuelco del carro vacío: fuerza de maniobra limitada a {fix['CARGA_HORIZONTAL']:g} N (la admisible); "
                 "indíquelo en las instrucciones de uso"]
             r = _verify(fam, values, sources, fix)
-        if r is not None and r["status"] == "CUMPLE":
+        return fix, why, r
+
+    for fix, why in cands:
+        fix, why, r = attempt(fix, why)
+        if _ok(r):
             return {"params": fix, "reasons": why, "status": r["status"],
                     "governing": (r.get("governing") or {}).get("description")}
+        # corregida la geometría, el cálculo puede no cumplir aún: se añade la corrección de cálculo sobre ella
+        if geo and r is not None and r["status"] == "NO_CUMPLE" and not r["_errors"]:
+            for f2, w2 in _candidates(fam, {**values, **fix}, r):
+                fix2, why2, r2 = attempt({**fix, **f2}, why + w2)
+                if _ok(r2):
+                    return {"params": fix2, "reasons": why2, "status": r2["status"],
+                            "governing": (r2.get("governing") or {}).get("description")}
     return None

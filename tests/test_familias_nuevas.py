@@ -616,3 +616,29 @@ def test_workstation_shelf_too_shallow_for_its_frame_is_rejected():
             "ALTURA_ESTANTE": 1600}
     with pytest.raises(ParamError, match="Fondo de estante 177 mm insuficiente"):
         _build("puesto_trabajo", vals)
+
+
+def test_verified_corrections_for_fixed_values():
+    """Diseños que no cumplen o no se pueden construir por valores fijados: se ofrece la corrección mínima, ya
+    regenerada y verificada (sólo si con ella el diseño CUMPLE sin errores)."""
+    # primer nivel demasiado bajo para su bastidor (fijado por el usuario): la altura válida más próxima
+    v = {"ANCHURA": 1600, "PROFUNDIDAD": 750, "ALTURA": 1600, "NUMERO_NIVELES": 4, "ALTURA_PRIMER_NIVEL": 250,
+         "ASA_EMPUJE": "un_extremo", "ALTURA_ASA": 900, "CARGA_HORIZONTAL": 60, "MATERIAL_ESTRUCTURAL": "EN AW-6082 T6",
+         "MATERIAL_CHAPA": "EN AW-5754 H22", "ACABADO": "ANODIZADO_NATURAL"}
+    d = regenerate("carro_estanteria", v, {k: "usuario" for k in v})
+    assert any(n["code"] == "GEO-NIVEL-BAJO" for n in d.model.design_notes)
+    assert d.fix and d.fix["params"] == {"ALTURA_PRIMER_NIVEL": 260.0} and d.fix["status"] == "CUMPLE"
+    ok = regenerate("carro_estanteria", {**v, **d.fix["params"]})
+    assert ok.eng["status"] == "CUMPLE" and not [n for n in ok.model.design_notes if n["level"] == "error"]
+    # tarima más baja que su pie y su bastidor
+    t = {"LONGITUD": 2100, "ANCHURA": 1300, "ALTURA": 150, "CARGA_TOTAL": 1391, "CARGA_PUNTUAL": 153,
+         "ANCLAJE": "ninguno", "CARGA_HORIZONTAL": 100}
+    d = regenerate("tarima", t, {k: "usuario" for k in t})
+    assert d.fix and d.fix["params"] == {"ALTURA": 155.0}
+    # mesa con chapa DC01 que no resiste la carga puntual: chapa S235JR con espesor por cálculo
+    m = {"LONGITUD": 2100, "ANCHURA": 1150, "ALTURA": 1000, "CARGA_TOTAL": 400, "NUMERO_BALDAS": 0, "CARGA_PUNTUAL": 100,
+         "ANCLAJE": "al_suelo", "MATERIAL_CHAPA": "DC01"}
+    d = regenerate("mesa_industrial", m, {k: "usuario" for k in m})
+    assert d.eng["status"] == "NO_CUMPLE" and d.fix["params"]["MATERIAL_CHAPA"] == "S235JR"
+    # sin nada fijado que corregir no se ofrece nada
+    assert regenerate("mesa_industrial", {}).fix is None

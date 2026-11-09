@@ -105,9 +105,10 @@ def regenerate(family_id: str, values: dict[str, Any], sources: dict[str, str] |
     q = QA.model_checks(model, interf, eng, dfm, bom)
     cost = quotation(model, plan)
     fix = None
-    if eng["status"] == "NO_CUMPLE":       # corrección mínima de los valores fijados, comprobada antes de ofrecerla
+    # corrección mínima de los valores fijados (cálculo o geometría), comprobada antes de ofrecerla
+    if eng["status"] == "NO_CUMPLE" or model.rule_fixes:
         t1 = time.perf_counter()
-        fix = propose_fix(family_id, values, sources, eng)
+        fix = propose_fix(family_id, values, sources, eng, model)
         t["correccion"] = time.perf_counter() - t1
     t["total"] = time.perf_counter() - t0
     return Design(family_id, model, eng, plan, bom, dfm, interf, q, {k: round(v, 3) for k, v in t.items()}, cost, fix)
