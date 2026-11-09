@@ -126,7 +126,7 @@ export async function workbook(info, summary) {
   bom.consumables.forEach((c, n) => { wb.set(last + 5 + n, 1, c.description, S.normal); wb.set(last + 5 + n, 2, c.qty, S.normal); wb.set(last + 5 + n, 3, c.unit, S.normal); });
   // ---------------------------------------------------------------- verificaciones
   const wv = new Sheet("Verificaciones"); sheets.push(wv);
-  r0 = header(wv, info, "VERIFICACIONES ESTRUCTURALES (CÁLCULO PRELIMINAR AUTOMATIZADO)");
+  r0 = header(wv, info, "VERIFICACIONES ESTRUCTURALES (CÁLCULO AUTOMATIZADO EN 1990 / EN 1993)");
   wv.set(r0 - 1, 0, eng.status_label, eng.status === "CUMPLE" ? S.good : S.bad);
   table(wv, r0, ["Id", "Categoría", "Comprobación", "Referencia", "Comb.", "Valor", "Límite", "Unidad", "Aprovechamiento", "Estado"],
     eng.checks.map((c) => [c.id, c.category, c.description, c.standard, c.combination, c.value, c.limit, c.unit, c.utilization, c.status]), [26, 12, 70, 34, 8, 10, 10, 8, 14, 14], { 8: S.n3 });

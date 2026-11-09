@@ -62,6 +62,7 @@ class CarroEstanteria(Estanteria):
     constructive_defaults = CONSTRUCTIVE_DEFAULTS
     frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO", "PERFIL_ASA")
     support_param = "RUEDA"
+    level_load_kg_m2 = 100            # carga de uso por defecto de cada bandeja (kg/m²)
     support_category = "ruedas_espiga"
     support_group = ("RUE", "Ruedas")
 
@@ -99,6 +100,8 @@ class CarroEstanteria(Estanteria):
                       "dimensiones", 200, 800)
             elif s.name == "TIPO_APOYO":
                 s = P("TIPO_APOYO", "Tipo de apoyo", "choice", "ruedas", None, "accesorios", choices=["ruedas"])
+            elif s.name == "TACO_ANCLAJE":
+                continue                                     # un carro no se ancla
             elif s.name == "ANCLAJE":
                 s = P("ANCLAJE", "Anclaje", "choice", "ninguno", None, "cargas", choices=["ninguno"],
                       help="Un carro no se ancla: la estabilidad se comprueba sin anclaje.")
@@ -214,6 +217,7 @@ class CarroEstanteria(Estanteria):
         v = model.params.values
         st["product_word"] = "carro"
         st["push_height"] = min(v["ALTURA_ASA"], v["ALTURA"])        # vuelco: altura de la mano o del asa
+        st["mobile"] = d["asa_mode"] != "ninguna"              # con asa: maniobra en la dirección de la marcha (X)
         texts = dict(st["assembly_texts"])
         texts.pop("APO", None)
         texts["RUE"] = ("Roscar las ruedas de espiga en las tuercas soldadas de las placas base hasta el tope y "

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, fmt, IS_LOCAL, type Dict, type FamilyInfo, type Project, type ViewerPayload } from "./api";
 import { storageLabel } from "./local/localApi";
 
@@ -18,7 +18,7 @@ function useTheme() {
 }
 const tick = () => new Promise((r) => setTimeout(r, 30));
 import Viewer, { type ViewName } from "./Viewer";
-import { AlertsPanel, BomPanel, CalcPanel, ChatPanel, CostPanel, FabPanel, FeaturesPanel, ParamForm, PropsPanel, TreePanel } from "./panels";
+import { AlertsPanel, BomPanel, CalcPanel, ChatPanel, CostPanel, FabPanel, FeaturesPanel, FixBox, ParamForm, PropsPanel, TreePanel } from "./panels";
 
 export default function App() {
   const [code, setCode] = useState<string | null>(() => (IS_LOCAL ? null : new URLSearchParams(location.search).get("p")));
@@ -161,24 +161,87 @@ function Workspace({ code, onBack }: { code: string; onBack: () => void }) {
   const [stale, setStale] = useState(true);
   const theme = useTheme();
 
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const projRef = useRef<Project | null>(null);
+  projRef.current = project;
+
   const load = async () => { const p = await api.project(code); setProject(p); setDraft(p.working_params); return p; };
-  useEffect(() => { load().then((p) => api.family(p.family).then(setFam)); /* eslint-disable-next-line */ }, [code]);
+  // al entrar en el proyecto se recupera el diseño guardado: se regenera solo a partir de sus parámetros
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const p = await load();
+        const f = await api.family(p.family);
+        if (!alive) return;
+        setFam(f);
+        await regenerate(IS_LOCAL ? "Recuperando el diseño guardado (dimensionado y cálculo en el navegador)…" : "Recuperando el diseño guardado…");
+      } catch (e) { if (alive) setError((e as Error).message); }
+    })();
+    return () => { alive = false; };
+    /* eslint-disable-next-line */
+  }, [code]);
 
   const derived = useMemo(() => Object.fromEntries((design?.parameters ?? []).filter((p: Dict) => !p.derived).map((p: Dict) => [p.name, p.value])), [design]);
 
-  async function generate() {
-    setBusy(IS_LOCAL ? "Regenerando modelo, dimensionado y cálculo en el navegador…" : "Regenerando modelo CAD, cálculo, fabricación e interferencias…"); setError("");
+  /** Regenera el diseño con los parámetros guardados del proyecto. */
+  async function regenerate(label?: string) {
+    setBusy(label ?? (IS_LOCAL ? "Regenerando modelo, dimensionado y cálculo en el navegador…" : "Regenerando modelo CAD, cálculo, fabricación e interferencias…"));
+    setError("");
     try {
-      const changed = Object.fromEntries(Object.entries(draft).filter(([k, v]) => project!.working_params[k] !== v));
-      if (Object.keys(changed).length) await api.setParams(code, changed);
       await tick();
       const r = await api.design(code);
-      setDesign(r.design); setViewer(r.viewer); setStale(false); await load();
+      setDesign(r.design); setViewer(r.viewer); setStale(false);
     } catch (e) { setError((e as Error).message); }
     setBusy("");
   }
 
-  function change(k: string, v: any) { setDraft((d) => ({ ...d, [k]: v })); setStale(true); }
+  /** Guarda el borrador del formulario (si hay cambios) y regenera. */
+  async function generate() {
+    setError("");
+    try {
+      const p = projRef.current!;
+      const changed = Object.fromEntries(Object.entries(draft).filter(([k, v]) => !same(p.working_params[k], v)));
+      if (Object.keys(changed).length) { const r = await api.setParams(code, changed); setProject((o) => (o ? { ...o, ...r.project, assistant_state: o.assistant_state } : r.project)); }
+    } catch (e) { setError((e as Error).message); return; }
+    await regenerate();
+  }
+
+  // el borrador del formulario se guarda solo (no se pierde al cambiar de apartado ni al salir del proyecto)
+  useEffect(() => {
+    const p = projRef.current;
+    if (!p) return;
+    const changed = Object.fromEntries(Object.entries(draft).filter(([k, v]) => !same(p.working_params[k], v)));
+    if (!Object.keys(changed).length) return;
+    const t = setTimeout(async () => {
+      try {
+        const r = await api.setParams(code, changed);
+        setProject((o) => (o ? { ...o, ...r.project, assistant_state: o.assistant_state } : r.project));
+        setSaveMsg({ ok: true, text: "Cambios guardados" });
+      } catch (e) { setSaveMsg({ ok: false, text: `Sin guardar: ${(e as Error).message}` }); }
+    }, 800);
+    return () => clearTimeout(t);
+    /* eslint-disable-next-line */
+  }, [draft]);
+
+  function change(k: string, v: any) { setDraft((d) => ({ ...d, [k]: v })); setStale(true); setSaveMsg(null); }
+
+  /** Respuesta del asistente: recarga el proyecto (familia incluida si ha cambiado) y regenera si se aplicaron datos. */
+  async function onAssistant(r: Dict) {
+    const p = await load();
+    if (r.switched) setFam(await api.family(p.family));
+    if (r.applied && (Object.keys(r.applied).length || !design || stale))
+      await regenerate("Aplicando los datos del asistente: dimensionado, cálculo y verificación…");
+  }
+
+  /** Aplica la corrección automática comprobada y regenera. */
+  async function applyFix(fix: Dict) {
+    try {
+      await api.setParams(code, fix.params, Object.fromEntries(Object.keys(fix.params).map((k) => [k, "correccion"])));
+      await load();
+    } catch (e) { setError((e as Error).message); return; }
+    await regenerate("Aplicando la corrección y verificando de nuevo…");
+  }
 
   if (!project || !fam) return <div className="loading">Cargando…</div>;
   const groupSpecs = fam.params.filter((s) => s.group === step);
@@ -194,8 +257,10 @@ function Workspace({ code, onBack }: { code: string; onBack: () => void }) {
         <aside className="left">
           <nav className="steps">{STEPS.map((s) => <button key={s.id} className={step === s.id ? "on" : ""} onClick={() => setStep(s.id)}>{s.label}</button>)}</nav>
           <div className="left-content">
-            {step === "ia" && <ChatPanel project={project} onApplied={async () => { await load(); setStale(true); }} />}
-            {step !== "ia" && step !== "generar" && <ParamForm specs={groupSpecs} values={draft} sources={project.working_sources} derived={derived} onChange={change} />}
+            {step === "ia" && <ChatPanel project={project} onResult={onAssistant} />}
+            {step !== "ia" && step !== "generar" && <>
+              <ParamForm specs={groupSpecs} values={draft} sources={{ ...designSources(design), ...project.working_sources }} derived={derived} onChange={change} />
+              {saveMsg && <div className={`savestate ${saveMsg.ok ? "" : "bad"}`} role="status">{saveMsg.text}</div>}</>}
             {step === "generar" && <GeneratePanel project={project} design={design} stale={stale} busy={busy} onGenerate={generate} reload={load} />}
           </div>
         </aside>
@@ -213,12 +278,13 @@ function Workspace({ code, onBack }: { code: string; onBack: () => void }) {
           </div>
           <Viewer payload={viewer} mode={mode} explode={explode} hidden={hidden} selected={selected} onSelect={setSelected} measuring={measuring} view={view} theme={theme} />
           {busy && <div className="busy">{busy}</div>}
+          {!busy && design?.fix && tab !== "Alertas y validación" && <div className="fixbox-float"><FixBox fix={design.fix} onApply={applyFix} busy={!!busy} /></div>}
           {error && <div className="error" onClick={() => setError("")}>{error}</div>}
           <div className="bottom">
             <div className="tabs">{BOTTOM.map((t) => <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{t}{t === "Alertas y validación" && design ? ` (${design.qa.blocking}/${design.qa.warnings})` : ""}</button>)}</div>
             <div className="tab-body">
               {!design && tab !== "Documentos" && tab !== "Historial" && <div className="hint">Genere el diseño para ver resultados.</div>}
-              {design && tab === "Alertas y validación" && <AlertsPanel design={design} />}
+              {design && tab === "Alertas y validación" && <AlertsPanel design={design} project={project} onApplyFix={applyFix} busy={!!busy} />}
               {design && tab === "Cálculo" && <CalcPanel eng={design.engineering} />}
               {design && tab === "BOM" && <BomPanel bom={design.bom} />}
               {design && tab === "Fabricación" && <FabPanel plan={design.manufacturing} dfm={design.dfm} />}
@@ -241,6 +307,11 @@ function Workspace({ code, onBack }: { code: string; onBack: () => void }) {
     </div>
   );
 }
+
+/** Igualdad entre el valor del formulario (texto) y el guardado (número, booleano o nulo). */
+const same = (a: any, b: any) => String(a ?? "") === String(b ?? "");
+/** Origen de cada valor según el diseño generado (cargas por uso, reglas, cálculo) para lo que el proyecto no fija. */
+const designSources = (design: Dict | null): Dict => Object.fromEntries((design?.parameters ?? []).filter((p: Dict) => !p.derived && p.source).map((p: Dict) => [p.name, p.source]));
 
 function Summary({ design }: { design: Dict }) {
   const t = design.bom.totals;

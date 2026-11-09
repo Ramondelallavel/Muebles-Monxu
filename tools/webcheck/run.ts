@@ -24,7 +24,8 @@ for (const c of cases) {
       cutting: summary.manufacturing.cutting.map((k) => [k.profile, k.n_bars, k.utilization]),
       nesting: summary.manufacturing.nesting.map((k) => [k.material, k.thickness, k.n_sheets ?? null, k.format ?? null, k.utilization ?? null]),
       welding: summary.manufacturing.welding, painting: summary.manufacturing.painting,
-      dfm: summary.dfm.map((d) => [d.level, d.code, d.element]), bom_totals: summary.bom.totals });
+      dfm: summary.dfm.map((d) => [d.level, d.code, d.element]), bom_totals: summary.bom.totals,
+      fix: summary.fix ? summary.fix.params : null });
   } catch (err) { out.push({ id: c.id, ok: false, error: String(err && err.stack || err) }); }
 }
 process.stdout.write(JSON.stringify(out));

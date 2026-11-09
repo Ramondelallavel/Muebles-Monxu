@@ -26,8 +26,8 @@ from ..cad.sheetmetal import EDGES, FlangeSpec, SheetMetalSpec, bend_deduction
 from ..core.model import Joint, PlatePart, ProductModel, ProfilePart, SheetPart, StandardPart
 from ..core.params import AUTO, ParamContext, ParameterSet, ParamError, ParamSpec
 from .base import register
-from .mesa_industrial import (ALLP, FEET, SHEET_MATERIALS, SHS, STRUCT_MATERIALS, MesaIndustrial, flange_hole_d,
-                              weld_nut_code)
+from .mesa_industrial import (ALLP, ANCHORS, FEET, SHEET_MATERIALS, SHS, STRUCT_MATERIALS, MesaIndustrial, add_anchors,
+                              flange_hole_d, r10, weld_nut_code)
 
 CANDIDATES = {
     "PERFIL_MONTANTE": ["SHS 40x40x2", "SHS 40x40x3", "SHS 50x50x2", "SHS 50x50x3", "SHS 60x60x3", "SHS 70x70x3",
@@ -54,7 +54,8 @@ class Estanteria(MesaIndustrial):
     constructive_defaults = CONSTRUCTIVE_DEFAULTS
     leg_param = "PERFIL_MONTANTE"
     frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO")
-    auto_in_construct = ("RADIO_PLEGADO", "FACTOR_K", "NUMERO_TRAVESANOS_BALDA", "HOLGURA_BALDA", "DISTANCIA_BALDAS")
+    auto_in_construct = ("RADIO_PLEGADO", "FACTOR_K", "NUMERO_TRAVESANOS_BALDA", "HOLGURA_BALDA", "DISTANCIA_BALDAS",
+                         "TACO_ANCLAJE")
 
     def bay_inset(self, v) -> float:
         """Retranqueo bastidor–cara exterior (espesor de bandeja + holgura), igual que en la derivación."""
@@ -76,6 +77,14 @@ class Estanteria(MesaIndustrial):
         if role.startswith("travesano"):
             return "PERFIL_TRAVESANO"
         return None
+
+    #: carga de uso por defecto por nivel (kg/m² de bandeja) cuando no se indica
+    level_load_kg_m2 = 150
+
+    def default_loads(self, v):
+        q = self.level_load_kg_m2
+        W, D = v.get("ANCHURA") or 0, v.get("PROFUNDIDAD") or 0
+        return {"CARGA_POR_NIVEL": (r10(q * (W * D * 1e-6)), f"{q:g} kg/m² sobre la bandeja de {W:g} × {D:g} mm")}
 
     def vertical_load_present(self, v):
         return bool(v.get("CARGA_POR_NIVEL"))
@@ -136,7 +145,10 @@ class Estanteria(MesaIndustrial):
               help="'auto': el de menor capacidad nominal que soporta la reacción de servicio calculada."),
             P("CARGA_POR_NIVEL", "Carga distribuida por nivel", "float", None, "kg", "cargas", 0, 2000, nullable=True),
             P("CARGA_HORIZONTAL", "Empuje horizontal en la parte superior", "float", 300.0, "N", "cargas", 0, 5000),
-            P("ANCLAJE", "Anclaje", "choice", "ninguno", None, "cargas", choices=["ninguno", "al_suelo"]),
+            P("ANCLAJE", "Anclaje", "choice", "ninguno", None, "cargas", choices=["ninguno", "al_suelo"],
+              help="'ninguno' por defecto: si el conjunto vacío volcara con el empuje, se ancla automáticamente."),
+            P("TACO_ANCLAJE", "Taco de anclaje", "choice", AUTO, None, "cargas", choices=ANCHORS, allow_auto=True,
+              help="'auto': el de menor capacidad que resiste la tracción de cálculo (sólo con anclaje al suelo)."),
             P("ENTORNO", "Entorno", "choice", "interior_seco", None, "cargas",
               choices=["interior_seco", "interior_humedo", "exterior", "alimentario", "sala_limpia"]),
             P("TIPO_SUELO", "Tipo de suelo", "choice", "nivelado", None, "cargas", choices=["nivelado", "irregular"]),
@@ -243,6 +255,7 @@ class Estanteria(MesaIndustrial):
                 desc = (f"Pie roscado {foot['thread']} en tuerca soldada" if fpart.role == "pie_nivelador" else
                         f"{fname} roscad{'a' if fpart.role == 'rueda' else 'o'} {foot['thread']} en tuerca soldada")
                 model.add_joint(Joint(f"J.PIE.{k}", "roscada", (f"{g}.PIE.{k}", f"EST.TUERCA.{k}"), (x, y, d["hn"]), desc))
+            add_anchors(model, ps, corners, cname, g)
         tray = SheetPart("balda", f"Bandeja chapa {d['spec'].t:g} mm", d["spec"], mat_c, fin)
         for i, (lid, z) in enumerate(zip(d["level_ids"], d["z_levels"]), start=1):
             with ctx.feature(f"F3{i}", f"Bandeja del nivel {i}"):

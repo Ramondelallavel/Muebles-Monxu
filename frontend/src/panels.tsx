@@ -59,14 +59,20 @@ export function ParamForm({ specs, values, sources, derived, onChange }: {
 }
 
 // ============================================================================ asistente
-export function ChatPanel({ project, onApplied }: { project: Project; onApplied: () => void }) {
-  const [log, setLog] = useState<{ who: string; text: string; data?: Dict }[]>([]);
+type ChatMsg = { who: string; text: string; questions?: Dict[]; data?: Dict };
+
+/** Conversación con el asistente. Se guarda con el proyecto (no se pierde al cambiar de apartado ni al salir) y cada
+ * respuesta se aplica sola: el asistente adopta lo no indicado, aplica los datos y el espacio de trabajo regenera el diseño. */
+export function ChatPanel({ project, onResult }: { project: Project; onResult: (r: Dict) => void }) {
+  const saved: ChatMsg[] = project.assistant_state?.chat ?? [];
+  const [log, setLog] = useState<ChatMsg[]>(saved);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
-  const [last, setLast] = useState<Dict | null>(null);
   const [sample, setSample] = useSample();
   const [useLlm, setUseLlm] = useState(true);
-  async function send(text: string, answers?: Dict, apply = false) {
+  // al volver a este apartado o recargar el proyecto se recupera la conversación guardada
+  useEffect(() => { setLog((l) => (saved.length >= l.length ? saved : l)); /* eslint-disable-next-line */ }, [project.code, saved.length]);
+  async function send(text: string, answers?: Dict) {
     setBusy(true);
     if (text) setLog((l) => [...l, { who: "usuario", text }]);
     try {
@@ -77,42 +83,42 @@ export function ChatPanel({ project, onApplied }: { project: Project; onApplied:
           if (out && typeof out === "object" && !Array.isArray(out)) llm = out as Dict;
         } catch (e) {
           const code = (e as { code?: string }).code;
-          if (code === "not_granted") { setSample(null); llmNote = "\n\n(Claude no autorizado en esta vista: se usa sólo el intérprete de reglas.)"; }
-          else llmNote = `\n\n(Claude no disponible ahora${code ? `: ${code}` : ""}; se usa el intérprete de reglas.)`;
+          if (code === "not_granted") { setSample(null); llmNote = "(Claude no autorizado en esta vista: se usa sólo el intérprete de reglas.)"; }
+          else llmNote = `(Claude no disponible ahora${code ? `: ${code}` : ""}; se usa el intérprete de reglas.)`;
         }
       }
-      const r = await api.assistant(project.code, text, answers, apply, llm);
-      setLast(r);
-      setLog((l) => [...l, { who: "ia", text: r.reply + (r.applied ? "\n\n✔ Parámetros aplicados al proyecto." : "") + llmNote
-        + (r.engine === "claude+reglas" ? "\n\nInterpretación: reglas deterministas + Claude (las reglas prevalecen; cada dato queda trazado)." : ""), data: r }]);
-      if (r.applied) onApplied();
+      const r = await api.assistant(project.code, text, answers, true, llm);
+      setLog([...(r.chat ?? []), ...(llmNote ? [{ who: "ia", text: llmNote }] : [])]);
+      setMsg("");
+      onResult(r);
     } catch (e) { setLog((l) => [...l, { who: "ia", text: "Error: " + (e as Error).message }]); }
     setBusy(false);
-    setMsg("");
   }
+  const lastIa = log.map((m) => m.who).lastIndexOf("ia");
   return (
     <div className="chat">
       <div className="chat-log">
         {log.length === 0 && <div className="hint">Describa el producto que necesita. Ejemplo: «Quiero una mesa industrial de
-          2.000 × 800 × 900 mm, con estructura tubular, encimera de chapa, una balda inferior y carga distribuida de 400 kg».</div>}
+          2.000 × 800 × 900 mm, con estructura tubular, encimera de chapa, una balda inferior y carga distribuida de 400 kg».
+          Lo que no indique lo adopto y lo calculo yo; el diseño se genera y se verifica solo.</div>}
         {log.map((m, i) => (
           <div key={i} className={`bubble ${m.who}`}>
             <pre>{m.text}</pre>
-            {m.data?.questions?.map((q: Dict) => q.options?.length ? (
-              <div key={q.param} className="q-opts"><span>{q.param}:</span>
+            {i === lastIa && (m.questions ?? m.data?.questions ?? []).map((q: Dict) => q.options?.length ? (
+              <div key={q.param} className="q-opts"><span>{q.label ?? q.param}:</span>
                 {q.options.map((o: Dict) => <button key={String(o.value)} className="mini" disabled={busy}
                   onClick={() => send("", { [q.param]: o.value })}>{o.label}</button>)}
               </div>) : null)}
           </div>
         ))}
+        {busy && <div className="bubble ia"><pre>Interpretando, aplicando los datos y calculando…</pre></div>}
       </div>
       <div className="chat-input">
-        <textarea id="mensaje" value={msg} rows={3} placeholder="Escriba su solicitud o respuesta…" onChange={(e) => setMsg(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && msg.trim()) { e.preventDefault(); send(msg); } }} />
+        <textarea id="mensaje" value={msg} rows={3} placeholder="Escriba su solicitud o un cambio (p. ej. «carga de 300 kg», «sin balda»)…" onChange={(e) => setMsg(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && msg.trim() && !busy) { e.preventDefault(); send(msg); } }} />
         <div className="row">
-          <button disabled={busy || !msg.trim()} onClick={() => send(msg)}>Enviar</button>
-          <button className="primary" disabled={busy || !last?.ready_to_generate} onClick={() => send("", {}, true)}>
-            Aplicar parámetros al diseño</button>
+          <button className="primary" disabled={busy || !msg.trim()} onClick={() => send(msg)}>Enviar</button>
+          <span className="muted small">Los datos se aplican y el diseño se regenera automáticamente.</span>
         </div>
         {sample && <label className="llm-toggle"><input id="usar-claude" type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} />
           Completar la interpretación con Claude (usa su cuenta; las reglas prevalecen)</label>}
@@ -184,7 +190,19 @@ export function PropsPanel({ id, design, viewer }: { id: string | null; design: 
 const LV: Record<string, string> = { bloqueante: "bad", error: "bad", NO_CUMPLE: "bad", advertencia: "warn", ADVERTENCIA: "warn",
   pendiente: "pend", PENDIENTE: "pend", ok: "good", CUMPLE: "good", propuesta: "info", info: "info" };
 
-export function AlertsPanel({ design }: { design: Dict }) {
+/** Corrección automática comprobada para un diseño que no cumple por valores fijados (sólo se ofrece si con ella CUMPLE). */
+export function FixBox({ fix, onApply, busy }: { fix: Dict | null | undefined; onApply?: (f: Dict) => void; busy?: boolean }) {
+  if (!fix) return null;
+  return (
+    <div className="fixbox" role="status">
+      <b>Corrección automática comprobada:</b> con estos cambios el diseño CUMPLE todas las verificaciones.
+      <ul>{fix.reasons.map((r: string) => <li key={r}>{r}</li>)}</ul>
+      {onApply && <button className="primary" disabled={busy} onClick={() => onApply(fix)}>Aplicar la corrección y regenerar</button>}
+    </div>
+  );
+}
+
+export function AlertsPanel({ design, project, onApplyFix, busy }: { design: Dict; project?: Project; onApplyFix?: (f: Dict) => void; busy?: boolean }) {
   const q = design.qa;
   return (
     <div className="alerts">
@@ -192,8 +210,11 @@ export function AlertsPanel({ design }: { design: Dict }) {
         <span className={`chip ${design.status.geometry_complete ? "good" : "bad"}`}>
           {design.status.geometry_complete ? "Geometría completa y coherente" : "Errores bloqueantes"}</span>
         <span className={`chip ${LV[design.status.structural]}`}>{design.status.structural_label}</span>
-        <span className="chip pend">Validación definitiva por técnico competente: pendiente</span>
+        {project?.validated_by ? <span className="chip good">Validado por {project.validated_by}</span>
+          : design.status.structural === "CUMPLE" && design.status.geometry_complete
+            ? <span className="chip good">Diseño verificado: listo para emitir revisión y expediente</span> : null}
       </div>
+      <FixBox fix={design.fix} onApply={onApplyFix} busy={busy} />
       <p className="muted">{q.summary}</p>
       <div className="scroll-x"><table className="grid"><thead><tr><th>Nivel</th><th>Código</th><th>Descripción</th></tr></thead><tbody>
         {[...design.design_notes.filter((n: Dict) => !q.items.some((i: Dict) => i.code === n.code && i.message === n.message))   // el QA ya repite errores y advertencias

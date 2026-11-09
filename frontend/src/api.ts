@@ -21,7 +21,7 @@ export interface Revision {
 export interface Project {
   code: string; name: string; client: string; description: string; family: string; designer: string;
   status: string; status_label: string; created: string; updated: string; validated_by: string | null;
-  working_params: Dict; working_sources: Dict; revisions: Revision[]; changes?: Dict[];
+  working_params: Dict; working_sources: Dict; revisions: Revision[]; changes?: Dict[]; assistant_state?: Dict;
 }
 
 export interface ViewerInstance {
@@ -90,5 +90,5 @@ export const fmt = (v: any, d = 1) =>
 
 export const SOURCE_LABEL: Record<string, string> = {
   usuario: "Usuario", defecto: "Por defecto", plantilla: "Plantilla", ia_propuesta: "Propuesta IA",
-  regla_diseno: "Regla de diseño", calculo: "Dimensionado por cálculo",
+  regla_diseno: "Regla de diseño", calculo: "Dimensionado por cálculo", por_uso: "Por defecto según el uso", correccion: "Corrección automática",
 };

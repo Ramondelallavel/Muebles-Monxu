@@ -40,6 +40,24 @@ SUPPORTED_BY = {("puesto_trabajo", "panel_trasero"): ("PANEL_HERRAMIENTAS", 1), 
 CARTS = ("carro_taller", "carro_estanteria", "carro_plataforma")
 MESA_LIKE = ("mesa_industrial", "puesto_trabajo", "carro_taller", "mesa_soldadura")
 SHELF_LIKE = ("estanteria", "carro_estanteria", "estanteria_bateria", "armario")
+
+
+def carry_params(old_family: str, new_family: str, values: dict, sources: dict, specs) -> tuple[dict, dict]:
+    """Parámetros que conservan su significado al cambiar de familia dentro del mismo grupo (mesas o estanterías):
+    medidas, cargas, material... Sólo los que existen en la nueva familia y admiten el valor."""
+    same_group = any(old_family in g and new_family in g for g in (MESA_LIKE, SHELF_LIKE))
+    if not same_group:
+        return {}, {}
+    sp = {s.name: s for s in specs}
+    out = {}
+    for k, v in values.items():
+        if k in sp:
+            try:
+                sp[k].coerce(v)
+                out[k] = v
+            except Exception:
+                pass
+    return out, {k: sources.get(k, "usuario") for k in out}
 MODULE_WORDS = r"modulos|cuerpos|vanos"
 BAY_MAX = 2000.0          # anchura máxima de módulo (ParamSpec de ANCHURA en estanteria_bateria)
 
@@ -106,7 +124,14 @@ class Interpretation:
         self.evidence[k] = ev.strip()
 
 
-def parse(text: str, pending: list[str] | None = None) -> Interpretation:
+#: la carga es de la balda sólo si va pegada a ella («balda de 100 kg», «balda inferior: 100 kg», «balda 100 kg»); en
+#: «con balda y 400 kg» o «con balda, carga de 400 kg» la carga es la de la encimera
+BALDA_BEFORE = r"balda(?:\s+inferior)?\s*(?:(?:de|con|:|=)\s*(?:una\s+)?(?:carga\s+(?:de\s+)?)?)?$"
+
+
+def parse(text: str, pending: list[str] | None = None, context_family: str | None = None) -> Interpretation:
+    """``context_family``: familia de la conversación, para interpretar los mensajes de seguimiento que no la nombran
+    («con reposapiés», «sin peto», «carga de 300 kg»)."""
     t = norm(text)
     it = Interpretation()
     # ------------------------------------------------------------- familia
@@ -114,6 +139,8 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
         if re.search(rx, t):
             it.family = fid
             break
+    if not it.family and context_family:
+        it.family = context_family
     # mesa o banco sobre ruedas: carro de taller sin asa de empuje (mesa móvil)
     mobile_table = (it.family == "mesa_industrial" and bool(re.search(r"\bruedas?\b|\bmovil\b|rodante", t))
                     and not re.search(r"sin ruedas", t))
@@ -187,7 +214,7 @@ def parse(text: str, pending: list[str] | None = None) -> Interpretation:
               or re.search(r"(?:puntual|concentrada)\s*(?:de|:|=)?\s*$", before)):     # pegado al valor
             it.set("CARGA_PUNTUAL", val, ctx)
         elif (re.match(r"\s*(?:de carga\s+)?(?:en|sobre|para) (?:la )?(?:balda|estante inferior)", after)
-              or re.search(r"balda", before)) and not on_top:     # "100 kg en la balda" o "balda de 100 kg"
+              or re.search(BALDA_BEFORE, before)) and not on_top:     # "100 kg en la balda" o "balda de 100 kg"
             it.set("CARGA_BALDA", val, ctx)
         elif pending and pending[0] in ("CARGA_BALDA", "CARGA_PUNTUAL", "CARGA_TOTAL") and \
                 not re.search(r"distribuid|encimera", ctx):
@@ -471,7 +498,7 @@ def missing_data(family: str, values: dict[str, Any], asked: set[str] | None = N
                               blocking="generacion", proposal=prop))
     if values.get("CARGA_TOTAL") is None:
         q.append(Question("CARGA_TOTAL", "¿Qué carga debe soportar la encimera (kg) y está distribuida o concentrada?",
-                          "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.",
+                          "Si no la indica, se adopta la carga de uso habitual por m² según el uso previsto.",
                           [{"label": "150 kg", "value": 150}, {"label": "300 kg", "value": 300},
                            {"label": "500 kg", "value": 500}], "verificacion"))
     if values.get("NUMERO_BALDAS", 0 if family == "mesa_soldadura" else 1) >= 1 and values.get("CARGA_BALDA") is None \
@@ -529,7 +556,7 @@ def _missing_platform(values: dict[str, Any], asked: set[str]) -> list[Question]
                               blocking="generacion", proposal=prop))
     if values.get("CARGA_TOTAL") is None:
         q.append(Question("CARGA_TOTAL", "¿Qué carga transportará la plataforma (kg)?",
-                          "Fija las ruedas, la chapa y el bastidor; sin carga el resultado quedaría PENDIENTE.",
+                          "Fija las ruedas, la chapa y el bastidor; si no la indica, se adoptan 250 kg/m².",
                           [{"label": "250 kg", "value": 250}, {"label": "500 kg", "value": 500},
                            {"label": "800 kg", "value": 800}], "verificacion"))
     if "CARGA_HORIZONTAL" not in values and "CARGA_HORIZONTAL" not in asked:
@@ -564,7 +591,7 @@ def _missing_tarima(values: dict[str, Any], asked: set[str]) -> list[Question]:
         prop = tarima_load_kg(L, W)
         q.append(Question("CARGA_TOTAL", "¿Qué carga repartida soportará la tarima (kg en total)? EN ISO 14122-2 pide al "
                                          f"menos 2 kN/m²: {prop:g} kg para {L * W * 1e-6:g} m².",
-                          "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.",
+                          "Si no la indica, se adopta la de EN ISO 14122-2 (2 kN/m²).",
                           [{"label": f"EN ISO 14122-2 ({prop:g} kg)", "value": prop},
                            {"label": f"Taller, 5 kN/m² ({tarima_load_kg(L, W, 5.0):g} kg)",
                             "value": tarima_load_kg(L, W, 5.0)}], "verificacion", prop))
@@ -610,7 +637,7 @@ def _missing_shelf(values: dict[str, Any], asked: set[str], family: str = "estan
         q.append(Question("CARGA_POR_NIVEL", ("¿Qué carga soportará cada bandeja (cada módulo y nivel, kg)" if bat else
                                               "¿Qué carga soportará cada nivel (kg)") + " y estará repartida (cajas) o "
                                              "concentrada (piezas pesadas)?",
-                          "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.",
+                          "Si no la indica, se adopta la carga de uso habitual por m² de bandeja.",
                           [{"label": f"{n} kg", "value": n} for n in loads], "verificacion"))
     if cart and "CARGA_HORIZONTAL" not in values and "CARGA_HORIZONTAL" not in asked:
         q.append(Question("CARGA_HORIZONTAL", "¿Qué fuerza de maniobra tendrá el carro (empuje con las ruedas frenadas "
@@ -643,8 +670,7 @@ def proposal_for(family: str, values: dict[str, Any]) -> dict[str, Any]:
     if family == "tarima":
         p: dict[str, Any] = {k: v for k, v in (("LONGITUD", 1200.0), ("ANCHURA", 800.0), ("ALTURA", 200.0))
                              if k not in values}
-        if values.get("CARGA_TOTAL") is None:
-            p["CARGA_TOTAL"] = tarima_load_kg(values.get("LONGITUD", 1200.0), values.get("ANCHURA", 800.0))
+        # la carga repartida no se fija aquí: el motor adopta la de EN ISO 14122-2 con las medidas finales
         if values.get("CARGA_PUNTUAL") is None:
             p["CARGA_PUNTUAL"] = 153.0
         for k in ("PERFIL_PATA", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ESPESOR_PLACA"):
@@ -726,7 +752,8 @@ def describe(it: Interpretation) -> list[str]:
         out.append(f"Carga sobre balda: {v['CARGA_BALDA']:g} kg.")
     if "CARGA_PUNTUAL" in v:
         out.append(f"Carga puntual: {v['CARGA_PUNTUAL']:g} kg.")
-    out.append("Material: " + (v["MATERIAL_ESTRUCTURAL"] if "MATERIAL_ESTRUCTURAL" in v else "pendiente de selección") + ".")
+    if "MATERIAL_ESTRUCTURAL" in v:
+        out.append(f"Material: {v['MATERIAL_ESTRUCTURAL']}.")
     if it.family == "tarima":
         out.append("Superficie: chapa de acero soldada al bastidor (antideslizante a prever); cargas de EN ISO 14122-2.")
     if it.family == "armario":
@@ -736,7 +763,8 @@ def describe(it: Interpretation) -> list[str]:
                    "cerradura.")
         out.append("Cerramiento: laterales y fondo de chapa atornillados a los montantes; la bandeja superior es el techo.")
     if it.family in ("estanteria", "estanteria_bateria", "tarima", "armario"):
-        out.append("Anclaje: " + {"al_suelo": "al suelo", "ninguno": "sin anclaje"}.get(v.get("ANCLAJE"), "pendiente") + ".")
+        out.append("Anclaje: " + {"al_suelo": "al suelo", "ninguno": "sin anclaje"}.get(
+            v.get("ANCLAJE"), "lo decide el cálculo de vuelco") + ".")
     if it.family in MESA_LIKE:
         out.append("Balda inferior: " + ("sí" if v.get("NUMERO_BALDAS", None) == 1 else
                                          "no" if v.get("NUMERO_BALDAS") == 0 else "no indicada") + ".")

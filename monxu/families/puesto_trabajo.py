@@ -25,7 +25,7 @@ from ..core.model import Joint, ProfilePart, SheetPart, StandardPart
 from ..core.params import ParamError, AUTO, ParamSpec
 from .base import register
 from .mesa_industrial import (ALLP, CANDIDATES as MESA_CANDIDATES, CONSTRUCTIVE_DEFAULTS as MESA_DEFAULTS, MesaIndustrial,
-                              even_positions, flange_hole_d, frame_z)
+                              even_positions, flange_hole_d, frame_z, r10)
 
 CANDIDATES = {**MESA_CANDIDATES,
               "PERFIL_ALTILLO": ["RHS 40x20x2", "RHS 50x30x2", "RHS 60x30x2", "RHS 60x40x2", "RHS 80x40x2", "RHS 80x40x3"]}
@@ -60,6 +60,16 @@ class PuestoTrabajo(MesaIndustrial):
 
     def vertical_load_present(self, v):
         return super().vertical_load_present(v) or bool(v.get("CARGA_ESTANTE") and v.get("ESTANTE_SUPERIOR"))
+
+    #: carga de uso por defecto del estante superior (cajas de piezas y pequeño material), kg/m²
+    shelf_top_load_kg_m2 = 100
+
+    def default_loads(self, v):
+        out = super().default_loads(v)
+        if v.get("ESTANTE_SUPERIOR"):
+            q, L, D = self.shelf_top_load_kg_m2, v.get("LONGITUD") or 0, v.get("PROFUNDIDAD_ESTANTE") or 0
+            out["CARGA_ESTANTE"] = (r10(q * (L * D * 1e-6)), f"{q:g} kg/m² sobre el estante de {L:g} × {D:g} mm")
+        return out
 
     def plate_targets(self, v):
         out = super().plate_targets(v)

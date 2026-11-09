@@ -48,6 +48,9 @@ class CarroPlataforma(CarroTaller):
     top_label = "Plataforma"
     min_clear_height = None          # no hay puesto de trabajo bajo la plataforma
 
+    def use_load_kg_m2(self, v) -> float:
+        return 250.0
+
     # ------------------------------------------------------------------ parámetros
     def param_specs(self):
         P = ParamSpec

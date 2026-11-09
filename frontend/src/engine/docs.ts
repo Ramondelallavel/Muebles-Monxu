@@ -263,6 +263,6 @@ ${e.checks.map((c) => `<tr><td>${esc(c.id)}</td><td>${esc(c.description)}</td><t
 <h2>11. Lista de materiales</h2><table>${row(["Pos.", "Referencia", "Descripción", "Material", "Esp.", "Largo", "Ancho", "Cant.", "Peso unit. kg", "Peso total kg"], "th")}${b.rows.map((r) => row([r.pos, r.ref, r.description, r.material, r.thickness, r.length, r.width, r.qty, num(r.unit_mass, 3), num(r.total_mass, 3)])).join("")}
 <tr><th colspan="7">Total</th><th>${b.totals.components}</th><th></th><th>${num(b.totals.total_mass, 2)}</th></tr></table>
 <h2>12. Normas de referencia</h2><ul>${C.standards(summary.family).map((s) => `<li>${esc(s.code)}:${esc(s.version)} — ${esc(s.title)}${s.applicability ? " (" + esc(s.applicability) + ")" : ""}</li>`).join("")}</ul>
-<p><em>La identificación de normas es orientativa. La validación definitiva del producto corresponde a un técnico competente.</em></p>
+<p><em>La identificación de normas aplicables es orientativa; el responsable técnico del fabricante la confirma al firmar el expediente.</em></p>
 </body></html>`;
 }

@@ -370,8 +370,14 @@ def test_assistant_tarima():
     assert p.family == "tarima"
     assert p.values == {"LONGITUD": 2000.0, "ANCHURA": 1000.0, "ALTURA": 300.0, "ANCLAJE": "al_suelo", "CARGA_TOTAL": 408.0}
     r = assistant.handle(assistant.new_state(), "tarima de 1200 x 800 x 200")
-    assert r["family_implemented"] and r["parameters"]["CARGA_TOTAL"] == 196.0 and r["parameters"]["CARGA_PUNTUAL"] == 153.0
-    assert "NUMERO_BALDAS" not in r["parameters"]
+    # la carga repartida no se fija en la propuesta: el motor adopta la de EN ISO 14122-2 con las medidas finales
+    assert r["family_implemented"] and r["ready_to_generate"] and "CARGA_TOTAL" not in r["parameters"]
+    assert r["parameters"]["CARGA_PUNTUAL"] == 153.0 and "NUMERO_BALDAS" not in r["parameters"]
+    a = next(x for x in r["assumptions"] if x["param"] == "CARGA_TOTAL")
+    assert a["value"] == 200.0 and "EN ISO 14122-2" in a["text"]           # 2 kN/m² × 0,96 m², hacia arriba a 10 kg
+    d = regenerate("tarima", r["parameters"])
+    assert d.model.params.values["CARGA_TOTAL"] == 200.0 and d.model.params.sources["CARGA_TOTAL"] == "por_uso"
+    assert d.eng["status"] == "CUMPLE"
     # sólo planta en cualquier familia: «1800 x 800» es largo × ancho
     assert parse("mesa de 1800 x 800 con 300 kg").values == {"LONGITUD": 1800.0, "ANCHURA": 800.0, "CARGA_TOTAL": 300.0}
 

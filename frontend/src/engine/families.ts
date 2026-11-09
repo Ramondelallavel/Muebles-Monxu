@@ -80,6 +80,20 @@ class MesaIndustrial {
       travesano_int_sup: "PERFIL_TRAVESANO", larguero_inf: "PERFIL_BASTIDOR", travesano_ext_inf: "PERFIL_BASTIDOR",
       travesano_int_inf: "PERFIL_BASTIDOR", reposapies: "PERFIL_REPOSAPIES" }[role] ?? null;
   }
+  /** Carga de uso de la balda inferior respecto de la de la encimera. */
+  get shelf_load_ratio() { return 0.5; }
+  useLoadKgM2(v) { return USE_LOAD_KG_M2[v.USO || "montaje"] ?? 150; }
+  /** Cargas de uso que se adoptan cuando no se indican: {parámetro: [kg, explicación]}. */
+  defaultLoads(v) {
+    const q = this.useLoadKgM2(v), L = v.LONGITUD || 0, W = v.ANCHURA || 0;
+    const uso = v.USO ? `, uso ${v.USO}` : "";
+    const out = { CARGA_TOTAL: [r10(q * (L * W * 1e-6)), `${g(q)} kg/m² sobre ${g(L)} × ${g(W)} mm${uso}`] };
+    if ((v.NUMERO_BALDAS || 0) >= 1 && this.specs().some((s) => s.name === "CARGA_BALDA")) {
+      const qb = q * this.shelf_load_ratio;
+      out.CARGA_BALDA = [r10(qb * (L * W * 1e-6)), `${g(qb)} kg/m² sobre la balda`];
+    }
+    return out;
+  }
   verticalLoadPresent(v) { return !!(v.CARGA_TOTAL || v.CARGA_PUNTUAL); }     // la carga puntual también dimensiona
   plateTargets(v) {
     const out = [];
@@ -156,6 +170,7 @@ class MesaIndustrial {
     ctx.feature("F40", this.support_group[1], () => {
       ctx.uses(this.support_param, "LONGITUD", "ANCHURA", "RETRANQUEO", "PERFIL_PATA");
       feet(model, d, corners, cname, V[this.support_param], foot, this.support_group[0], (k) => this._supportPart(k, V));
+      addAnchors(model, V, corners, cname, this.support_group[0]);
     });
     this._buildTop(model, ctx, d, H, mat_c, fin);
     if (d.shelf) ctx.feature("F30", "Balda inferior de chapa plegada", () => {
@@ -414,6 +429,24 @@ function feet(model, d, corners, cname, code, foot, g = "APO", partOf = null) {
   }
 }
 
+/** Carga de uso por defecto sobre la superficie de trabajo según el uso previsto (kg/m²), cuando no se indica. */
+const USE_LOAD_KG_M2 = { montaje_ligero: 100, inspeccion: 100, laboratorio: 100, embalaje: 100, montaje: 150, trabajo_pesado: 300 };
+/** Carga redondeada a 10 kg (mínimo 10 kg); mismo valor que r10 de Python. */
+export const r10 = (x) => Math.max(10, Math.floor(x / 10 + 0.5) * 10);
+
+/** Tacos de anclaje al suelo (uno bajo cada pie, embebidos en el hormigón) cuando ANCLAJE = al_suelo. */
+function addAnchors(model, V, corners, names, group) {
+  const code = V.TACO_ANCLAJE;
+  if (V.ANCLAJE !== "al_suelo" || code == null || code === AUTO) return;
+  const c = C.component(code), part = standardPart("anclaje", code);
+  for (const [k, [x, y]] of Object.entries(corners)) {
+    const iid = `${group}.ANC.${k}`;
+    model.add(iid, `Taco de anclaje ${names[k]}`, part, translation(x, y, -c.embed_mm), group, { tags: { explode_extra: [0.0, 0.0, -60.0] } });
+    model.joint({ id: `J.ANC.${k}`, kind: "roscada", members: [iid, `${group}.PIE.${k}`], location: [x, y, 0.0],
+      description: `Taco de anclaje ${c.thread} en el suelo a través de la base del pie` });
+  }
+}
+
 function makeWelder(model) {
   return (jid, a_id, end, b_id, prof, desc) => {
     const tmin = Math.min(model.instance(a_id).part.profile.t, model.instance(b_id).part.profile.t);
@@ -581,6 +614,12 @@ class Estanteria extends MesaIndustrial {
     if (role.startsWith("travesano")) return "PERFIL_TRAVESANO";
     return null;
   }
+  /** Carga de uso por defecto por nivel (kg/m² de bandeja) cuando no se indica. */
+  get level_load_kg_m2() { return 150; }
+  defaultLoads(v) {
+    const q = this.level_load_kg_m2, W = v.ANCHURA || 0, D = v.PROFUNDIDAD || 0;
+    return { CARGA_POR_NIVEL: [r10(q * (W * D * 1e-6)), `${g(q)} kg/m² sobre la bandeja de ${g(W)} × ${g(D)} mm`] };
+  }
   verticalLoadPresent(v) { return !!v.CARGA_POR_NIVEL; }
   plateTargets(v) {
     if (!v.CARGA_POR_NIVEL) return [];
@@ -633,6 +672,7 @@ class Estanteria extends MesaIndustrial {
     ctx.feature("F40", this.support_group[1], () => {
       ctx.uses(sp, "ANCHURA", "PROFUNDIDAD", "PERFIL_MONTANTE");
       feet(model, d, corners, cname, V[sp], foot, this.support_group[0], sp === "PIE_NIVELADOR" ? null : (k) => this._supportPart(k, V));
+      addAnchors(model, V, corners, cname, this.support_group[0]);
     });
     const tray = sheetPart("balda", `Bandeja chapa ${g(d.spec.t)} mm`, d.spec, mat_c, fin);
     d.level_ids.forEach((lid, i0) => {
@@ -756,6 +796,16 @@ class PuestoTrabajo extends MesaIndustrial {
     return super.paramForRole(role);
   }
   verticalLoadPresent(v) { return super.verticalLoadPresent(v) || !!(v.CARGA_ESTANTE && v.ESTANTE_SUPERIOR); }
+  /** Carga de uso por defecto del estante superior (cajas de piezas y pequeño material), kg/m². */
+  get shelf_top_load_kg_m2() { return 100; }
+  defaultLoads(v) {
+    const out = super.defaultLoads(v);
+    if (v.ESTANTE_SUPERIOR) {
+      const q = this.shelf_top_load_kg_m2, L = v.LONGITUD || 0, D = v.PROFUNDIDAD_ESTANTE || 0;
+      out.CARGA_ESTANTE = [r10(q * (L * D * 1e-6)), `${g(q)} kg/m² sobre el estante de ${g(L)} × ${g(D)} mm`];
+    }
+    return out;
+  }
   plateTargets(v) {
     const out = super.plateTargets(v);
     if (v.ESTANTE_SUPERIOR && v.CARGA_ESTANTE) out.push({ surface: "estante", t_param: "ESPESOR_ESTANTE", n_param: "NUMERO_TRAVESANOS_ESTANTE",
@@ -1066,6 +1116,8 @@ class CarroTaller extends MesaIndustrial {
     const st = super._structure(model, d, legs);
     const mode = d.asa_mode;
     st.product_word = mode !== "ninguna" ? "carro" : "mesa";
+    // con asa se maniobra en la dirección de la marcha (X); sin asa, se empuja desde cualquier lado
+    st.mobile = mode !== "ninguna";
     const brake = mode === "un_extremo" ? "Las ruedas con freno van en el extremo del asa." : "Las ruedas con freno van en el extremo izquierdo (X = 0).";
     const notch = { un_extremo: ", con las escotaduras alrededor de los montantes del asa,", dos_extremos: ", con las escotaduras alrededor de los montantes de las asas,", ninguna: "" }[mode];
     st.assembly_texts = {
@@ -1095,6 +1147,7 @@ const hingeCount = (h) => (h <= 1200 ? 2 : h <= 1800 ? 3 : 4);
 const mrow = (x, y, z, rot) => [[...rot[0], x], [...rot[1], y], [...rot[2], z], [0, 0, 0, 1]];
 class Armario extends Estanteria {
   constructor() { super("armario"); }
+  get level_load_kg_m2() { return 100; }            // carga de uso por defecto de cada bandeja (kg/m²)
   _deriveShelf(ctx, model) {
     const d = super._deriveShelf(ctx, model);
     const v = ctx.params.values, A = v.ANCHURA;
@@ -1294,6 +1347,7 @@ const FRAME_CLEARANCE = 20.0;          // mm libres entre el bastidor y la placa
 const PLATFORM_H_MAX = 500.0;          // altura máxima de la plataforma (ParamSpec de ALTURA)
 class CarroPlataforma extends CarroTaller {
   constructor() { super("carro_plataforma"); Object.assign(this, { top_label: "Plataforma", min_clear_height: null }); }
+  useLoadKgM2(v) { return 250.0; }
   plateTargets(v) { return super.plateTargets(v).map((t) => ({ ...t, label: "la plataforma" })); }
   _hasShelf(ctx) { return false; }
   _derive(ctx, model) {
@@ -1364,6 +1418,7 @@ class CarroEstanteria extends Estanteria {
       support_param: "RUEDA", support_category: "ruedas_espiga", support_group: ["RUE", "Ruedas"] });
   }
   paramForRole(role) { return role === "asa" ? "PERFIL_ASA" : super.paramForRole(role); }
+  get level_load_kg_m2() { return 100; }            // carga de uso por defecto de cada bandeja (kg/m²)
   _supportPart(corner, V) {
     const code = V.RUEDA;
     return corner === "DI" || corner === "TI" ? [standardPart("rueda", `${code}_FRENO`), "Rueda con freno"] : [standardPart("rueda", code), "Rueda giratoria"];
@@ -1427,6 +1482,7 @@ class CarroEstanteria extends Estanteria {
     const V = model.params.values;
     st.product_word = "carro";
     st.push_height = Math.min(V.ALTURA_ASA, V.ALTURA);        // vuelco: altura de la mano o del asa
+    st.mobile = d.asa_mode !== "ninguna";                    // con asa: maniobra en la dirección de la marcha (X)
     const { APO, ...texts } = st.assembly_texts;
     texts.RUE = "Roscar las ruedas de espiga en las tuercas soldadas de las placas base hasta el tope y bloquearlas con su contratuerca. "
       + "Las ruedas con freno van en el extremo izquierdo (X = 0).";
@@ -1531,6 +1587,7 @@ class EstanteriaBateria extends Estanteria {
     ctx.feature("F40", this.support_group[1], () => {
       ctx.uses(sp, "ANCHURA", "NUMERO_MODULOS", "PROFUNDIDAD", "PERFIL_MONTANTE");
       feet(model, d, corners, cname, V[sp], foot, this.support_group[0], null);
+      addAnchors(model, V, corners, cname, this.support_group[0]);
     });
     const tray = sheetPart("balda", `Bandeja chapa ${g(d.spec.t)} mm`, d.spec, mat_c, fin);
     d.level_ids.forEach((lid, i0) => {
@@ -1665,6 +1722,9 @@ class MesaSoldadura extends MesaIndustrial {
     super(id);
     Object.assign(this, { top_iid: "ENC.PLACA", top_label: "Placa de soldadura" });
   }
+  /** Carga de uso por defecto de la placa (piezas y utillaje pesados) y de la balda inferior. */
+  get shelf_load_ratio() { return 0.3; }
+  useLoadKgM2(v) { return 500.0; }
   plateTargets(v) {
     const out = [];
     if (v.CARGA_TOTAL || v.CARGA_PUNTUAL) {
@@ -1785,6 +1845,12 @@ class Tarima extends MesaSoldadura {
   constructor() {
     super("tarima");
     Object.assign(this, { top_iid: "ENC.PLACA", top_label: "Superficie de la tarima" });
+  }
+  /** EN ISO 14122-2: 2 kN/m² de carga repartida, redondeado hacia arriba a 10 kg. */
+  defaultLoads(v) {
+    const L = v.LONGITUD || 0, W = v.ANCHURA || 0;
+    const kg = Math.max(10, Math.ceil((2.0 * L * W * 1e-6) / 9.81e-3 / 10) * 10);
+    return { CARGA_TOTAL: [kg, `2 kN/m² de EN ISO 14122-2 sobre ${g(L)} × ${g(W)} mm`] };
   }
   plateTargets(v) {
     if (!(v.CARGA_TOTAL || v.CARGA_PUNTUAL)) return [];

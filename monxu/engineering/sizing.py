@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from .. import catalog
 from ..core.params import AUTO, ParameterSet
-from .analysis import analyze, surface_sheet
+from .analysis import analyze, overturning, surface_sheet
 from .plate import navier
 
 G_ACC = 9.81
@@ -130,9 +130,9 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
             ps.sources[k] = "regla_diseno"
     if not have_load and (prof_autos or any(k in autos for k in defaults)):
         notes.append({"level": "propuesta", "code": "DIM-SIN-CARGA",
-                      "message": "Sin carga vertical de trabajo definida: espesores y separación de apoyos según "
-                                 "reglas constructivas; los perfiles sólo se comprueban frente al empuje horizontal. "
-                                 "La resistencia a cargas verticales queda PENDIENTE de verificación."})
+                      "message": "Sin carga vertical de uso (0 kg indicados): espesores y separación de apoyos según "
+                                 "reglas constructivas; la estructura se verifica con su peso propio y el empuje "
+                                 "horizontal."})
     sp = getattr(family, "support_param", "PIE_NIVELADOR")
     foot_auto = v.get(sp) == AUTO
     if foot_auto:
@@ -212,7 +212,7 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
         for k in prof_autos:
             ps.sources[k] = "calculo"
         notes.append({"level": "propuesta", "code": "DIM-PERFILES",
-                      "message": "Perfiles dimensionados por cálculo preliminar (sección mínima de la serie que "
+                      "message": "Perfiles dimensionados por cálculo (sección mínima de la serie que "
                                  "verifica resistencia, pandeo, flechas y soldaduras): " +
                                  ", ".join(f"{k} = {ps.values[k]}" for k in prof_autos), "iterations": iterations})
         plates()      # re-verifica el reparto de travesaños con los perfiles finales
@@ -233,7 +233,40 @@ def resolve_auto(family, params: ParameterSet, autos: list[str]):
                 break
             notes[:] = [n for n in notes if n.get("code") not in ("DIM-PERFILES", "DIM-PIES")]
             size_profiles()
+    if ps.values.get("TACO_ANCLAJE") == AUTO:
+        _select_anchor(family, ps, notes)
     return ps, notes
+
+
+def _select_anchor(family, ps: ParameterSet, notes: list) -> None:
+    """Taco de anclaje de menor capacidad que resiste la tracción de cálculo por taco (vuelco EQU del conjunto vacío
+    bajo el empuje horizontal). Sin anclaje al suelo, el taco no se usa: valor constructivo."""
+    anchors = sorted(((k, c) for k, c in catalog.components().items() if c["category"] == "anclajes"),
+                     key=lambda kv: kv[1]["tension_kN"])
+    if ps.values.get("ANCLAJE") != "al_suelo":
+        ps.values["TACO_ANCLAJE"] = family.constructive_defaults.get("TACO_ANCLAJE", anchors[0][0])
+        ps.sources["TACO_ANCLAJE"] = "regla_diseno"
+        return
+    ps.values["TACO_ANCLAJE"] = anchors[0][0]        # provisional: el taco no cambia el vuelco
+    m = family.construct(ps)
+    ov = overturning(m, ps.values)
+    need = ov["T_per"] if ov else 0.0
+    for code, c in anchors:
+        if c["tension_kN"] * 1000.0 >= need:
+            ps.values["TACO_ANCLAJE"] = code
+            ps.sources["TACO_ANCLAJE"] = "calculo"
+            notes.append({"level": "propuesta", "code": "DIM-ANCLAJE",
+                          "message": f"Taco de anclaje seleccionado por cálculo: {c['name'][:1].lower() + c['name'][1:]} (tracción de cálculo "
+                                     f"{need:.0f} N por taco ≤ {c['tension_kN'] * 1000:.0f} N de catálogo). Capacidad a "
+                                     "confirmar con la ETA del fabricante y el soporte real."})
+            return
+    code, c = anchors[-1]
+    ps.values["TACO_ANCLAJE"] = code
+    ps.sources["TACO_ANCLAJE"] = "calculo"
+    notes.append({"level": "advertencia", "code": "DIM-ANCLAJE",
+                  "message": f"Ningún taco del catálogo resiste {need:.0f} N de tracción por taco: se mantiene el "
+                             f"{c['name'][:1].lower() + c['name'][1:]} y la comprobación no se cumplirá (reduzca el "
+                             "empuje o amplíe la base)."})
 
 
 def _sway_member(family, m, ps: ParameterSet, prof_autos, idx, cands, axis: int) -> str | None:
@@ -265,33 +298,47 @@ def _fit_leg(family, ps: ParameterSet, prof_autos) -> bool:
     return changed
 
 
-def _select_feet(family, ps: ParameterSet, notes: list) -> None:
-    """Pie nivelador de menor capacidad nominal que soporta la peor reacción vertical de servicio (combinaciones con
-    peso propio: carga uniforme, puntual, reposapiés...)."""
+def _support_need(family, ps: ParameterSet) -> float | None:
+    """Peor reacción vertical de servicio por apoyo (kg) con los apoyos que tiene ``ps``."""
     m = family.construct(ps)
     rep = analyze(m, include_stability=False, include_welds=False)
     grav = {c for c, f in rep["combinations"]["ELS"].items() if "G" in f}
     rz = [r["Rz_N"] for r in rep["reactions"] if r["combination"] in grav]
-    if not rz:
+    return max(rz) / G_ACC if rz else None
+
+
+def _select_feet(family, ps: ParameterSet, notes: list) -> None:
+    """Pie nivelador de menor capacidad nominal que soporta la peor reacción vertical de servicio (combinaciones con
+    peso propio: carga uniforme, puntual, reposapiés...). La reacción se comprueba con el propio pie montado: otro pie
+    cambia la longitud de la pata y la reacción (antes la rueda elegida podía quedar al 100,1 %)."""
+    need = _support_need(family, ps)
+    if need is None:
         return
-    need = max(rz) / G_ACC
     sp = getattr(family, "support_param", "PIE_NIVELADOR")
     cat = getattr(family, "support_category", "patas")
     word = "Rueda" if cat.startswith("ruedas") else "Pie nivelador"
     feet = sorted((c for c in catalog.components().items() if c[1]["category"] == cat and not c[1].get("brake")),
                   key=lambda kv: kv[1]["rated_load_kg"])
     leg = catalog.profile(ps.values[family.leg_param])
+    before = ps.values[sp]
     for code, c in feet:
         nut = catalog.component(f"TUERCA_SOLDAR_{c['thread']}")
         fits = nut["s"] / 0.8660254 <= leg.B - 2 * leg.t - 1
-        if c["rated_load_kg"] >= need and fits:
-            ps.values[sp] = code
-            ps.sources[sp] = "calculo"
-            notes.append({"level": "propuesta", "code": "DIM-PIES",
-                          "message": f"{word} seleccionad{'a' if word == 'Rueda' else 'o'} por cálculo: {c['name']} (capacidad nominal de catálogo "
-                                     f"{c['rated_load_kg']} kg ≥ reacción de servicio {need:.0f} kg por apoyo). Capacidad "
-                                     "a confirmar con la ficha del proveedor."})
-            return
+        if not fits or c["rated_load_kg"] < need:
+            continue
+        ps.values[sp] = code
+        own = _support_need(family, ps)          # con este pie montado
+        if own is not None and c["rated_load_kg"] < own:
+            need = max(need, own)
+            continue
+        need = own if own is not None else need
+        ps.sources[sp] = "calculo"
+        notes.append({"level": "propuesta", "code": "DIM-PIES",
+                      "message": f"{word} seleccionad{'a' if word == 'Rueda' else 'o'} por cálculo: {c['name']} (capacidad nominal de catálogo "
+                                 f"{c['rated_load_kg']} kg ≥ reacción de servicio {need:.0f} kg por apoyo). Capacidad "
+                                 "a confirmar con la ficha del proveedor."})
+        return
+    ps.values[sp] = before
     notes.append({"level": "advertencia", "code": "DIM-PIES",
                   "message": f"Ningún {word.lower()} del catálogo admite {need:.0f} kg por apoyo con la pata/montante "
                              f"{leg.code}: se mantiene {ps.values[sp]} y la comprobación no se cumplirá."})

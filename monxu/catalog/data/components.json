@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026.11-6",
+    "version": "2026.11-7",
     "note": "Componentes normalizados y comerciales. Las capacidades de carga de componentes comerciales (pies, ruedas) son datos de catálogo de referencia genéricos y DEBEN confirmarse con la ficha técnica del proveedor seleccionado; el informe de cálculo las marca como tales. Masas de tornillería: valores típicos de catálogo (orientativos)."
   },
   "components": {
@@ -606,6 +606,54 @@
       "dims": [25, 30, 120],
       "mass_kg": 0.25,
       "note": "Envolvente simplificada; taladro de montaje en la puerta no modelado."
+    },
+    "ANCLAJE_M8": {
+      "category": "anclajes",
+      "name": "Taco de anclaje mecánico de expansión M8 (hormigón)",
+      "standard": "ETA según fabricante",
+      "thread": "M8",
+      "dims": [8, 8, 50],
+      "embed_mm": 50,
+      "tension_kN": 1.5,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 0.04,
+      "note": "Carga de tracción recomendada en hormigón C20/25 no fisurado (catálogo genérico): confirmar con la ETA del taco elegido y el soporte real."
+    },
+    "ANCLAJE_M10": {
+      "category": "anclajes",
+      "name": "Taco de anclaje mecánico de expansión M10 (hormigón)",
+      "standard": "ETA según fabricante",
+      "thread": "M10",
+      "dims": [10, 10, 60],
+      "embed_mm": 60,
+      "tension_kN": 2.5,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 0.07,
+      "note": "Carga de tracción recomendada en hormigón C20/25 no fisurado (catálogo genérico): confirmar con la ETA del taco elegido y el soporte real."
+    },
+    "ANCLAJE_M12": {
+      "category": "anclajes",
+      "name": "Taco de anclaje mecánico de expansión M12 (hormigón)",
+      "standard": "ETA según fabricante",
+      "thread": "M12",
+      "dims": [12, 12, 70],
+      "embed_mm": 70,
+      "tension_kN": 4.0,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 0.12,
+      "note": "Carga de tracción recomendada en hormigón C20/25 no fisurado (catálogo genérico): confirmar con la ETA del taco elegido y el soporte real."
+    },
+    "ANCLAJE_M16": {
+      "category": "anclajes",
+      "name": "Taco de anclaje mecánico de expansión M16 (hormigón)",
+      "standard": "ETA según fabricante",
+      "thread": "M16",
+      "dims": [16, 16, 85],
+      "embed_mm": 85,
+      "tension_kN": 6.5,
+      "rated_load_source": "catalogo_generico",
+      "mass_kg": 0.25,
+      "note": "Carga de tracción recomendada en hormigón C20/25 no fisurado (catálogo genérico): confirmar con la ETA del taco elegido y el soporte real."
     }
   },
   "consumables": {

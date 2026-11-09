@@ -3,6 +3,7 @@
 // monxu/validation/qa.py). Lo que en el navegador no puede verificarse con B-rep se declara PENDIENTE.
 import * as C from "./catalog";
 import { analyze } from "./analysis";
+import { proposeFix } from "./autofix";
 import { family } from "./families";
 import { instanceBBox, modelBBox, partGeometry } from "./geometry";
 import { buildBom, dfmCheck, manufacturingPlan } from "./manufacturing";
@@ -130,11 +131,11 @@ export function modelChecks(model, eng, dfm, bom, interf) {
     if (v?.details?.empuje_admisible_N != null) advice = ` · Propuesta frente al vuelco: vacía, la configuración admite ${Math.round(v.details.empuje_admisible_N)} N de empuje `
       + `horizontal sin anclar (supuesto actual ${Math.round(ps.CARGA_HORIZONTAL ?? 0)} N). Confirme el empuje real en «Cargas y uso» o elija ANCLAJE = al suelo.`;
     if (fails.some((c) => c.id !== "E.VUELCO")) advice += " · Las demás comprobaciones se corrigen dejando los perfiles y espesores en «auto» para que el dimensionado los aumente.";
-    q.add(WARN, "CALC-NO-CUMPLE", "Verificación estructural preliminar NO superada (no apto para fabricación hasta modificar el diseño): "
+    q.add(WARN, "CALC-NO-CUMPLE", "Verificación estructural NO superada (no apto para fabricación hasta modificar el diseño): "
       + fails.map((c) => c.description).join("; ") + advice);
   }
   else if (eng.status === "PENDIENTE") q.add(PEND, "CALC-PENDIENTE", "Verificación estructural incompleta: " + (eng.pending.length ? eng.pending : ["datos pendientes"]).join("; "));
-  else q.add(OKL, "CALC", "Verificación estructural preliminar automatizada: CUMPLE.");
+  else q.add(OKL, "CALC", "Verificación estructural automatizada completa: CUMPLE.");
   q.add(PEND, "VALIDACION-TECNICA", "Validación definitiva por técnico competente pendiente de firma.");
   return q;
 }
@@ -163,6 +164,12 @@ export function regenerate(familyId, values, sources = {}, onProgress = null) {
   const interf = checkInterferences(model);
   t.interferencias = (now() - t1) / 1000;
   const q = modelChecks(model, eng, dfm, bom, interf);
+  let fix = null;
+  if (eng.status === "NO_CUMPLE") {       // corrección mínima de los valores fijados, comprobada antes de ofrecerla
+    t1 = now();
+    fix = proposeFix(fam, values, sources, eng);
+    t.correccion = (now() - t1) / 1000;
+  }
   t.total = (now() - t0) / 1000;
   const qa = q.result();
   const summary = {
@@ -172,7 +179,7 @@ export function regenerate(familyId, values, sources = {}, onProgress = null) {
     interferences: interf,
     qa, status: { geometry_complete: qa.blocking === 0, technically_verified: eng.status === "CUMPLE", structural: eng.status, structural_label: eng.status_label },
     mass_kg: bom.totals.total_mass, timings: Object.fromEntries(Object.entries(t).map(([k, v]) => [k, Math.round(v * 1000) / 1000])),
-    cost: quotation(model, plan),
+    cost: quotation(model, plan), fix,
     catalog_versions: C.versions, engine: "navegador",
   };
   return { model, summary };

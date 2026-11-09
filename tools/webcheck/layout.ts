@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 const args = process.argv.slice(2);
 const cases = args[0] === "-" ? JSON.parse(fs.readFileSync(0, "utf8")) : [{ id: args[0], family: args[0], values: JSON.parse(args[1]), out: args[2] }];
 const info = { product_name: "", project_code: "P-2026-0001", revision: "A", date: "2026-11-06", designer: "Ingeniería", client: "Cliente",
-  tolerances: "ISO 2768-mK", status_stamp: "PRELIMINAR", status_level: "warn" };
+  tolerances: "ISO 2768-mK", status_stamp: "CÁLCULO VERIFICADO — CUMPLE (EN 1990 / EN 1993)", status_level: "info" };
 const res = [];
 for (const c of cases) {
   const { model, summary } = regenerate(c.family, c.values);

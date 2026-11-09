@@ -213,6 +213,10 @@ function standardSolids(part) {
     const d = parseFloat(c.thread.slice(1)), h1 = c.base_h, h2 = c.base_h + 6, h3 = c.base_h + 6 + c.stem_len;
     return [revolve([[0, 0], [c.base_d / 2, 0], [c.base_d / 2, h1], [d * 0.8, h1], [d * 0.8, h2], [d / 2, h2], [d / 2, h3], [0, h3]])];
   }
+  if (c.category === "anclajes") {     // taco embebido en el suelo: cilindro de la rosca × profundidad de anclaje
+    const d = parseFloat(c.thread.slice(1)), L = +c.embed_mm;
+    return [revolve([[0, 0], [d / 2, 0], [d / 2, L], [0, L]])];
+  }
   if (code.startsWith("TUERCA_SOLDAR")) {
     const Rr = c.s / Math.cos(Math.PI / 6) / 2;
     return [prism(Array.from({ length: 6 }, (_, k) => [Rr * Math.cos((k * Math.PI) / 3), Rr * Math.sin((k * Math.PI) / 3)]), [holeLoop(parseFloat(c.thread.slice(1)), 0, 0, 16)], 0, c.m)];

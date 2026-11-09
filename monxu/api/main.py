@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from .. import catalog
 from ..ai import assistant
+from ..ai import interpreter as I
 from ..cad.export import viewer_payload
 from ..core.params import ParamError
 from ..families import REGISTRY, family, library
@@ -286,23 +287,65 @@ async def preview(body: dict):
     return JSONResponse(_jsonable({"design": d.summary(), "viewer": v}))
 
 
+CHAT_MAX = 40          # mensajes de la conversación que se guardan con el proyecto
+
+
+def _chat_entry(r: dict) -> dict:
+    """Mensaje del asistente tal como se guarda: texto y botones de opción (sin el resto de la respuesta)."""
+    return {"who": "ia", "text": r["reply"],
+            "questions": [{"param": q["param"], "label": q.get("label", q["param"]), "options": q["options"]}
+                          for q in r["questions"] if q.get("options")]}
+
+
 @app.post("/api/projects/{code}/assistant")
 def post_assistant(code: str, body: AssistantIn):
+    """Interpreta el mensaje, adopta lo no indicado y, con ``apply``, aplica al proyecto lo que cambia en este turno.
+    La conversación se guarda con el proyecto (``assistant_state.chat``)."""
     p = store().get(code)
     st = p.assistant_state or assistant.new_state(p.family)
     st.setdefault("family", p.family)
-    r = assistant.handle(st, body.message, body.answers)
-    if r["family"] and r["family"] != p.family:
-        r["reply"] += (f"\nAtención: la solicitud corresponde a «{r['family']}», pero el proyecto es de la familia "
-                       f"«{p.family}». Cree un proyecto nuevo para esa familia.")
-        r["ready_to_generate"] = False
-    store().set_assistant_state(code, r["state"])
-    store().log(code, "asistente", {"message": body.message, "answers": body.answers or {},
-                                    "parameters": r["parameters"]})
+    chat = list(st.get("chat") or [])
+    r = assistant.handle(st, body.message, body.answers, current={"values": p.working_params,
+                                                                  "sources": p.working_sources})
+    switched = None
+    want = (r.get("interpretation") or {}).get("family")
+    if want and want != p.family:
+        if not p.revisions and want in REGISTRY:
+            # proyecto todavía sin revisiones: se cambia de familia y se interpreta de nuevo con la nueva
+            keep, keep_src = I.carry_params(p.family, want, p.working_params or {}, p.working_sources or {},
+                                            family(want).param_specs())
+            store().change_family(code, want, keep, keep_src)
+            switched = {"from": p.family, "to": want}
+            r = assistant.handle(assistant.new_state(want), body.message, body.answers,
+                                 current={"values": keep, "sources": keep_src})
+            r["reply"] = (f"He cambiado el proyecto a «{I.LABELS.get(want, want)}» (todavía no tenía revisiones).\n"
+                          + r["reply"])
+            p = store().get(code)
+        else:
+            r["reply"] += (f"\nAtención: la solicitud corresponde a «{I.LABELS.get(want, want)}», pero el proyecto ya "
+                           f"tiene revisiones de la familia «{I.LABELS.get(p.family, p.family)}». Cree un proyecto nuevo "
+                           "para esa familia.")
+            r["ready_to_generate"] = False
     applied = None
     if body.apply and r["ready_to_generate"]:
-        applied = store().set_params(code, r["parameters"], r["sources"], "asistente")
-    return _jsonable({**{k: v for k, v in r.items() if k != "state"}, "applied": applied})
+        try:
+            trial = family(p.family).new_params()
+            trial.update({**(p.working_params or {}), **r["to_apply"]})
+            applied = store().set_params(code, r["to_apply"], {k: r["sources"][k] for k in r["to_apply"]}, "asistente")
+            r["reply"] += "\n✔ Datos aplicados al proyecto: se genera y verifica el diseño."
+        except ParamError as e:
+            r["reply"] += f"\nNo se han podido aplicar los datos: {e}"
+    if body.message or body.answers:
+        labels = {sp.name: sp.label for sp in family(p.family).param_specs()}
+        txt = body.message or " · ".join(f"{labels.get(k, k)}: {v}" for k, v in (body.answers or {}).items())
+        chat.append({"who": "usuario", "text": txt})
+    chat.append(_chat_entry(r))
+    r["state"]["chat"] = chat[-CHAT_MAX:]
+    store().set_assistant_state(code, r["state"])
+    store().log(code, "asistente", {"message": body.message, "answers": body.answers or {},
+                                    "parameters": r["to_apply"]})
+    return _jsonable({**{k: v for k, v in r.items() if k != "state"}, "applied": applied, "switched": switched,
+                      "chat": r["state"]["chat"]})
 
 
 # ============================================================================ revisiones y expediente

@@ -46,6 +46,9 @@ texts += [
     "armario de taller sin puertas de 1200 x 600 x 2000, 5 niveles de 100 kg", "mesa con armario inferior 1500x700x900",
     "armario inoxidable de 800x400x1800 con puerta doble y 3 estantes de 30 kg cada uno",
     "Un armario de herramientas con 4 puertas",
+    "Quiero una mesa de 2000 x 800 x 900 con balda y 400 kg", "mesa de 2000x800x900 con balda, 400 kg",
+    "mesa 2000x800x900 con una balda inferior y carga de 400 kg", "mesa con balda de 100 kg y 400 kg en la encimera",
+    "mesa 1800x800x900 con balda inferior: 120 kg y 300 kg encima",
 ]
 js = json.loads(subprocess.run(["node", sys.argv[1]], input=json.dumps(texts), capture_output=True, text=True,
                                check=True).stdout)
@@ -57,4 +60,63 @@ for t, j in zip(texts, js):
         bad += 1
         print("DIFF", t, "\n py", py, "\n js", j)
 print("FRASES", len(texts), "DIFERENCIAS", bad)
-sys.exit(1 if bad else 0)
+
+# conversaciones completas: respuesta, supuestos, preguntas y datos aplicados en cada turno, en los dos motores
+from monxu.ai import assistant as A  # noqa: E402
+
+CONVS = [
+    {"family": "mesa_industrial", "turns": [{"message": "Quiero una mesa de 1800 x 800 x 900 con balda"},
+                                            {"message": "carga de 400 kg"}, {"answers": {"USO": "trabajo_pesado"}}]},
+    {"family": "mesa_industrial", "turns": [{"message": "mesa de trabajo"}, {"message": "que sea de 2000 de largo"}]},
+    {"family": "estanteria", "turns": [{"message": "estanteria de 5 niveles"}, {"message": "150 kg por nivel"},
+                                       {"answers": {"ANCLAJE": "ninguno"}}]},
+    {"family": "estanteria_bateria", "turns": [{"message": "estantería en batería de tres módulos de 1000 mm"}]},
+    {"family": "carro_taller", "turns": [{"message": "carro de taller 1000x600x900 con dos asas"}, {"message": "120 kg"}]},
+    {"family": "carro_estanteria", "turns": [{"message": "carro de picking de 4 niveles 1200x600x1600"}]},
+    {"family": "carro_plataforma", "turns": [{"message": "plataforma con ruedas 1000x600"}, {"answers": {"CARGA_TOTAL": 500}}]},
+    {"family": "puesto_trabajo", "turns": [{"message": "puesto de trabajo con estante superior"}]},
+    {"family": "mesa_soldadura", "turns": [{"message": "mesa de soldadura 2000x1000x850 sistema 28"}]},
+    {"family": "tarima", "turns": [{"message": "tarima de 2000 x 1000 a 300 mm"}, {"message": "anclada"}]},
+    {"family": "armario", "turns": [{"message": "armario de 1000x500x1950 con dos puertas"}, {"message": "50 kg por balda"}]},
+    # proyecto con valores ya fijados en el formulario: no se re-proponen ni se deshacen
+    {"family": "mesa_industrial", "start": {"values": {"LONGITUD": 2200.0, "ANCHURA": 900.0, "ALTURA": 850.0},
+                                            "sources": {"LONGITUD": "usuario", "ANCHURA": "usuario", "ALTURA": "usuario"}},
+     "turns": [{"message": "con reposapiés"}, {"message": "carga de 300 kg"}]},
+    # mensajes de seguimiento sin nombrar la familia: accesorios y cargas de la familia de la conversación
+    {"family": "carro_taller", "turns": [{"message": "carro de taller 1000x600x900"}, {"message": "con peto de 60 mm"},
+                                         {"message": "sin asa"}]},
+    {"family": "puesto_trabajo", "turns": [{"message": "puesto de trabajo 1600x750x900"}, {"message": "sin estante superior"},
+                                           {"message": "con reposapiés a 220 mm"}]},
+    {"family": "mesa_industrial", "turns": [{"message": "mesa de 1500x700x900"}, {"message": "que tenga ruedas"}]},
+]
+
+
+def run_conv(conv):
+    st = A.new_state(conv["family"])
+    cur = {"values": dict((conv.get("start") or {}).get("values") or {}),
+           "sources": dict((conv.get("start") or {}).get("sources") or {})}
+    out = []
+    for t in conv["turns"]:
+        r = A.handle(st, t.get("message", ""), t.get("answers"), None, cur)
+        st = r["state"]
+        out.append({"family": r["family"], "reply": r["reply"], "to_apply": r["to_apply"], "ready": r["ready_to_generate"],
+                    "questions": [[q["param"], q["label"]] for q in r["questions"]],
+                    "assumptions": [[a["param"], a["text"]] for a in r["assumptions"]]})
+        cur = {"values": {**cur["values"], **r["to_apply"]},
+               "sources": {**cur["sources"], **{k: r["sources"][k] for k in r["to_apply"]}}}
+    return out
+
+
+jsc = json.loads(subprocess.run(["node", sys.argv[1]], input=json.dumps({"conversations": CONVS}), capture_output=True,
+                                text=True, check=True).stdout)
+bad_c = 0
+for conv, jc in zip(CONVS, jsc):
+    pc = json.loads(json.dumps(run_conv(conv)))
+    for n, (a, b) in enumerate(zip(pc, jc)):
+        if a != b:
+            bad_c += 1
+            for k in a:
+                if a[k] != b.get(k):
+                    print("DIFF CONV", conv["family"], "turno", n + 1, k, "\n py", a[k], "\n js", b.get(k))
+print("CONVERSACIONES", len(CONVS), "TURNOS CON DIFERENCIAS", bad_c)
+sys.exit(1 if bad or bad_c else 0)

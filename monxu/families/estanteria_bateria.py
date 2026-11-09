@@ -24,7 +24,7 @@ from ..core.model import Joint, PlatePart, ProductModel, ProfilePart, SheetPart,
 from ..core.params import AUTO, ParamContext, ParameterSet, ParamSpec
 from .base import register
 from .estanteria import CANDIDATES as EST_CANDIDATES, CONSTRUCTIVE_DEFAULTS as EST_DEFAULTS, Estanteria
-from .mesa_industrial import flange_hole_d, weld_nut_code
+from .mesa_industrial import add_anchors, flange_hole_d, weld_nut_code
 
 BAY_GAP = 1.0                 # junta entre bandejas de módulos contiguos
 FIX_MARGIN = 60.0             # margen de fijaciones respecto a la cara del montante (como _fix_layout)
@@ -221,6 +221,7 @@ class EstanteriaBateria(Estanteria):
                 desc = (f"Pie roscado {foot['thread']} en tuerca soldada" if fpart.role == "pie_nivelador" else
                         f"{fname} roscad{'a' if fpart.role == 'rueda' else 'o'} {foot['thread']} en tuerca soldada")
                 model.add_joint(Joint(f"J.PIE.{k}", "roscada", (f"{g}.PIE.{k}", f"EST.TUERCA.{k}"), (x, y, d["hn"]), desc))
+            add_anchors(model, ps, corners, cname, g)
         tray = SheetPart("balda", f"Bandeja chapa {d['spec'].t:g} mm", d["spec"], mat_c, fin)
         for i, (lid, z) in enumerate(zip(d["level_ids"], d["z_levels"]), start=1):
             with ctx.feature(f"F3{i}", f"Bandejas del nivel {i}"):

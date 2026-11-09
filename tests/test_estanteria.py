@@ -41,13 +41,24 @@ def test_more_levels_regenerates_structure():
 
 
 def test_unanchored_tips_anchored_reports_anchor_tension():
+    # «sin anclaje» elegido por el usuario: vuelca y se ofrece la corrección comprobada (anclar con taco por cálculo)
     free = regenerate("estanteria", {**BASE, "CARGA_POR_NIVEL": 150, "ANCLAJE": "ninguno"})
     assert next(c for c in free.eng["checks"] if c["id"] == "E.VUELCO")["status"] == "NO_CUMPLE"
+    assert free.fix and free.fix["params"]["ANCLAJE"] == "al_suelo" and free.fix["status"] == "CUMPLE"
+    # anclada: tracción por taco comprobada frente a la capacidad del taco elegido por cálculo
     anch = regenerate("estanteria", {**BASE, "CARGA_POR_NIVEL": 150, "ANCLAJE": "al_suelo"})
     c = next(c for c in anch.eng["checks"] if c["id"] == "E.ANCLAJE")
-    assert c["status"] == "PENDIENTE" and c["value"] > 0
-    assert anch.eng["status"] == "PENDIENTE" and anch.qa.result()["blocking"] == 0
-    assert all(x["status"] != "NO_CUMPLE" for x in anch.eng["checks"])
+    assert c["status"] == "CUMPLE" and 0 < c["value"] <= c["limit"]
+    assert anch.model.params.sources["TACO_ANCLAJE"] == "calculo"
+    assert sum(1 for i in anch.model.instances if i.part.role == "anclaje") == 4
+    assert anch.eng["status"] == "CUMPLE" and anch.qa.result()["blocking"] == 0 and anch.fix is None
+
+
+def test_default_unanchored_is_anchored_by_rule():
+    # sin indicar anclaje (por defecto «ninguno»): si el conjunto vacío volcaría, la regla de diseño lo ancla
+    d = regenerate("estanteria", {**BASE, "CARGA_POR_NIVEL": 150})
+    assert d.model.params.values["ANCLAJE"] == "al_suelo" and d.model.params.sources["ANCLAJE"] == "regla_diseno"
+    assert d.eng["status"] == "CUMPLE"
 
 
 def test_heavier_load_sizes_up():

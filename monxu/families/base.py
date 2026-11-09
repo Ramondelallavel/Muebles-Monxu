@@ -37,18 +37,43 @@ class ProductFamily(ABC):
     def new_params(self, values: dict[str, Any] | None = None, source: str = "usuario") -> ParameterSet:
         return ParameterSet.from_specs(self.param_specs(), values, source)
 
+    def default_loads(self, v: dict[str, Any]) -> dict[str, tuple[float, str]]:
+        """Cargas de uso que se adoptan cuando no se indican: {parámetro: (kg, explicación)}."""
+        return {}
+
     def build(self, params: ParameterSet):
         """Resuelve los parámetros 'auto' (dimensionado) y construye el modelo."""
+        from ..engineering.analysis import overturning
         from ..engineering.sizing import resolve_auto
         rule_notes: list[dict] = []
         ruled: set[str] = set()         # la regla puede reajustar lo que ella misma fijó (el redimensionado cambia perfiles)
-        for _ in range(4):
+        # cargas de uso no indicadas: se adoptan las del uso previsto (el diseño queda siempre verificado)
+        dl = {k: lv for k, lv in self.default_loads(params.values).items() if params.values.get(k) is None}
+        if dl:
+            params = params.copy()
+            for k, (kg, _why) in dl.items():
+                params.values[k], params.sources[k] = kg, "por_uso"
+            label = {sp.name: sp.label for sp in self.param_specs()}
+            rule_notes.append({"level": "propuesta", "code": "CARGA-USO",
+                               "message": "Carga de uso no indicada: se adopta " + "; ".join(
+                                   f"{label.get(k, k).lower()} {kg:g} kg ({why})" for k, (kg, why) in dl.items()) +
+                                          ". Confírmela o indique la real."})
+        anchorable = any(s.name == "ANCLAJE" and "al_suelo" in (s.choices or []) for s in self.param_specs())
+        for _ in range(5):
             autos = [k for k, v in params.values.items() if v == AUTO]
             resolved, notes = resolve_auto(self, params, autos) if autos else (params.copy(), [])
             model = self.construct(resolved)
             # valores por defecto incompatibles (nunca los del usuario): se corrigen y se vuelve a dimensionar
             fixes = {k: fv for k, fv in model.rule_fixes.items()
                      if (params.sources.get(k) == "defecto" or k in ruled) and params.values.get(k) != fv[0]}
+            # sin anclaje (por defecto) el conjunto vacío volcaría con el empuje: se ancla al suelo
+            if (not fixes and anchorable and params.sources.get("ANCLAJE") == "defecto"
+                    and params.values.get("ANCLAJE") == "ninguno"):
+                ov = overturning(model, model.params.values)
+                if ov and ov["ratio"] > 1.0 + 1e-9:
+                    fixes["ANCLAJE"] = ("al_suelo", f"Anclaje al suelo (regla de diseño): sin anclar, el conjunto vacío "
+                                                    f"vuelca con el empuje de {ov['H_N']:g} N (aprovechamiento "
+                                                    f"{ov['ratio']:.2f}; admite {ov['admissible_N']} N).")
             if not fixes:
                 break
             params = params.copy()

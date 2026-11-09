@@ -60,6 +60,15 @@ class PartDef:
     def volume(self) -> float:
         return G.volume(self.shape)
 
+    @cached_property
+    def local_centroid(self) -> np.ndarray:
+        """Centro de gravedad en ejes de la pieza (una vez por pieza; las instancias lo transforman)."""
+        return G.centroid(self.shape)
+
+    @cached_property
+    def local_bbox(self) -> tuple[np.ndarray, np.ndarray]:
+        return G.bbox(self.shape)
+
     @property
     def density(self) -> float:
         return catalog.material(self.material).density if self.material else 0.0
@@ -183,6 +192,8 @@ class StandardPart(PartDef):
             return G.leveling_foot_solid(self.data)
         if cat == "ruedas_espiga":
             return G.stem_castor_solid(self.data)
+        if cat == "anclajes":
+            return G.anchor_solid(self.data)
         if self.code.startswith("TUERCA_SOLDAR"):
             return G.weld_nut_solid(self.data)
         if self.code.startswith("TUERCA_REMACHABLE"):
@@ -238,7 +249,14 @@ class Instance:
 
     @cached_property
     def centroid(self) -> np.ndarray:
-        return G.centroid(self.shape) if self.part.kind != "normalizado" else (self.bbox[0] + self.bbox[1]) / 2
+        """Centro de gravedad en ejes globales, a partir del de la pieza (sin colocar el sólido B-rep de cada
+        instancia); el de un normalizado es el centro de su envolvente, exacto con giros de 90° como en el motor web."""
+        R, t = self.T[:3, :3], self.T[:3, 3]
+        if self.part.kind != "normalizado":
+            return R @ self.part.local_centroid + t
+        lo, hi = self.part.local_bbox
+        pts = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]) @ R.T + t
+        return (pts.min(axis=0) + pts.max(axis=0)) / 2
 
 
 @dataclass

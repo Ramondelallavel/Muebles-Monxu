@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import math
+
 import numpy as np
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import splu
@@ -36,14 +38,27 @@ class Frame3D:
         self.fixed: dict[int, tuple[bool, ...]] = {}
         self.merge_tol = merge_tol
         self.loads: dict[str, np.ndarray] = {}
+        self._grid: dict[tuple[int, int, int], list[int]] = {}      # celdas de 1 mm: búsqueda de nodos en O(1)
 
     # ------------------------------------------------------------------ definición
     def node(self, p) -> int:
+        """Nodo en ``p``: el primero (índice menor) a distancia <= tolerancia, o uno nuevo. Rejilla de celdas de 1 mm
+        (la búsqueda lineal era cuadrática con miles de nodos); misma semántica que el motor web."""
         p = np.asarray(p, float)
-        for k, q in enumerate(self.nodes):
-            if np.linalg.norm(p - q) <= self.merge_tol:
-                return k
+        c = (math.floor(p[0]), math.floor(p[1]), math.floor(p[2]))
+        r = math.ceil(self.merge_tol)
+        best = -1
+        for i in range(c[0] - r, c[0] + r + 1):
+            for j in range(c[1] - r, c[1] + r + 1):
+                for k in range(c[2] - r, c[2] + r + 1):
+                    for n in self._grid.get((i, j, k), ()):
+                        d = p - self.nodes[n]
+                        if math.sqrt(d.dot(d)) <= self.merge_tol and (best < 0 or n < best):
+                            best = n
+        if best >= 0:
+            return best
         self.nodes.append(p)
+        self._grid.setdefault(c, []).append(len(self.nodes) - 1)
         return len(self.nodes) - 1
 
     def element(self, i, j, E, G, A, Iy, Iz, J, up, member="") -> int:
@@ -105,14 +120,20 @@ class Frame3D:
             T[3 * b:3 * b + 3, 3 * b:3 * b + 3] = e.R
         return T
 
-    def stiffness(self) -> np.ndarray:
-        K = np.zeros((self.ndof(), self.ndof()))
-        for e in self.elements:
+    def stiffness(self):
+        """Matriz de rigidez global dispersa (CSC). Densa ocupaba ndof² (cientos de MB con miles de nodos)."""
+        n = len(self.elements)
+        rows = np.empty((n, 144), dtype=np.int64)
+        cols = np.empty((n, 144), dtype=np.int64)
+        vals = np.empty((n, 144))
+        for k, e in enumerate(self.elements):
             T = self.T(e)
-            kg = T.T @ self.k_local(e) @ T
             idx = np.r_[6 * e.i:6 * e.i + 6, 6 * e.j:6 * e.j + 6]
-            K[np.ix_(idx, idx)] += kg
-        return K
+            rows[k] = np.repeat(idx, 12)
+            cols[k] = np.tile(idx, 12)
+            vals[k] = (T.T @ self.k_local(e) @ T).ravel()
+        # los duplicados (barras que comparten nodo) se suman al convertir a CSC
+        return csc_matrix((vals.ravel(), (rows.ravel(), cols.ravel())), shape=(self.ndof(), self.ndof()))
 
     # ------------------------------------------------------------------ resolución
     def solve(self, cases: list[str] | None = None) -> "Results":
@@ -122,14 +143,15 @@ class Frame3D:
             for k, f in enumerate(dofs):
                 fixed[6 * n + k] = f
         free = ~fixed
-        Kff = K[np.ix_(free, free)]
+        fidx = np.flatnonzero(free)
+        Kff = K[fidx][:, fidx].tocsc()
         cases = cases or list(self.loads)
         U = {}
         if not cases:
             return Results(self, K, U)
         # una sola factorización dispersa (SuperLU) para todos los casos de carga
         try:
-            lu = splu(csc_matrix(Kff))
+            lu = splu(Kff)
         except RuntimeError as e:          # SuperLU: "Factor is exactly singular"
             raise np.linalg.LinAlgError("Matriz de rigidez singular: estructura inestable (mecanismo)") from e
         Ff = np.column_stack([self.load_vector(c)[free] for c in cases])

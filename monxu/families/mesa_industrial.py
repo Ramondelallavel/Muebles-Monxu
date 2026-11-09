@@ -33,6 +33,31 @@ ALLP = list(catalog.profiles())
 STRUCT_MATERIALS = [c for c, m in catalog._load("materials")["materials"].items() if "tubo" in m.get("forms", [])]
 SHEET_MATERIALS = [c for c, m in catalog._load("materials")["materials"].items() if "chapa" in m.get("forms", [])]
 FEET = [c for c, d in catalog.components().items() if d["category"] == "patas"]
+ANCHORS = [c for c, d in catalog.components().items() if d["category"] == "anclajes"]
+#: carga de uso por defecto sobre la superficie de trabajo según el uso previsto (kg/m²), cuando no se indica
+USE_LOAD_KG_M2 = {"montaje_ligero": 100, "inspeccion": 100, "laboratorio": 100, "embalaje": 100, "montaje": 150,
+                  "trabajo_pesado": 300}
+
+
+def r10(x: float) -> float:
+    """Carga redondeada a 10 kg (mínimo 10 kg), con el redondeo de Math.round (el motor web da el mismo valor)."""
+    return float(max(10, math.floor(x / 10 + 0.5) * 10))
+
+
+def add_anchors(model, ps, corners: dict, names: dict, group: str) -> None:
+    """Tacos de anclaje al suelo (uno bajo cada pie, embebidos en el hormigón) cuando ANCLAJE = al_suelo."""
+    v = ps.values if hasattr(ps, "values") else ps
+    code = v.get("TACO_ANCLAJE")
+    if v.get("ANCLAJE") != "al_suelo" or code in (None, AUTO):
+        return
+    c = catalog.component(code)
+    part = StandardPart("anclaje", code)
+    for k, (x, y) in corners.items():
+        iid = f"{group}.ANC.{k}"
+        model.add(iid, f"Taco de anclaje {names[k]}", part, G.translation(x, y, -float(c["embed_mm"])), group,
+                  tags={"explode_extra": (0.0, 0.0, -60.0)})
+        model.add_joint(Joint(f"J.ANC.{k}", "roscada", (iid, f"{group}.PIE.{k}"), (x, y, 0.0),
+                              f"Taco de anclaje {c['thread']} en el suelo a través de la base del pie"))
 NUT_SUFFIX = {"acero_carbono": "", "acero_inoxidable": "_A2", "aluminio": "_AL"}
 
 
@@ -106,7 +131,8 @@ class MesaIndustrial(ProductFamily):
     top_iid, top_label = "ENC.BANDEJA", "Encimera"          # instancia y subconjunto de la superficie de trabajo
     #: altura libre mínima bajo la encimera para trabajar sentado o de pie (None: no aplica, p. ej. una plataforma)
     min_clear_height: float | None = 600.0
-    auto_in_construct = ("RADIO_PLEGADO", "FACTOR_K", "NUMERO_TRAVESANOS", "NUMERO_TRAVESANOS_BALDA", "HOLGURA_ENCIMERA")
+    auto_in_construct = ("RADIO_PLEGADO", "FACTOR_K", "NUMERO_TRAVESANOS", "NUMERO_TRAVESANOS_BALDA", "HOLGURA_ENCIMERA",
+                         "TACO_ANCLAJE")
     #: parámetro que elige el componente de apoyo (pie nivelador o rueda de espiga roscada)
     support_param = "PIE_NIVELADOR"
     support_category = "patas"
@@ -141,6 +167,22 @@ class MesaIndustrial(ProductFamily):
                 "travesano_int_sup": "PERFIL_TRAVESANO", "larguero_inf": "PERFIL_BASTIDOR",
                 "travesano_ext_inf": "PERFIL_BASTIDOR", "travesano_int_inf": "PERFIL_BASTIDOR",
                 "reposapies": "PERFIL_REPOSAPIES"}.get(role)
+
+    #: carga de uso de la balda inferior respecto de la de la encimera
+    shelf_load_ratio = 0.5
+
+    def use_load_kg_m2(self, v) -> float:
+        return USE_LOAD_KG_M2.get(v.get("USO") or "montaje", 150)
+
+    def default_loads(self, v):
+        q = self.use_load_kg_m2(v)
+        L, W = v.get("LONGITUD") or 0, v.get("ANCHURA") or 0
+        uso = f", uso {v['USO']}" if v.get("USO") else ""
+        out = {"CARGA_TOTAL": (r10(q * (L * W * 1e-6)), f"{q:g} kg/m² sobre {L:g} × {W:g} mm{uso}")}
+        if (v.get("NUMERO_BALDAS") or 0) >= 1 and "CARGA_BALDA" in {s.name for s in self.param_specs()}:
+            qb = q * self.shelf_load_ratio
+            out["CARGA_BALDA"] = (r10(qb * (L * W * 1e-6)), f"{qb:g} kg/m² sobre la balda")
+        return out
 
     def vertical_load_present(self, v) -> bool:
         # una carga puntual sobre la encimera también exige dimensionar (antes sólo la carga repartida)
@@ -246,7 +288,10 @@ class MesaIndustrial(ProductFamily):
             P("ENTORNO", "Entorno", "choice", "interior_seco", None, "cargas",
               choices=["interior_seco", "interior_humedo", "exterior", "alimentario", "sala_limpia"]),
             P("TIPO_SUELO", "Tipo de suelo", "choice", "nivelado", None, "cargas", choices=["nivelado", "irregular"]),
-            P("ANCLAJE", "Anclaje al suelo", "choice", "ninguno", None, "cargas", choices=["ninguno", "al_suelo"]),
+            P("ANCLAJE", "Anclaje al suelo", "choice", "ninguno", None, "cargas", choices=["ninguno", "al_suelo"],
+              help="'ninguno' por defecto: si el conjunto vacío volcara con el empuje, se ancla automáticamente."),
+            P("TACO_ANCLAJE", "Taco de anclaje", "choice", AUTO, None, "cargas", choices=ANCHORS, allow_auto=True,
+              help="'auto': el de menor capacidad que resiste la tracción de cálculo (sólo con anclaje al suelo)."),
         ]
 
     def templates(self):
@@ -397,6 +442,7 @@ class MesaIndustrial(ProductFamily):
                 model.add_joint(Joint(f"J.PIE.{k}", "roscada", (f"{g}.PIE.{k}", f"EST.TUERCA.{k}"),
                                       (x, y, d["hn"]), f"{fname} roscad{'a' if fpart.role == 'rueda' else 'o'} "
                                                        f"{foot['thread']} en tuerca soldada"))
+            add_anchors(model, ps, corners, corner_names, g)
 
         # ---------------------------------------------------------------- chapas
         self._build_top(model, ctx, d, H, mat_c, fin, rn, sc)

@@ -630,9 +630,60 @@ con cargas puntuales, taladro de Ø16 en placa de 20 mm, o un asa fijada contra 
   asignaba también a la anchura de frente. Ahora la anchura queda por definir y se pregunta. Además se
   reconoce «frente» («1800 de frente», «frente total de 3600»).
 
+## Verificación completa automática
+
+Ninguna plantilla ni diseño por defecto queda «PENDIENTE»: las 63 plantillas y el diseño por defecto de las diez
+familias salen CUMPLE. Lo que antes dejaba la verificación incompleta se calcula o se decide solo, en los dos motores
+(Python y navegador, misma salida):
+
+- **Cargas de uso por defecto (`por_uso`)**: si no se indica una carga, se adopta la del uso previsto y queda anotada
+  (`CARGA-USO`). Mesa y puesto: 100–300 kg/m² según el uso (montaje 150), con la balda a la mitad. Estantería: 150 kg/m²
+  de bandeja; carro estantería y armario: 100 kg/m². Mesa de soldadura: 500 kg/m², balda al 30 %. Carro plataforma:
+  250 kg/m². Tarima: 2 kN/m² de EN ISO 14122-2, redondeados hacia arriba. Estante del puesto: 100 kg/m². La carga se
+  recalcula si cambian las medidas, porque no se guarda como dato del proyecto.
+- **Anclaje automático**: con «sin anclaje» por defecto, si el conjunto vacío volcara con el empuje, la regla de diseño
+  lo ancla al suelo (`REGLA-ANCLAJE`). Un «sin anclaje» elegido por el usuario se respeta.
+- **Tacos de anclaje (`TACO_ANCLAJE`, M8–M16)**: el de menor capacidad que resiste la tracción de cálculo por taco
+  (vuelco EQU en las cuatro direcciones). `E.ANCLAJE` es una comprobación real contra la capacidad de catálogo. Los tacos
+  se dibujan bajo cada pie, salen en la BOM y en el presupuesto y añaden el taladro al paso de montaje. No cuentan como
+  peso estabilizador.
+- **Carros**: la maniobra actúa completa en la dirección de la marcha y al 50 % en la lateral (giros y empujes
+  ocasionales). Sin asa, completa en todas las direcciones.
+- **Secciones clase 4**: sección eficaz según EN 1993-1-5 §4.4 (ρ de la pared más esbelta aplicada a toda la sección, del
+  lado de la seguridad). Antes quedaban pendientes.
+- **Carga 0 indicada**: la superficie se verifica con su peso propio. Antes quedaba pendiente.
+- **Corrección automática comprobada**: si un diseño NO CUMPLE por valores fijados (perfil, espesor, chapa DC01,
+  «sin anclaje», taco), se calcula la corrección mínima. Puede ser devolver esos valores a «auto», anclar al suelo, pasar
+  la chapa a S235JR o, en un carro, limitar la fuerza de maniobra a la admisible (iterada porque el redimensionado cambia
+  el peso). Sólo se ofrece si, regenerado y verificado, el diseño CUMPLE. En el barrido aleatorio había 11 casos que no
+  cumplían por valores impuestos y los 11 tienen corrección comprobada. Se aplica con un botón (`correccion`).
+- **Rendimiento**: búsqueda de nodos en rejilla y matriz de rigidez dispersa en el cálculo de barras (antes cuadrática y
+  densa). La estantería en batería por defecto pasa de 30 s a 8 s.
+
+## Asistente automático y proyecto guardado
+
+- **El asistente adopta y calcula lo que falta** en vez de preguntarlo: medidas propuestas, cargas de uso calculadas por
+  el motor, material y uso habituales y anclaje decidido por el cálculo. Lo expone como supuestos que se cambian con los
+  botones o escribiendo el dato. Cada respuesta se aplica sola al proyecto y el diseño se regenera y verifica.
+- Sólo se aplica lo que cambia en cada turno (`to_apply`): lo editado en el formulario no se deshace, y lo que ya tiene el
+  proyecto cuenta como conocido.
+- Si la descripción es de otra familia y el proyecto aún no tiene revisiones, el proyecto cambia de familia.
+- `«con balda y 400 kg»` asigna los 400 kg a la encimera. Sólo «balda de 100 kg» o «balda inferior: 100 kg» son
+  carga de la balda.
+- **Persistencia**:
+  - la conversación se guarda con el proyecto (`assistant_state.chat`, últimos 40 mensajes) y no se pierde al cambiar de
+    apartado ni al salir;
+  - el borrador del formulario se guarda solo, 0,8 s después del último cambio;
+  - al abrir un proyecto el diseño se regenera solo con sus parámetros guardados.
+- Paridad: `tools/webcheck/interp_cmp.py` compara también 12 conversaciones completas entre los dos motores (respuesta,
+  supuestos, preguntas y datos aplicados en cada turno).
+
 ## Datos que quedan como hipótesis o pendientes
 
-- **Empuje horizontal:** 300 N por defecto en el canto de la encimera. Con ese valor, una mesa vacía y ligera no supera el vuelco EQU, y el sistema lo informa así; el asistente pide el dato real.
+- **Empuje horizontal:** 300 N por defecto en el canto de la encimera. Si con ese valor la mesa vacía volcara, se ancla al
+  suelo por regla de diseño, salvo que el usuario haya elegido «sin anclaje».
+- **Tacos de anclaje:** capacidad de tracción de catálogo genérico en hormigón C20/25 no fisurado, a confirmar con la ETA
+  del fabricante y el soporte real.
 - **Capacidad de los pies niveladores y de las ruedas:** catálogo genérico, a confirmar con el proveedor. Las ruedas
   se modelan con su envolvente simplificada (sin descentrado de giro).
 - **Fuerza de maniobra del carro:** 100 N por defecto, aplicada en el plano de la encimera con las ruedas frenadas.

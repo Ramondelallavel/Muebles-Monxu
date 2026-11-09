@@ -39,7 +39,7 @@ def test_server_drawings_without_text_overlaps(tmp_path, fid, tid):
     d = regenerate(fid, t["values"])
     info = {"product_name": f"{d.model.family_name} {d.model.product_code}", "project_code": "P-T", "revision": "A",
             "date": "2026-11-07", "designer": "QA", "company": "MUEBLES MONXU",
-            "status_stamp": "PRELIMINAR — cálculo automatizado CUMPLE · pendiente de validación técnica"}
+            "status_stamp": "CÁLCULO VERIFICADO — CUMPLE (EN 1990 / EN 1993)"}
     path = tmp_path / "planos.pdf"
     plans.generate(d.model, d.plan, d.bom, d.eng, info, path)
     assert _overlaps(path) == []

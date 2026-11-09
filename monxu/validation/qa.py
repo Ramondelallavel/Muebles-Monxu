@@ -169,13 +169,13 @@ def model_checks(model, interf: dict, eng: dict, dfm: list, bom: dict) -> QA:
     st = eng["status"]
     if st == "NO_CUMPLE":
         fails = [c["description"] for c in eng["checks"] if c["status"] == "NO_CUMPLE"]
-        q.add(WARN, "CALC-NO-CUMPLE", "Verificación estructural preliminar NO superada (no apto para fabricación "
+        q.add(WARN, "CALC-NO-CUMPLE", "Verificación estructural NO superada (no apto para fabricación "
                                       "hasta modificar el diseño): " + "; ".join(fails))
     elif st == "PENDIENTE":
         q.add(PEND, "CALC-PENDIENTE", "Verificación estructural incompleta: " + "; ".join(eng["pending"] or
                                                                                       ["datos pendientes"]))
     else:
-        q.add(OK, "CALC", "Verificación estructural preliminar automatizada: CUMPLE.")
+        q.add(OK, "CALC", "Verificación estructural automatizada completa: CUMPLE.")
     q.add(PEND, "VALIDACION-TECNICA", "Validación definitiva por técnico competente pendiente de firma.")
     return q
 

@@ -2,7 +2,8 @@
 // Motor de verificación estructural (port de monxu/engineering/analysis.py).
 import * as C from "./catalog";
 import { Frame3D, lineLoadToNodes, navier } from "./fem";
-import { centerOfMass } from "./geometry";
+import { instanceCentroid } from "./geometry";
+import { AUTO } from "./model";
 import { f as fx, g, pyRound } from "./util";
 
 export const OK = "CUMPLE", FAIL = "NO_CUMPLE", PENDING = "PENDIENTE";
@@ -27,6 +28,63 @@ export function sectionClass(prof, fy) {
   if (ct <= 38 * eps) return 2;
   if (ct <= 42 * eps) return 3;
   return 4;
+}
+/** Carros: la maniobra actúa en la dirección de la marcha; lateralmente (giros, empujes ocasionales) esta fracción. */
+export const LATERAL_FACTOR_MOBILE = 0.5;
+const DIRS = ["+X", "-X", "+Y", "-Y"];
+const lc = (name) => name.slice(0, 1).toLowerCase() + name.slice(1);
+
+/** Peso (N) y centro de gravedad del conjunto sin los tacos de anclaje, que quedan en el suelo. */
+export function ownWeight(model) {
+  let m = 0; const c = [0, 0, 0];
+  for (const i of model.instances) {
+    if (i.part.role === "anclaje") continue;
+    const mi = i.part.mass, ci = instanceCentroid(i); m += mi; for (let j = 0; j < 3; j++) c[j] += mi * ci[j];
+  }
+  return [m * G_ACC, c.map((v) => v / m)];
+}
+function supportLevers(sups, cog) {
+  const xs = sups.map((s) => s.point[0]), ys = sups.map((s) => s.point[1]);
+  const xmin = Math.min(...xs), xmax = Math.max(...xs), ymin = Math.min(...ys), ymax = Math.max(...ys);
+  return { "+X": xmax - cog[0], "-X": cog[0] - xmin, "+Y": ymax - cog[1], "-Y": cog[1] - ymin };
+}
+
+/** Vuelco del conjunto vacío (EN 1990 EQU) en las cuatro direcciones; carros ("mobile"): empuje completo en la marcha (X)
+ * y LATERAL_FACTOR_MOBILE en la lateral (Y). Dirección determinante (mayor Mdst/Mstb) y tracción de anclaje (la mayor). */
+export function overturning(model, ps, st = model.structure) {
+  const sups = st.supports ?? [];
+  const H_N = ps.CARGA_HORIZONTAL || 0.0;
+  if (!sups.length || !H_N) return null;
+  const pf = C.criteria().partial_factors;
+  const [Wtot, cog] = ownWeight(model);
+  const levers = supportLevers(sups, cog);
+  const xs = sups.map((s) => s.point[0]), ys = sups.map((s) => s.point[1]);
+  const bx = Math.max(...xs) - Math.min(...xs), by = Math.max(...ys) - Math.min(...ys);
+  const base = { "+X": bx, "-X": bx, "+Y": by, "-Y": by };
+  const hgt = st.push_height ?? st.worktop_height;
+  const mobile = !!st.mobile;
+  const force = {}, res = {};
+  for (const d of DIRS) force[d] = H_N * (mobile && (d === "+Y" || d === "-Y") ? LATERAL_FACTOR_MOBILE : 1.0);
+  for (const d of DIRS) {
+    const Mstb = pf.gamma_G_stb * Wtot * levers[d], Mdst = pf.gamma_Q_dst * force[d] * hgt;
+    const T = base[d] > 0 ? Math.max(0.0, (Mdst - Mstb) / base[d]) : Infinity;
+    res[d] = { ratio: Mstb > 0 ? Mdst / Mstb : Infinity, Mstb, Mdst, T };
+  }
+  let dirn = DIRS[0], dT = DIRS[0];
+  for (const d of DIRS) { if (res[d].ratio > res[dirn].ratio) dirn = d; if (res[d].T > res[dT].T) dT = d; }
+  const nA = Math.max(1, Math.floor(sups.length / 2)), r = res[dirn];
+  return { dirn, ratio: r.ratio, Mstb: r.Mstb, Mdst: r.Mdst, lever: levers[dirn], force: force[dirn], H_N, hgt, mobile, Wtot, cog, levers,
+    T: res[dT].T, dirn_T: dT, n_anchor: nA, T_per: res[dT].T / nA,
+    admissible_N: Math.max(0, Math.floor(r.Mstb / (pf.gamma_Q_dst * hgt) / (force[dirn] / H_N))) };
+}
+
+/** EN 1993-1-5 §4.4: reducción de la pared más esbelta de un tubo rectangular en compresión uniforme (ψ = 1, kσ = 4),
+ * aplicada a toda la sección (área y módulos), del lado de la seguridad. */
+export function class4Rho(prof, fy) {
+  const eps = Math.sqrt(235.0 / fy);
+  const ct = Math.max(prof.H - 3 * prof.t, prof.B - 3 * prof.t) / prof.t;
+  const lp = ct / (28.4 * eps * 2.0);
+  return lp <= 0.673 ? 1.0 : Math.min(1.0, (lp - 0.22) / lp ** 2);
 }
 const vsub = (a, b) => a.map((v, i) => v - b[i]);
 const vdot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -183,7 +241,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     Gm += P;
   }
   let gSheets = 0.0;
-  const surfInfo = [];
+  const surfInfo = [], undefinedLoads = [];
   for (const surf of st.surfaces ?? []) {
     const lvl = levels[surf.level];
     const part = model.instance(surf.sheet_instance).part;
@@ -201,12 +259,20 @@ export function analyze(model, includeStability = true, includeWelds = true) {
       info.q = q;
       cases.push({ id: `Q_${surf.id}`, label: `Sobrecarga de uso uniforme en ${surf.label.toLowerCase()}`, value: `${g(loadKg)} kg (${fx(q * 1e6)} N/m²)`,
         total_N: pyRound(applied, 1) });
-    } else pending.push(`Carga de uso sobre ${surf.label.toLowerCase()} no definida (${surf.load_param}): verificación de ${surf.label.toLowerCase()} pendiente.`);
+    } else if (loadKg != null) {        // 0 kg indicado: sin sobrecarga de uso (se verifica con el peso propio)
+      info.q = 0.0;
+      hyp.push(`${surf.label}: sin sobrecarga de uso (0 kg indicados); se verifica con su peso propio.`);
+    } else {
+      undefinedLoads.push(surf.load_param);
+      pending.push(`Carga de uso sobre ${surf.label.toLowerCase()} no definida (${surf.load_param}): verificación de ${surf.label.toLowerCase()} pendiente.`);
+    }
     surfInfo.push(info);
   }
   cases.unshift({ id: "G", label: "Peso propio (perfiles y chapas, calculado desde la geometría)", value: `${fx((Gm + gSheets) / G_ACC, 1)} kg`,
     total_N: pyRound(Gm + gSheets, 1) });
   const hasQ = "Q" in fr.loads;
+  // verificación completa si hay sobrecarga o si todas las cargas de uso están indicadas (0 kg incluidos)
+  const qDefined = hasQ || !undefinedLoads.length;
   const P_kg = ps.CARGA_PUNTUAL;
   const top = levels.SUP;
   if (P_kg && top) {
@@ -252,7 +318,8 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     if (hasQ) uls["ELU-4"] = { G: gG, Q: gQ, HX: gQ * psi };
   }
   if ("P" in fr.loads) uls["ELU-5"] = { G: gG, P: gQ };
-  const sls = hasQ ? { "ELS-1": { G: 1.0, Q: 1.0 } } : {};
+  // sin sobrecarga (0 kg indicados) la combinación de servicio es la del peso propio: apoyos y flechas también se comprueban
+  const sls = hasQ ? { "ELS-1": { G: 1.0, Q: 1.0 } } : { "ELS-1": { G: 1.0 } };
   if ("P" in fr.loads) sls["ELS-2"] = { G: 1.0, P: 1.0 };
   for (const pl of st.point_loads ?? []) if (pl.id in fr.loads) { uls[`ELU-${pl.id}`] = { G: gG, [pl.id]: gQ }; sls[`ELS-${pl.id}`] = { G: 1.0, [pl.id]: 1.0 }; }
   if ("HX" in fr.loads) { sls["ELS-3"] = { HX: 1.0 }; sls["ELS-4"] = { HY: 1.0 }; }
@@ -264,18 +331,21 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   const alpha = crit.imperfection_factors[crit.buckling_curve_cold_formed_hollow];
   const betaLeg = crit.effective_length_factors.leg_sway;
   const memberResults = {};
+  const class4 = new Set();
   for (const [mid, mm] of Object.entries(sm.members)) {
     const { material: mat, profile: prof, props: sp } = mm;
     const fy = mat.fy, gM0 = mat.gamma_M0, gM1 = mat.gamma_M1;
     const cls = sectionClass(prof, fy);
-    const Wy = cls <= 2 ? sp.Wpl_y : sp.Wel_y, Wz = cls <= 2 ? sp.Wpl_z : sp.Wel_z;
-    const NRd = (sp.A * fy) / gM0, MyRd = (Wy * fy) / gM0, MzRd = (Wz * fy) / gM0;
+    const rho = cls === 4 ? class4Rho(prof, fy) : 1.0;           // clase 4: sección eficaz (EN 1993-1-5)
+    const Aeff = sp.A * rho;
+    const Wy = cls <= 2 ? sp.Wpl_y : sp.Wel_y * rho, Wz = cls <= 2 ? sp.Wpl_z : sp.Wel_z * rho;
+    const NRd = (Aeff * fy) / gM0, MyRd = (Wy * fy) / gM0, MzRd = (Wz * fy) / gM0;
     const VzRd = (sp.Av_z * fy) / Math.sqrt(3) / gM0, VyRd = (sp.Av_y * fy) / Math.sqrt(3) / gM0;
     const isLeg = mm.role === "pata" || mm.role === "montante";
     const beta = isLeg ? betaLeg : crit.effective_length_factors.braced_member;
     const Lcr = beta * mm.length;
     const lam1 = Math.PI * Math.sqrt(mat.E / fy);
-    const lam = Lcr / Math.min(sp.iy, sp.iz) / lam1;
+    const lam = Lcr / Math.min(sp.iy, sp.iz) / lam1 * Math.sqrt(rho);     // EN 1993-1-1 (6.51) con A_eff
     const chi = bucklingChi(lam, alpha);
     let best = { u: -1 };
     for (const [cname, u] of Object.entries(U)) {
@@ -293,15 +363,15 @@ export function analyze(model, includeStability = true, includeWelds = true) {
           Vmax = Math.max(Vmax, Vy / VyRd, Vz / VzRd);
         }
       }
-      const ub = Nc < -N_ZERO ? Math.abs(Nc) / ((chi * sp.A * fy) / gM1) + My_ / ((Wy * fy) / gM1) + Mz_ / ((Wz * fy) / gM1) : 0;
+      const ub = Nc < -N_ZERO ? Math.abs(Nc) / ((chi * Aeff * fy) / gM1) + My_ / ((Wy * fy) / gM1) + Mz_ / ((Wz * fy) / gM1) : 0;
       const uAll = Math.max(ucs, ub, Vmax);
       if (uAll > best.u) best = { u: uAll, ucs, ub, uv: Vmax, combo: cname, Nc, My: My_, Mz: Mz_ };
     }
     const details = { clase: cls, N_Rd_kN: NRd / 1e3, My_Rd_kNm: MyRd / 1e6, Mz_Rd_kNm: MzRd / 1e6, L_mm: mm.length, Lcr_mm: Lcr, lambda_rel: lam, chi,
       N_Ed_kN: best.Nc / 1e3, My_Ed_kNm: best.My / 1e6, Mz_Ed_kNm: best.Mz / 1e6, u_seccion: best.ucs, u_pandeo: best.ub, u_cortante: best.uv };
+    if (cls === 4) { details.rho_clase4 = rho; class4.add(`${prof.code} en ${mat.code} (ρ = ${rho.toFixed(3)})`); }
     let stt = status(best.u);
-    if (cls === 4) { stt = PENDING; pending.push(`${mm.instance.name}: sección clase 4, requiere sección eficaz (no implementado).`); }
-    if (!hasQ && stt === OK) stt = PENDING;
+    if (!qDefined && stt === OK) stt = PENDING;
     checks.push(check(`B.${mid}`, isLeg ? "pandeo" : "resistencia", mid, `${mm.instance.name} (${prof.code}, ${mat.code}): resistencia de sección`
       + (best.Nc < -N_ZERO ? " y pandeo por flexión" : ""), "EN 1993-1-1 §6.2, §6.3.1, §6.3.3", pyRound(best.u, 4), 1.0, "-", pyRound(best.u, 4), stt, best.combo, details));
     memberResults[mid] = best.u;
@@ -319,6 +389,8 @@ export function analyze(model, includeStability = true, includeWelds = true) {
       }
     }
   }
+  if (class4.size) hyp.push("Secciones clase 4 (" + [...class4].sort().join(", ") + "): sección eficaz según EN 1993-1-5 §4.4 con la "
+    + "reducción de la pared más esbelta en compresión uniforme aplicada a toda la sección (del lado de la seguridad).");
   // ---------------------------------------------------------------- desplome
   if (U["ELS-3"] && topNodes.length) {
     const r = crit.deflection_limits.sway_height_ratio;
@@ -375,7 +447,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     }
     if (!mat.fy_guaranteed) hyp.push(`${mat.name}: la norma ${mat.standard} no garantiza límite elástico mínimo; se adopta fy = ${mat.fy} MPa como hipótesis `
       + "(confirmar con certificado 3.1).");
-    if (info.load_kg) {
+    if (info.load_kg != null) {
       const qu = gG * info.q_g + gQ * info.q, qs = info.q_g + info.q;
       const ru0 = navier(a, b, t, mat.E, mat.nu, qu), rs0 = navier(a, b, t, mat.E, mat.nu, qs);
       const ru = { ...ru0, sigma: ru0.sigma / eta }, rs = { ...rs0, w: rs0.w / eta };
@@ -424,7 +496,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
         const s = Math.hypot(sigma, tau);
         if (s > best[0]) best = [s, cname];
       }
-      const stt = hasQ ? status(best[0] / fvw) : PENDING;
+      const stt = qDefined ? status(best[0] / fvw) : PENDING;
       checks.push(check(`W.${j.id}`, "soldadura", j.id, `${j.description}: cordón en ángulo a${g(aw)} perimetral (${prof.code})`,
         "EN 1993-1-8 §4.5.3.3 (método simplificado)", pyRound(best[0], 2), pyRound(fvw, 1), "MPa", pyRound(best[0] / fvw, 4), stt, best[1],
         { a_mm: aw, longitud_mm: j.weld.length }));
@@ -434,35 +506,40 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   }
   // ---------------------------------------------------------------- estabilidad
   let stability = null;
-  if (includeStability && sups.length) {
-    const Wtot = model.totalMass() * G_ACC;
-    const cog = centerOfMass(model);
-    const xs = sups.map((s) => s.point[0]), ys = sups.map((s) => s.point[1]);
-    const xmin = Math.min(...xs), xmax = Math.max(...xs), ymin = Math.min(...ys), ymax = Math.max(...ys);
-    const levers = { "+X": xmax - cog[0], "-X": cog[0] - xmin, "+Y": ymax - cog[1], "-Y": cog[1] - ymin };
-    const hgt = st.push_height ?? st.worktop_height;     // altura de empuje para el vuelco (carros: asa o mano)
-    let [dirn, lev] = Object.entries(levers)[0];
-    for (const [k, v] of Object.entries(levers)) if (v < lev) { dirn = k; lev = v; }
-    if (H_N) {
-      const Mstb = pf.gamma_G_stb * Wtot * lev, Mdst = pf.gamma_Q_dst * H_N * hgt;
-      const ratio = Mstb > 0 ? Mdst / Mstb : Infinity;
-      const w = st.product_word ?? "mesa";
-      const what = MASCULINE_WORDS.includes(w) ? `del ${w} vacío` : `de la ${w} vacía`;
-      // empuje de servicio que el conjunto vacío resiste sin anclaje (EQU): γQ·H·h = γG,stb·W·brazo
-      const det = { peso_N: Wtot, cdg_mm: cog.map((v) => pyRound(v, 1)), brazo_mm: lev, empuje_admisible_N: Math.floor(Mstb / (pf.gamma_Q_dst * hgt)) };
-      if (ps.ANCLAJE === "al_suelo") {
-        const base = dirn === "+Y" || dirn === "-Y" ? ymax - ymin : xmax - xmin;
-        const T = base > 0 ? Math.max(0.0, (Mdst - Mstb) / base) : Infinity;
-        const nA = Math.max(1, Math.floor(sups.length / 2));
-        Object.assign(det, { traccion_total_N: pyRound(T, 1), anclajes_traccionados: nA, traccion_por_anclaje_N: pyRound(T / nA, 1) });
-        pending.push(`Anclaje al suelo: tracción de cálculo ${fx(T / nA)} N por anclaje (${nA} anclajes en el lado traccionado). La capacidad del anclaje y del `
+  const ov = includeStability ? overturning(model, ps, st) : null;
+  if (ov) {
+    const w = st.product_word ?? "mesa";
+    const what = MASCULINE_WORDS.includes(w) ? `del ${w} vacío` : `de la ${w} vacía`;
+    const { dirn, H_N } = ov;
+    // empuje de servicio que el conjunto vacío resiste sin anclaje (EQU): γQ·H·h = γG,stb·W·brazo
+    const det = { peso_N: ov.Wtot, cdg_mm: ov.cog.map((v) => pyRound(v, 1)), brazo_mm: ov.lever, empuje_admisible_N: ov.admissible_N };
+    const loadTxt = ov.mobile ? `maniobra de ${g(H_N)} N en la dirección de la marcha y ${g(H_N * LATERAL_FACTOR_MOBILE)} N lateral` : `empuje horizontal de ${g(H_N)} N`;
+    if (ov.mobile) hyp.push(`Maniobra del carro: ${g(H_N)} N en la dirección de la marcha y ${(LATERAL_FACTOR_MOBILE * 100).toFixed(0)} % `
+      + "en la lateral (giros y empujes ocasionales), a la altura de empuje, con el carro vacío.");
+    if (ps.ANCLAJE === "al_suelo") {
+      const { T, n_anchor: nA, T_per } = ov;
+      Object.assign(det, { traccion_total_N: pyRound(T, 1), anclajes_traccionados: nA, traccion_por_anclaje_N: pyRound(T_per, 1), direccion_traccion: ov.dirn_T });
+      const code = ps.TACO_ANCLAJE;
+      const anchor = code != null && code !== AUTO && code in C.components() ? C.component(code) : null;
+      if (anchor) {
+        const cap = +anchor.tension_kN * 1000.0, u = T_per / cap;
+        hyp.push(`Anclaje al suelo: un ${lc(anchor.name)} por apoyo, a través de la base del pie; tracción admisible ${g(anchor.tension_kN)} kN en hormigón `
+          + "C20/25 no fisurado (catálogo genérico de referencia, a confirmar con la ETA del taco y el soporte real).");
+        checks.push(check("E.ANCLAJE", "estabilidad", "Anclajes", `Tracción por taco de anclaje bajo ${loadTxt} (dirección ${ov.dirn_T}, ${nA} tacos traccionados)`,
+          "EN 1990 EQU; capacidad del taco según catálogo (ETA)", pyRound(T_per, 1), pyRound(cap, 1), "N", pyRound(u, 4), status(u), "EQU", det));
+      } else {
+        pending.push(`Anclaje al suelo: tracción de cálculo ${fx(T_per)} N por anclaje (${nA} anclajes en el lado traccionado). La capacidad del anclaje y del `
           + "soporte no está verificada (depende del taco y del suelo).");
-        checks.push(check("E.ANCLAJE", "estabilidad", "Anclajes", `Vuelco impedido por anclaje al suelo: tracción de cálculo por anclaje bajo empuje de ${g(H_N)} N `
-          + `(dirección ${dirn})`, "EN 1990 EQU + EN 1992-4 (anclajes, no evaluado)", pyRound(T / nA, 1), null, "N", null, PENDING, "EQU", det));
-      } else checks.push(check("E.VUELCO", "estabilidad", "Conjunto", `Vuelco ${what} bajo empuje horizontal de ${g(H_N)} N ${st.push_where ?? "en la parte superior"} `
-        + `(dirección ${dirn})`, "EN 1990 EQU (γG,stb = 0,9; γQ = 1,5)", pyRound(Mdst / 1e3, 2), pyRound(Mstb / 1e3, 2), "N·m", pyRound(ratio, 4), status(ratio), "EQU", det));
-    }
-    stability = { weight_N: Wtot, cog, levers };
+        checks.push(check("E.ANCLAJE", "estabilidad", "Anclajes", `Vuelco impedido por anclaje al suelo: tracción de cálculo por anclaje bajo ${loadTxt} `
+          + `(dirección ${ov.dirn_T})`, "EN 1990 EQU + EN 1992-4 (anclajes, no evaluado)", pyRound(T_per, 1), null, "N", null, PENDING, "EQU", det));
+      }
+    } else checks.push(check("E.VUELCO", "estabilidad", "Conjunto", `Vuelco ${what} bajo ${loadTxt} ${st.push_where ?? "en la parte superior"} `
+      + `(dirección ${dirn})`, "EN 1990 EQU (γG,stb = 0,9; γQ = 1,5)", pyRound(ov.Mdst / 1e3, 2), pyRound(ov.Mstb / 1e3, 2), "N·m", pyRound(ov.ratio, 4),
+      status(ov.ratio), "EQU", det));
+    stability = { weight_N: ov.Wtot, cog: ov.cog, levers: ov.levers };
+  } else if (includeStability && sups.length) {
+    const [Wtot, cog] = ownWeight(model);
+    stability = { weight_N: Wtot, cog, levers: supportLevers(sups, cog) };
   }
   // ---------------------------------------------------------------- resultado global
   const sts = checks.map((c) => c.status);
@@ -480,9 +557,9 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   }
   return {
     status: stG,
-    status_label: { [OK]: "Verificación preliminar automatizada: CUMPLE", [FAIL]: "NO CUMPLE: requiere modificación del diseño",
+    status_label: { [OK]: "Verificación estructural automatizada completa: CUMPLE (EN 1990 · EN 1993)", [FAIL]: "NO CUMPLE: requiere modificación del diseño",
       [PENDING]: "Verificación incompleta: datos pendientes" }[stG],
-    validation_note: "Resultado de cálculo preliminar automatizado. La validación definitiva del producto estructural corresponde a un técnico competente.",
+    validation_note: "Cálculo automatizado según EN 1990 y EN 1993 con las hipótesis indicadas. El expediente lo firma el responsable técnico del fabricante.",
     governing, checks, load_cases: cases, combinations: { ELU: uls, ELS: sls }, partial_factors: pf,
     materials: Object.values(mats).map((m) => ({ code: m.code, name: m.name, standard: m.standard, E: m.E, fy: m.fy, fu: m.fu, density: m.density,
       fy_guaranteed: m.fy_guaranteed, design_code: m.design_code })),

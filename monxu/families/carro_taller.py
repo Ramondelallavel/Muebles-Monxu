@@ -72,6 +72,8 @@ class CarroTaller(MesaIndustrial):
                 continue
             if s.name == "TIPO_APOYO":
                 s = P("TIPO_APOYO", "Tipo de apoyo", "choice", "ruedas", None, "accesorios", choices=["ruedas"])
+            elif s.name == "TACO_ANCLAJE":
+                continue                                     # un carro no se ancla
             elif s.name == "ANCLAJE":
                 s = P("ANCLAJE", "Anclaje al suelo", "choice", "ninguno", None, "cargas", choices=["ninguno"],
                       help="Un carro no se ancla: la estabilidad se comprueba sin anclaje.")
@@ -199,6 +201,8 @@ class CarroTaller(MesaIndustrial):
         st = super()._structure(model, d, legs)
         mode = d["asa_mode"]
         st["product_word"] = "carro" if mode != "ninguna" else "mesa"
+        # con asa se maniobra en la dirección de la marcha (X); sin asa, se empuja desde cualquier lado
+        st["mobile"] = mode != "ninguna"
         brake = ("Las ruedas con freno van en el extremo del asa." if mode == "un_extremo" else
                  "Las ruedas con freno van en el extremo izquierdo (X = 0).")
         notch = {"un_extremo": ", con las escotaduras alrededor de los montantes del asa,",

@@ -1,10 +1,10 @@
 // @ts-nocheck
 // Resolución de parámetros 'auto' por reglas y cálculo (port de monxu/engineering/sizing.py).
 import * as C from "./catalog";
-import { analyze, surfaceSheet } from "./analysis";
+import { analyze, overturning, surfaceSheet } from "./analysis";
 import { navier } from "./fem";
 import { AUTO, copyParams } from "./model";
-import { g, pyRound } from "./util";
+import { f as fx, g, pyRound } from "./util";
 
 const G_ACC = 9.81;
 
@@ -97,8 +97,8 @@ export function resolveAuto(family, params, autos, onProgress = null) {
   if (haveLoad && profAutos.includes("PERFIL_LARGUERO") && "PERFIL_LARGUERO" in defaults) v.PERFIL_LARGUERO = defaults.PERFIL_LARGUERO;
   for (const [k, val] of Object.entries(family.sheetDefaultsWithoutLoad(v))) if (v[k] === AUTO) { v[k] = val; ps.sources[k] = "regla_diseno"; }
   if (!haveLoad && (profAutos.length || autos.some((k) => k in defaults)))
-    notes.push({ level: "propuesta", code: "DIM-SIN-CARGA", message: "Sin carga vertical de trabajo definida: espesores y separación de apoyos según reglas "
-      + "constructivas; los perfiles sólo se comprueban frente al empuje horizontal. La resistencia a cargas verticales queda PENDIENTE de verificación." });
+    notes.push({ level: "propuesta", code: "DIM-SIN-CARGA", message: "Sin carga vertical de uso (0 kg indicados): espesores y separación de apoyos según reglas "
+      + "constructivas; la estructura se verifica con su peso propio y el empuje horizontal." });
   const sp = family.support_param ?? "PIE_NIVELADOR";
   const footAuto = v[sp] === AUTO;
   if (footAuto) { v[sp] = defaults[sp] ?? "PIE_NIV_M12_D60"; ps.sources[sp] = "regla_diseno"; }
@@ -160,7 +160,7 @@ export function resolveAuto(family, params, autos, onProgress = null) {
     }
     if (iterations > 40) iterations = 40;
     for (const k of profAutos) ps.sources[k] = "calculo";
-    notes.push({ level: "propuesta", code: "DIM-PERFILES", message: "Perfiles dimensionados por cálculo preliminar (sección mínima de la serie que verifica resistencia, "
+    notes.push({ level: "propuesta", code: "DIM-PERFILES", message: "Perfiles dimensionados por cálculo (sección mínima de la serie que verifica resistencia, "
       + "pandeo, flechas y soldaduras): " + profAutos.map((k) => `${k} = ${ps.values[k]}`).join(", "), iterations });
     plates();
     fitLeg(family, ps, profAutos);
@@ -178,7 +178,39 @@ export function resolveAuto(family, params, autos, onProgress = null) {
       sizeProfiles();
     }
   }
+  if (ps.values.TACO_ANCLAJE === AUTO) selectAnchor(family, ps, notes);
   return [ps, notes, iterTotal];
+}
+
+const lc = (name) => name.slice(0, 1).toLowerCase() + name.slice(1);
+
+/** Taco de anclaje de menor capacidad que resiste la tracción de cálculo por taco (vuelco EQU del conjunto vacío bajo el
+ * empuje horizontal). Sin anclaje al suelo, el taco no se usa: valor constructivo. */
+function selectAnchor(family, ps, notes) {
+  const anchors = Object.entries(C.components()).filter(([, c]) => c.category === "anclajes").map((x, i) => ({ x, i }))
+    .sort((a, b) => a.x[1].tension_kN - b.x[1].tension_kN || a.i - b.i).map((o) => o.x);
+  if (ps.values.ANCLAJE !== "al_suelo") {
+    ps.values.TACO_ANCLAJE = family.constructive_defaults.TACO_ANCLAJE ?? anchors[0][0];
+    ps.sources.TACO_ANCLAJE = "regla_diseno";
+    return;
+  }
+  ps.values.TACO_ANCLAJE = anchors[0][0];        // provisional: el taco no cambia el vuelco
+  const ov = overturning(family.construct(ps), ps.values);
+  const need = ov ? ov.T_per : 0.0;
+  for (const [code, c] of anchors) {
+    if (c.tension_kN * 1000.0 >= need) {
+      ps.values.TACO_ANCLAJE = code;
+      ps.sources.TACO_ANCLAJE = "calculo";
+      notes.push({ level: "propuesta", code: "DIM-ANCLAJE", message: `Taco de anclaje seleccionado por cálculo: ${lc(c.name)} (tracción de cálculo `
+        + `${fx(need)} N por taco ≤ ${fx(c.tension_kN * 1000)} N de catálogo). Capacidad a confirmar con la ETA del fabricante y el soporte real.` });
+      return;
+    }
+  }
+  const [code, c] = anchors[anchors.length - 1];
+  ps.values.TACO_ANCLAJE = code;
+  ps.sources.TACO_ANCLAJE = "calculo";
+  notes.push({ level: "advertencia", code: "DIM-ANCLAJE", message: `Ningún taco del catálogo resiste ${fx(need)} N de tracción por taco: se mantiene el `
+    + `${lc(c.name)} y la comprobación no se cumplirá (reduzca el empuje o amplíe la base).` });
 }
 
 /** Perfil que hay que aumentar cuando falla el desplome en la dirección axis (0 = X, 1 = Y): el más flexible del pórtico,
@@ -208,29 +240,38 @@ function fitLeg(family, ps, profAutos) {
   return changed;
 }
 
-function selectFeet(family, ps, notes) {
-  const m = family.construct(ps);
-  const rep = analyze(m, false, false);
+/** Peor reacción vertical de servicio por apoyo (kg) con los apoyos que tiene ps. */
+function supportNeed(family, ps) {
+  const rep = analyze(family.construct(ps), false, false);
   const grav = new Set(Object.entries(rep.combinations.ELS).filter(([, f]) => "G" in f).map(([c]) => c));
   const rz = rep.reactions.filter((r) => grav.has(r.combination)).map((r) => r.Rz_N);
-  if (!rz.length) return;
-  const need = Math.max(...rz) / G_ACC;
+  return rz.length ? Math.max(...rz) / G_ACC : null;
+}
+
+/** Pie o rueda de menor capacidad que soporta la peor reacción de servicio, comprobada con el propio apoyo montado. */
+function selectFeet(family, ps, notes) {
+  let need = supportNeed(family, ps);
+  if (need === null) return;
   const sp = family.support_param ?? "PIE_NIVELADOR", cat = family.support_category ?? "patas";
   const word = cat.startsWith("ruedas") ? "Rueda" : "Pie nivelador";
   const feet = Object.entries(C.components()).filter(([, c]) => c.category === cat && !c.brake).map((x, i) => ({ x, i }))
     .sort((a, b) => a.x[1].rated_load_kg - b.x[1].rated_load_kg || a.i - b.i).map((o) => o.x);
   const leg = C.profile(ps.values[family.leg_param]);
+  const before = ps.values[sp];
   for (const [code, c] of feet) {
     const nut = C.component(`TUERCA_SOLDAR_${c.thread}`);
     const fits = nut.s / 0.8660254 <= leg.B - 2 * leg.t - 1;
-    if (c.rated_load_kg >= need && fits) {
-      ps.values[sp] = code;
-      ps.sources[sp] = "calculo";
-      notes.push({ level: "propuesta", code: "DIM-PIES", message: `${word} seleccionad${word === "Rueda" ? "a" : "o"} por cálculo: ${c.name} (capacidad nominal de catálogo `
-        + `${c.rated_load_kg} kg ≥ reacción de servicio ${pyRound(need, 0).toFixed(0)} kg por apoyo). Capacidad a confirmar con la ficha del proveedor.` });
-      return;
-    }
+    if (!fits || c.rated_load_kg < need) continue;
+    ps.values[sp] = code;
+    const own = supportNeed(family, ps);          // con este apoyo montado
+    if (own !== null && c.rated_load_kg < own) { need = Math.max(need, own); continue; }
+    if (own !== null) need = own;
+    ps.sources[sp] = "calculo";
+    notes.push({ level: "propuesta", code: "DIM-PIES", message: `${word} seleccionad${word === "Rueda" ? "a" : "o"} por cálculo: ${c.name} (capacidad nominal de catálogo `
+      + `${c.rated_load_kg} kg ≥ reacción de servicio ${pyRound(need, 0).toFixed(0)} kg por apoyo). Capacidad a confirmar con la ficha del proveedor.` });
+    return;
   }
+  ps.values[sp] = before;
   notes.push({ level: "advertencia", code: "DIM-PIES", message: `Ningún ${word.toLowerCase()} del catálogo admite ${pyRound(need, 0).toFixed(0)} kg por apoyo con la pata/montante `
     + `${leg.code}: se mantiene ${ps.values[sp]} y la comprobación no se cumplirá.` });
 }
@@ -240,13 +281,29 @@ export function build(family, params, onProgress = null) {
   let ruleNotes = [];
   const ruled = new Set();          // la regla puede reajustar lo que ella misma fijó (el redimensionado cambia perfiles)
   let model, notes;
-  for (let it = 0; it < 4; it++) {
+  // cargas de uso no indicadas: se adoptan las del uso previsto (el diseño queda siempre verificado)
+  const dl = Object.entries(family.defaultLoads ? family.defaultLoads(params.values) : {}).filter(([k]) => params.values[k] == null);
+  if (dl.length) {
+    params = copyParams(params);
+    for (const [k, [kg]] of dl) { params.values[k] = kg; params.sources[k] = "por_uso"; }
+    const label = Object.fromEntries(family.specs().map((sp) => [sp.name, sp.label]));
+    ruleNotes.push({ level: "propuesta", code: "CARGA-USO", message: "Carga de uso no indicada: se adopta "
+      + dl.map(([k, [kg, why]]) => `${(label[k] ?? k).toLowerCase()} ${g(kg)} kg (${why})`).join("; ") + ". Confírmela o indique la real." });
+  }
+  const anchorable = family.specs().some((sp) => sp.name === "ANCLAJE" && (sp.choices ?? []).includes("al_suelo"));
+  for (let it = 0; it < 5; it++) {
     const autos = Object.entries(params.values).filter(([, v]) => v === AUTO).map(([k]) => k);
     let resolved;
     [resolved, notes] = autos.length ? resolveAuto(family, params, autos, onProgress) : [copyParams(params), []];
     model = family.construct(resolved);
     // valores por defecto incompatibles (nunca los del usuario): se corrigen y se vuelve a dimensionar
     const fixes = Object.entries(model.rule_fixes).filter(([k, [val]]) => (params.sources[k] === "defecto" || ruled.has(k)) && params.values[k] !== val);
+    // sin anclaje (por defecto) el conjunto vacío volcaría con el empuje: se ancla al suelo
+    if (!fixes.length && anchorable && params.sources.ANCLAJE === "defecto" && params.values.ANCLAJE === "ninguno") {
+      const ov = overturning(model, model.params.values);
+      if (ov && ov.ratio > 1.0 + 1e-9) fixes.push(["ANCLAJE", ["al_suelo", `Anclaje al suelo (regla de diseño): sin anclar, el conjunto vacío vuelca con el `
+        + `empuje de ${g(ov.H_N)} N (aprovechamiento ${fx(ov.ratio, 2)}; admite ${ov.admissible_N} N).`]]);
+    }
     if (!fixes.length) break;
     params = copyParams(params);
     for (const [k, [val, why]] of fixes) {

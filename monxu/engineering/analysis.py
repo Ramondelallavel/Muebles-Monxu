@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 
 from .. import catalog
+from ..core.params import AUTO
 from .fem import Frame3D, line_load_to_nodes
 from .plate import navier
 
@@ -23,6 +24,73 @@ G_ACC = 9.81
 MAX_ELEMENT = 100.0
 N_ZERO = 1e-3          # N: axil por debajo del cual la barra se considera sin compresión
 MASCULINE_WORDS = ("carro", "puesto", "armario")     # concordancia del texto de vuelco ("del carro vacío", "de la mesa vacía")
+#: carros: la maniobra actúa en la dirección de la marcha; lateralmente (giros, empujes ocasionales) esta fracción
+LATERAL_FACTOR_MOBILE = 0.5
+DIRS = ("+X", "-X", "+Y", "-Y")
+
+
+def own_weight(model) -> tuple[float, np.ndarray]:
+    """Peso (N) y centro de gravedad del conjunto sin los tacos de anclaje, que quedan en el suelo."""
+    own = [i for i in model.instances if i.part.role != "anclaje"]
+    ms = np.array([i.part.mass for i in own])
+    return float(ms.sum()) * G_ACC, (np.array([i.centroid for i in own]) * ms[:, None]).sum(axis=0) / ms.sum()
+
+
+def support_levers(sups, cog) -> dict:
+    pts = np.array([s["point"] for s in sups])
+    xmin, xmax = pts[:, 0].min(), pts[:, 0].max()
+    ymin, ymax = pts[:, 1].min(), pts[:, 1].max()
+    return {"+X": xmax - cog[0], "-X": cog[0] - xmin, "+Y": ymax - cog[1], "-Y": cog[1] - ymin}
+
+
+def _lc(name: str) -> str:
+    """Nombre de catálogo en minúscula inicial, para usarlo dentro de una frase."""
+    return name[:1].lower() + name[1:]
+
+
+def class4_rho(prof, fy: float) -> float:
+    """EN 1993-1-5 §4.4: factor de reducción de la pared más esbelta de un tubo rectangular en compresión uniforme
+    (ψ = 1, kσ = 4); se aplica a toda la sección (área y módulos), del lado de la seguridad."""
+    eps = math.sqrt(235.0 / fy)
+    ct = max(prof.H - 3 * prof.t, prof.B - 3 * prof.t) / prof.t
+    lp = ct / (28.4 * eps * 2.0)
+    return 1.0 if lp <= 0.673 else min(1.0, (lp - 0.22) / lp ** 2)
+
+
+def overturning(model, ps: dict, st: dict | None = None) -> dict | None:
+    """Vuelco del conjunto vacío (EN 1990 EQU: γG,stb = 0,9 sobre el peso, γQ = 1,5 sobre el empuje) en las cuatro
+    direcciones. Empuje CARGA_HORIZONTAL a la altura de empuje; en los carros ("mobile"), completo en la dirección de
+    la marcha (X) y LATERAL_FACTOR_MOBILE en la lateral (Y). Devuelve la dirección determinante (mayor cociente
+    Mdst/Mstb) y la tracción de anclaje necesaria (la mayor de las cuatro direcciones), o None sin apoyos o sin empuje."""
+    st = st if st is not None else model.structure
+    sups = st.get("supports", [])
+    H_N = ps.get("CARGA_HORIZONTAL") or 0.0
+    if not sups or not H_N:
+        return None
+    pf = catalog.criteria()["partial_factors"]
+    Wtot, cog = own_weight(model)          # los tacos de anclaje quedan en el suelo: su peso no estabiliza
+    levers = support_levers(sups, cog)
+    pts = np.array([s["point"] for s in sups])
+    bx, by = pts[:, 0].max() - pts[:, 0].min(), pts[:, 1].max() - pts[:, 1].min()
+    base = {"+X": bx, "-X": bx, "+Y": by, "-Y": by}
+    hgt = st.get("push_height", st["worktop_height"])     # altura de empuje (carros: asa o mano)
+    mobile = bool(st.get("mobile"))
+    force = {d: H_N * (LATERAL_FACTOR_MOBILE if mobile and d in ("+Y", "-Y") else 1.0) for d in DIRS}
+    res = {}
+    for d in DIRS:
+        Mstb = pf["gamma_G_stb"] * Wtot * levers[d]
+        Mdst = pf["gamma_Q_dst"] * force[d] * hgt
+        T = max(0.0, (Mdst - Mstb) / base[d]) if base[d] > 0 else float("inf")
+        res[d] = {"ratio": Mdst / Mstb if Mstb > 0 else float("inf"), "Mstb": Mstb, "Mdst": Mdst, "T": T}
+    dirn = max(DIRS, key=lambda d: res[d]["ratio"])
+    dT = max(DIRS, key=lambda d: res[d]["T"])
+    n_anchor = max(1, len(sups) // 2)
+    r = res[dirn]
+    return {"dirn": dirn, "ratio": r["ratio"], "Mstb": r["Mstb"], "Mdst": r["Mdst"], "lever": levers[dirn],
+            "force": force[dirn], "H_N": H_N, "hgt": hgt, "mobile": mobile, "Wtot": Wtot, "cog": cog,
+            "levers": levers, "T": res[dT]["T"], "dirn_T": dT, "n_anchor": n_anchor,
+            "T_per": res[dT]["T"] / n_anchor,
+            "admissible_N": max(0, math.floor(r["Mstb"] / (pf["gamma_Q_dst"] * hgt) / (force[dirn] / H_N)))}
 
 
 @dataclass
@@ -241,6 +309,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             Gm += P
     g_sheets = 0.0
     surfaces_info = []
+    undefined_loads: list[str] = []
     for surf in st.get("surfaces", []):
         lvl = levels[surf["level"]]
         inst = model.instance(surf["sheet_instance"])
@@ -261,13 +330,19 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             info["q"] = q
             cases.append({"id": f"Q_{surf['id']}", "label": f"Sobrecarga de uso uniforme en {surf['label'].lower()}",
                           "value": f"{load_kg:g} kg ({q * 1e6:.0f} N/m²)", "total_N": round(applied, 1)})
+        elif load_kg is not None:        # 0 kg indicado: sin sobrecarga de uso (se verifica con el peso propio)
+            info["q"] = 0.0
+            hyp.append(f"{surf['label']}: sin sobrecarga de uso (0 kg indicados); se verifica con su peso propio.")
         else:
+            undefined_loads.append(surf["load_param"])
             pending.append(f"Carga de uso sobre {surf['label'].lower()} no definida ({surf['load_param']}): "
                            f"verificación de {surf['label'].lower()} pendiente.")
         surfaces_info.append(info)
     cases.insert(0, {"id": "G", "label": "Peso propio (perfiles y chapas, calculado desde la geometría)",
                      "value": f"{(Gm + g_sheets) / G_ACC:.1f} kg", "total_N": round(Gm + g_sheets, 1)})
     has_Q = "Q" in fr.loads
+    # verificación completa si hay sobrecarga o si todas las cargas de uso están indicadas (0 kg incluidos)
+    q_defined = has_Q or not undefined_loads
     P_kg = ps.get("CARGA_PUNTUAL")
     top_lvl = levels.get("SUP")
     if P_kg and top_lvl:
@@ -321,7 +396,9 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             combos_uls["ELU-4"] = {"G": gG, "Q": gQ, "HX": gQ * psi}
     if "P" in fr.loads:
         combos_uls["ELU-5"] = {"G": gG, "P": gQ}
-    combos_sls = {"ELS-1": {"G": 1.0, "Q": 1.0}} if has_Q else {}
+    # sin sobrecarga (0 kg indicados) la combinación de servicio es la del peso propio: reacciones en los apoyos y
+    # flechas también se comprueban
+    combos_sls = {"ELS-1": {"G": 1.0, "Q": 1.0}} if has_Q else {"ELS-1": {"G": 1.0}}
     if "P" in fr.loads:
         combos_sls["ELS-2"] = {"G": 1.0, "P": 1.0}
     for pl in st.get("point_loads", []):
@@ -339,19 +416,22 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
     alpha = crit["imperfection_factors"][crit["buckling_curve_cold_formed_hollow"]]
     beta_leg = crit["effective_length_factors"]["leg_sway"]
     member_results = []
+    class4: set[str] = set()
     for mid, mm in sm.members.items():
         mat, prof, sp = mm["material"], mm["profile"], mm["props"]
         fy, gM0, gM1 = mat.fy, mat.gamma_M0, mat.gamma_M1
         cls = section_class(prof, fy)
-        Wy = sp.Wpl_y if cls <= 2 else sp.Wel_y
-        Wz = sp.Wpl_z if cls <= 2 else sp.Wel_z
-        NRd, MyRd, MzRd = sp.A * fy / gM0, Wy * fy / gM0, Wz * fy / gM0
+        rho = class4_rho(prof, fy) if cls == 4 else 1.0           # clase 4: sección eficaz (EN 1993-1-5)
+        A_eff = sp.A * rho
+        Wy = sp.Wpl_y if cls <= 2 else sp.Wel_y * rho
+        Wz = sp.Wpl_z if cls <= 2 else sp.Wel_z * rho
+        NRd, MyRd, MzRd = A_eff * fy / gM0, Wy * fy / gM0, Wz * fy / gM0
         VzRd, VyRd = sp.Av_z * fy / math.sqrt(3) / gM0, sp.Av_y * fy / math.sqrt(3) / gM0
         is_leg = mm["role"] in ("pata", "montante")
         beta = beta_leg if is_leg else crit["effective_length_factors"]["braced_member"]
         Lcr = beta * mm["length"]
         lam1 = math.pi * math.sqrt(mat.E / fy)
-        lam = Lcr / min(sp.iy, sp.iz) / lam1
+        lam = Lcr / min(sp.iy, sp.iz) / lam1 * math.sqrt(rho)       # EN 1993-1-1 (6.51) con A_eff
         chi = buckling_chi(lam, alpha)
         best = {"u": -1}
         for cname, u in U.items():
@@ -372,7 +452,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
                     Vmax = max(Vmax, Vy / VyRd, Vz / VzRd)
                     Tmax = max(Tmax, T)
             # compresión real (umbral de 1 mN: el ruido numérico de barras sin axil no activa el pandeo)
-            ub = (abs(Nc) / (chi * sp.A * fy / gM1) + Mmax_y / (Wy * fy / gM1) + Mmax_z / (Wz * fy / gM1)) \
+            ub = (abs(Nc) / (chi * A_eff * fy / gM1) + Mmax_y / (Wy * fy / gM1) + Mmax_z / (Wz * fy / gM1)) \
                 if Nc < -N_ZERO else 0
             u_all = max(ucs, ub, Vmax)
             if u_all > best["u"]:
@@ -382,11 +462,11 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
                    "L_mm": mm["length"], "Lcr_mm": Lcr, "lambda_rel": lam, "chi": chi,
                    "N_Ed_kN": best["Nc"] / 1e3, "My_Ed_kNm": best["My"] / 1e6, "Mz_Ed_kNm": best["Mz"] / 1e6,
                    "u_seccion": best["ucs"], "u_pandeo": best["ub"], "u_cortante": best["uv"]}
-        status = _status(best["u"])
         if cls == 4:
-            status = PENDING
-            pending.append(f"{mm['instance'].name}: sección clase 4, requiere sección eficaz (no implementado).")
-        if not has_Q and status == OK:
+            details["rho_clase4"] = rho
+            class4.add(f"{prof.code} en {mat.code} (ρ = {rho:.3f})")
+        status = _status(best["u"])
+        if not q_defined and status == OK:
             status = PENDING
         checks.append(Check(f"B.{mid}", "resistencia" if not is_leg else "pandeo", mid,
                             f"{mm['instance'].name} ({prof.code}, {mat.code}): resistencia de sección"
@@ -408,6 +488,10 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
                                     f"EN 1990 A1.4 (límite L/{crit['deflection_limits']['member_span_ratio']} adoptado)",
                                     round(dmax, 3), round(lim, 3), "mm", round(dmax / lim, 4), _status(dmax / lim),
                                     cmax))
+    if class4:
+        hyp.append("Secciones clase 4 (" + ", ".join(sorted(class4)) + "): sección eficaz según EN 1993-1-5 §4.4 con la "
+                   "reducción de la pared más esbelta en compresión uniforme aplicada a toda la sección (del lado de la "
+                   "seguridad).")
 
     # ---------------------------------------------------------------- desplome
     if "ELS-3" in U and top_nodes:
@@ -475,7 +559,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         if not mat.fy_guaranteed:
             hyp.append(f"{mat.name}: la norma {mat.standard} no garantiza límite elástico mínimo; se adopta "
                        f"fy = {mat.fy} MPa como hipótesis (confirmar con certificado 3.1).")
-        if info["load_kg"]:
+        if info["load_kg"] is not None:
             q_uls = gG * info["q_g"] + gQ * info["q"]
             q_sls = info["q_g"] + info["q"]
             r_u = navier(a, b, t, mat.E, mat.nu, q=q_uls)
@@ -538,7 +622,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
                 s = math.hypot(sigma, tau)
                 if s > best[0]:
                     best = (s, cname)
-            if not has_Q:
+            if not q_defined:
                 stt = PENDING
             else:
                 stt = _status(best[0] / fvw)
@@ -553,45 +637,53 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
 
     # ---------------------------------------------------------------- estabilidad
     stability = None
-    if include_stability and sups:
-        Wtot = model.total_mass() * G_ACC
-        cog = model.center_of_mass()
-        pts = np.array([s["point"] for s in sups])
-        xmin, xmax = pts[:, 0].min(), pts[:, 0].max()
-        ymin, ymax = pts[:, 1].min(), pts[:, 1].max()
-        levers = {"+X": xmax - cog[0], "-X": cog[0] - xmin, "+Y": ymax - cog[1], "-Y": cog[1] - ymin}
-        hgt = st.get("push_height", st["worktop_height"])     # altura de empuje para el vuelco (carros: asa o mano)
-        dirn, lev = min(levers.items(), key=lambda kv: kv[1])
-        if H_N:
-            Mstb = pf["gamma_G_stb"] * Wtot * lev
-            Mdst = pf["gamma_Q_dst"] * H_N * hgt
-            ratio = Mdst / Mstb if Mstb > 0 else float("inf")
-            what = st.get("product_word", "mesa")
-            what = f"del {what} vacío" if what in MASCULINE_WORDS else f"de la {what} vacía"
-            # empuje de servicio que el conjunto vacío resiste sin anclaje (EQU): γQ·H·h = γG,stb·W·brazo
-            det = {"peso_N": Wtot, "cdg_mm": [round(v, 1) for v in cog], "brazo_mm": lev,
-                   "empuje_admisible_N": math.floor(Mstb / (pf["gamma_Q_dst"] * hgt))}
-            if ps.get("ANCLAJE") == "al_suelo":
-                # base de vuelco: distancia entre líneas de apoyo en la dirección más desfavorable
-                base = (ymax - ymin) if dirn in ("+Y", "-Y") else (xmax - xmin)
-                T = max(0.0, (Mdst - Mstb) / base) if base > 0 else float("inf")
-                n_anchor = max(1, len(sups) // 2)
-                det.update({"traccion_total_N": round(T, 1), "anclajes_traccionados": n_anchor,
-                            "traccion_por_anclaje_N": round(T / n_anchor, 1)})
-                pending.append(f"Anclaje al suelo: tracción de cálculo {T / n_anchor:.0f} N por anclaje "
+    ov = overturning(model, ps, st) if include_stability else None
+    if ov:
+        what = st.get("product_word", "mesa")
+        what = f"del {what} vacío" if what in MASCULINE_WORDS else f"de la {what} vacía"
+        dirn, H_N = ov["dirn"], ov["H_N"]
+        # empuje de servicio que el conjunto vacío resiste sin anclaje (EQU): γQ·H·h = γG,stb·W·brazo
+        det = {"peso_N": ov["Wtot"], "cdg_mm": [round(v, 1) for v in ov["cog"]], "brazo_mm": ov["lever"],
+               "empuje_admisible_N": ov["admissible_N"]}
+        load_txt = (f"maniobra de {H_N:g} N en la dirección de la marcha y {H_N * LATERAL_FACTOR_MOBILE:g} N lateral"
+                    if ov["mobile"] else f"empuje horizontal de {H_N:g} N")
+        if ov["mobile"]:
+            hyp.append(f"Maniobra del carro: {H_N:g} N en la dirección de la marcha y {LATERAL_FACTOR_MOBILE * 100:.0f} % "
+                       "en la lateral (giros y empujes ocasionales), a la altura de empuje, con el carro vacío.")
+        if ps.get("ANCLAJE") == "al_suelo":
+            T, n_anchor, T_per = ov["T"], ov["n_anchor"], ov["T_per"]
+            det.update({"traccion_total_N": round(T, 1), "anclajes_traccionados": n_anchor,
+                        "traccion_por_anclaje_N": round(T_per, 1), "direccion_traccion": ov["dirn_T"]})
+            code = ps.get("TACO_ANCLAJE")
+            anchor = catalog.component(code) if code not in (None, AUTO) and code in catalog.components() else None
+            if anchor:
+                cap = float(anchor["tension_kN"]) * 1000.0
+                u = T_per / cap
+                hyp.append(f"Anclaje al suelo: un {_lc(anchor['name'])} por apoyo, a través de la base del pie; "
+                           f"tracción admisible {anchor['tension_kN']:g} kN en hormigón C20/25 no fisurado (catálogo "
+                           "genérico de referencia, a confirmar con la ETA del taco y el soporte real).")
+                checks.append(Check("E.ANCLAJE", "estabilidad", "Anclajes", f"Tracción por taco de anclaje bajo {load_txt} "
+                                    f"(dirección {ov['dirn_T']}, {n_anchor} tacos traccionados)",
+                                    "EN 1990 EQU; capacidad del taco según catálogo (ETA)", round(T_per, 1),
+                                    round(cap, 1), "N", round(u, 4), _status(u), "EQU", det))
+            else:
+                pending.append(f"Anclaje al suelo: tracción de cálculo {T_per:.0f} N por anclaje "
                                f"({n_anchor} anclajes en el lado traccionado). La capacidad del anclaje y del soporte "
                                "no está verificada (depende del taco y del suelo).")
                 checks.append(Check("E.ANCLAJE", "estabilidad", "Anclajes", f"Vuelco impedido por anclaje al suelo: "
-                                    f"tracción de cálculo por anclaje bajo empuje de {H_N:g} N (dirección {dirn})",
-                                    "EN 1990 EQU + EN 1992-4 (anclajes, no evaluado)", round(T / n_anchor, 1), None,
+                                    f"tracción de cálculo por anclaje bajo {load_txt} (dirección {ov['dirn_T']})",
+                                    "EN 1990 EQU + EN 1992-4 (anclajes, no evaluado)", round(T_per, 1), None,
                                     "N", None, PENDING, "EQU", det))
-            else:
-                checks.append(Check("E.VUELCO", "estabilidad", "Conjunto", f"Vuelco {what} bajo empuje "
-                                    f"horizontal de {H_N:g} N {st.get('push_where', 'en la parte superior')} "
-                                    f"(dirección {dirn})",
-                                    "EN 1990 EQU (γG,stb = 0,9; γQ = 1,5)", round(Mdst / 1e3, 2), round(Mstb / 1e3, 2),
-                                    "N·m", round(ratio, 4), _status(ratio), "EQU", det))
-        stability = {"weight_N": Wtot, "cog": cog.tolist(), "levers": levers}
+        else:
+            checks.append(Check("E.VUELCO", "estabilidad", "Conjunto", f"Vuelco {what} bajo {load_txt} "
+                                f"{st.get('push_where', 'en la parte superior')} (dirección {dirn})",
+                                "EN 1990 EQU (γG,stb = 0,9; γQ = 1,5)", round(ov["Mdst"] / 1e3, 2),
+                                round(ov["Mstb"] / 1e3, 2), "N·m", round(ov["ratio"], 4), _status(ov["ratio"]), "EQU",
+                                det))
+        stability = {"weight_N": ov["Wtot"], "cog": ov["cog"].tolist(), "levers": ov["levers"]}
+    elif include_stability and sups:
+        Wtot, cog = own_weight(model)
+        stability = {"weight_N": Wtot, "cog": cog.tolist(), "levers": support_levers(sups, cog)}
 
     # ---------------------------------------------------------------- resultado global
     statuses = [c.status for c in checks]
@@ -609,11 +701,11 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         mats[info["part"].material] = catalog.material(info["part"].material)
     return {
         "status": status,
-        "status_label": {OK: "Verificación preliminar automatizada: CUMPLE",
+        "status_label": {OK: "Verificación estructural automatizada completa: CUMPLE (EN 1990 · EN 1993)",
                          FAIL: "NO CUMPLE: requiere modificación del diseño",
                          PENDING: "Verificación incompleta: datos pendientes"}[status],
-        "validation_note": ("Resultado de cálculo preliminar automatizado. La validación definitiva del producto "
-                            "estructural corresponde a un técnico competente."),
+        "validation_note": ("Cálculo automatizado según EN 1990 y EN 1993 con las hipótesis indicadas. El expediente lo "
+                            "firma el responsable técnico del fabricante."),
         "governing": asdict(governing) if governing else None,
         "checks": [asdict(c) for c in checks],
         "load_cases": cases,

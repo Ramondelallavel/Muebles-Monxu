@@ -28,7 +28,10 @@ for c, r in zip(cases, res):
         fails = sorted({cid.split(".")[0] + "." + cid.split(".")[-1] for cid, (st, _, _) in r["checks"].items()
                         if st == "NO_CUMPLE"})
         by_fam[f][r["status"]] += 1
-        key = ("BLOQ " + ",".join(blocking)) if blocking else ("NO_CUMPLE " + ",".join(fails)) if fails else None
+        if fails and r.get("fix"):              # no cumple por valores fijados y tiene corrección comprobada
+            by_fam[f]["con corrección comprobada"] += 1
+        key = ("BLOQ " + ",".join(blocking)) if blocking else (
+            ("NO_CUMPLE " + ",".join(fails) + ("" if r.get("fix") else " (SIN CORRECCIÓN)")) if fails else None)
     if key:
         by_fam[f][key] += 1
         if len(examples[(f, key)]) < 3:

@@ -140,7 +140,7 @@ def export_excel(path: Path, info: dict[str, Any], bom: dict[str, Any], plan: di
         wb_.cell(k + n, 4, cdat["unit"])
     # ------------------------------------------------------------------ verificaciones
     wv = wb.create_sheet("Verificaciones")
-    r0 = _header(wv, info, "VERIFICACIONES ESTRUCTURALES (CÁLCULO PRELIMINAR AUTOMATIZADO)")
+    r0 = _header(wv, info, "VERIFICACIONES ESTRUCTURALES (CÁLCULO AUTOMATIZADO EN 1990 / EN 1993)")
     wv.cell(r0 - 1, 1, eng["status_label"]).font = Font(bold=True, color="B00020" if eng["status"] != "CUMPLE" else "1B5E20")
     rows = [[c["id"], c["category"], c["description"], c["standard"], c["combination"], c["value"], c["limit"],
              c["unit"], c["utilization"], c["status"]] for c in eng["checks"]]

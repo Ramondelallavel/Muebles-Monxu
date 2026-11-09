@@ -54,6 +54,11 @@ class Tarima(MesaSoldadura):
     frame_params = ("PERFIL_LARGUERO", "PERFIL_TRAVESANO")
     top_iid, top_label = "ENC.PLACA", "Superficie de la tarima"
 
+    def default_loads(self, v):
+        L, W = v.get("LONGITUD") or 0, v.get("ANCHURA") or 0
+        kg = float(max(10, math.ceil(SERVICE_LOAD_KN_M2 * L * W * 1e-6 / 9.81e-3 / 10) * 10))
+        return {"CARGA_TOTAL": (kg, f"{SERVICE_LOAD_KN_M2:g} kN/m² de EN ISO 14122-2 sobre {L:g} × {W:g} mm")}
+
     # ------------------------------------------------------------------ cálculo
     def plate_targets(self, v):
         if not (v.get("CARGA_TOTAL") or v.get("CARGA_PUNTUAL")):

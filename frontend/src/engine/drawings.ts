@@ -8,6 +8,7 @@ import { project, projectPoint } from "./hlr";
 import { mmul, translation } from "./model";
 import { PDF, textWidth } from "./pdf";
 import { Occupancy, auditPage, boxesOverlap, segHitsBox, segsCross, summarize, textBox } from "./layout";
+import { g } from "./util";
 
 const FRAME = [20, 10, 410, 287];
 const TB_W = 180, TB_H = 58;
@@ -1036,13 +1037,37 @@ function planWelds(d, X) {
     m.joints.some((j) => j.kind === "soldadura" && j.weld.a < 3) ? "Garganta a < 3 mm: requiere WPS cualificada (EN ISO 15614-1)." : ""], 2.2, 104, true);
 }
 
+/** Punto señalado de cada pieza en la vista isométrica explosionada. Si la pieza se repite (pies, tuercas, tacos...), se elige
+ * la instancia visible más alejada de los puntos ya elegidos, para repartir los globos en vez de amontonarlos en una esquina. */
 function partTargets(X, insts, explode) {
-  const t = new Map();
-  for (const i of insts) if (!t.has(i.part.key)) {
+  const groups = new Map();
+  for (const i of insts) {
     const [lo, hi] = instanceBBox(i), ex = explode ? explodeOf(X.m, i) : [0, 0, 0];
-    t.set(i.part.key, [String(i.part.pos), lo.map((v, k) => (v + hi[k]) / 2 + ex[k])]);
+    if (!groups.has(i.part.key)) groups.set(i.part.key, [String(i.part.pos), []]);
+    groups.get(i.part.key)[1].push(lo.map((v, k) => (v + hi[k]) / 2 + ex[k]));
   }
-  return [...t.values()];
+  const w = [1 / Math.sqrt(3), -1 / Math.sqrt(3), 1 / Math.sqrt(3)], u = [Math.SQRT1_2, Math.SQRT1_2, 0];     // vista «iso»
+  const vv = [w[1] * u[2] - w[2] * u[1], w[2] * u[0] - w[0] * u[2], w[0] * u[1] - w[1] * u[0]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const pic = (p) => [dot(p, u), dot(p, vv)];
+  const chosen = [], out = [];
+  for (const [pos, cands] of groups.values()) {
+    let best = cands[0];
+    if (cands.length > 1 && chosen.length) {
+      // la instancia más lejana del observador queda tapada por el conjunto: se descarta si hay al menos tres
+      const depth = cands.map((c) => dot(c, w)), dmin = Math.min(...depth);
+      const vis = cands.length >= 3 ? cands.filter((c, k) => depth[k] > dmin + 1e-6) : cands;
+      let bestD = -1;
+      for (const c of vis.length ? vis : cands) {
+        const pc = pic(c);
+        const dmin2 = Math.min(...chosen.map((q) => Math.hypot(pc[0] - q[0], pc[1] - q[1])));
+        if (dmin2 > bestD + 1e-6) { bestD = dmin2; best = c; }
+      }
+    }
+    chosen.push(pic(best));
+    out.push([pos, best]);
+  }
+  return out;
 }
 
 function planExploded(d, X) {
@@ -1070,6 +1095,15 @@ export const ASSEMBLY_TEXTS = {
   BAL: "Colocar la balda sobre el bastidor inferior, con las escotaduras alrededor de las patas. Fijar con tornillos ISO 7380 M6x12 (par 8 N·m, llave Allen 4 mm).",
   ENC: "Colocar la encimera sobre el bastidor superior y fijarla con tornillos ISO 7380 M6x12 por las pestañas (par 8 N·m). Apretar en cruz desde el centro.",
 };
+/** Anclaje al suelo: taladro y taco bajo cada pie (texto del paso de los apoyos). */
+function withAnchorText(m, texts) {
+  const anc = m.instances.find((i) => i.part.role === "anclaje");
+  if (anc) {
+    const c = anc.part.data;
+    texts[anc.group] = (texts[anc.group] ?? "") + ` Anclar al suelo con tacos ${c.thread} (taladro Ø${g(c.dims[0])} × ${g(c.embed_mm + 10)} mm; par según la ETA).`;
+  }
+  return texts;
+}
 /** Herramientas, pares y avisos de montaje según el tipo de apoyo (pies niveladores o ruedas). */
 const toolsFor = (m) => {
   const sup = m.structure.supports?.[0];
@@ -1086,7 +1120,7 @@ function planAssembly(d, X) {
   const order = Object.values(m.subassemblies).sort((a, b) => a.step - b.step);
   d.newSheet("07", "Instrucciones de montaje", "S/E", "—");
   const cells = [[28, 178, 152, 270], [156, 178, 280, 270], [284, 178, 408, 270], [28, 84, 152, 174], [156, 84, 280, 174]];
-  const texts = { ...ASSEMBLY_TEXTS, ...(m.structure.assembly_texts ?? {}) };
+  const texts = withAnchorText(m, { ...ASSEMBLY_TEXTS, ...(m.structure.assembly_texts ?? {}) });
   const shown = [];
   order.slice(0, 4).forEach((sa, n) => {
     shown.push(...m.instances.filter((i) => i.group === sa.id));
@@ -1153,7 +1187,7 @@ export async function assemblyInstructions(model, summary, info, X = null, onPro
   const m = model;
   const order = Object.values(m.subassemblies).sort((a, b) => a.step - b.step);
   const d = new Drawing({ ...info, total_sheets: order.length + 1, title: `Instrucciones de montaje ${m.product_code}`, assembly_ref: m.product_code });
-  const texts = { ...ASSEMBLY_TEXTS, ...(m.structure.assembly_texts ?? {}) };
+  const texts = withAnchorText(m, { ...ASSEMBLY_TEXTS, ...(m.structure.assembly_texts ?? {}) });
   d.newSheet("M0", "Instrucciones de montaje: conjunto y herramientas", "S/E", "—");
   const all = X.proj("all", m.instances, "iso", false, true);
   const [, v0] = fitView(all, "iso", [30, 90, 270, 270], [], true);

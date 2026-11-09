@@ -56,6 +56,7 @@ class Armario(Estanteria):
     configurations = ["Armario de taller", "Armario de herramientas", "Armario de una puerta", "Armario bajo",
                       "Armario inoxidable"]
     auto_in_construct = Estanteria.auto_in_construct + ("NUMERO_PUERTAS", "ESPESOR_PANEL", "ESPESOR_PUERTA")
+    level_load_kg_m2 = 100            # carga de uso por defecto de cada bandeja (kg/m²)
 
     # ------------------------------------------------------------------ parámetros
     def param_specs(self):

@@ -61,13 +61,21 @@ def test_qa_blocks_dossier_on_errors(tmp_path):
     assert not any(tmp_path.iterdir())       # nada publicado
 
 
-def test_sizing_without_loads_is_pending():
+def test_sizing_without_loads_adopts_use_loads():
+    # sin cargas indicadas: se adoptan las del uso previsto (montaje, 150 kg/m²; balda a la mitad) y se verifica todo
     d = regenerate("mesa_industrial", {"LONGITUD": 1500, "ANCHURA": 700, "ALTURA": 900, "PERFIL_PATA": "auto",
                                        "CARGA_HORIZONTAL": 100})
-    assert d.eng["status"] == "PENDIENTE"
-    assert any("CARGA_TOTAL" in p or "encimera" in p for p in d.eng["pending"])
-    assert d.model.params.sources["PERFIL_PATA"] == "calculo"      # dimensionada frente al empuje horizontal
-    assert any(n["code"] == "DIM-SIN-CARGA" for n in d.model.design_notes)
+    v, src = d.model.params.values, d.model.params.sources
+    assert (v["CARGA_TOTAL"], src["CARGA_TOTAL"]) == (160.0, "por_uso")         # 150 × 1,05 m² = 157,5 → 160
+    assert (v["CARGA_BALDA"], src["CARGA_BALDA"]) == (80.0, "por_uso")          # 75 × 1,05 m² = 78,75 → 80
+    assert any(n["code"] == "CARGA-USO" for n in d.model.design_notes)
+    assert d.eng["status"] == "CUMPLE" and not d.eng["pending"]
+    assert src["PERFIL_PATA"] == "calculo"
+    # cargas 0 indicadas: la verificación también es completa (peso propio y empuje), sin PENDIENTE
+    z = regenerate("mesa_industrial", {"LONGITUD": 1500, "ANCHURA": 700, "ALTURA": 900, "CARGA_TOTAL": 0,
+                                       "CARGA_BALDA": 0, "CARGA_HORIZONTAL": 100})
+    assert z.eng["status"] == "CUMPLE" and not z.eng["pending"]
+    assert any(n["code"] == "DIM-SIN-CARGA" for n in z.model.design_notes)
 
 
 def test_sizing_with_heavy_load_increases_sections():
@@ -89,8 +97,17 @@ def test_bom_masses_from_geometry():
     assert d.bom["totals"]["total_mass"] == pytest.approx(sum(i.part.mass for i in d.model.instances), abs=0.01)
 
 
-def test_default_horizontal_hypothesis_can_fail_overturning():
+def test_default_horizontal_hypothesis_anchors_by_rule():
+    # 300 N por defecto sobre una mesa vacía de ~70 kg: volcaría, así que la regla de diseño la ancla al suelo con el
+    # taco dimensionado por cálculo, y la tracción por taco se comprueba
     d = regenerate("mesa_industrial", {"LONGITUD": 1500, "ANCHURA": 700, "ALTURA": 900})
-    vuelco = next(c for c in d.eng["checks"] if c["id"] == "E.VUELCO")
-    assert vuelco["status"] == "NO_CUMPLE"                  # 300 N por defecto sobre mesa vacía de ~70 kg
+    assert (d.model.params.values["ANCLAJE"], d.model.params.sources["ANCLAJE"]) == ("al_suelo", "regla_diseno")
+    anc = next(c for c in d.eng["checks"] if c["id"] == "E.ANCLAJE")
+    assert anc["status"] == "CUMPLE" and anc["value"] > 0
+    assert not any(c["id"] == "E.VUELCO" for c in d.eng["checks"])
     assert any("300 N" in h for h in d.eng["hypotheses"])   # la hipótesis queda declarada
+    assert d.eng["status"] == "CUMPLE"
+    # «sin anclaje» elegido por el usuario: se respeta, no cumple y se ofrece la corrección comprobada
+    u = regenerate("mesa_industrial", {"LONGITUD": 1500, "ANCHURA": 700, "ALTURA": 900, "ANCLAJE": "ninguno"})
+    assert next(c for c in u.eng["checks"] if c["id"] == "E.VUELCO")["status"] == "NO_CUMPLE"
+    assert u.fix and u.fix["params"]["ANCLAJE"] == "al_suelo"

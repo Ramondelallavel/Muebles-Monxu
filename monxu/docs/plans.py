@@ -691,6 +691,11 @@ def plan_assembly(d: Drawing, X: _Ctx):
                "pestañas (par 8 N·m). Apretar en cruz desde el centro.",
     }
     texts.update(m.structure.get("assembly_texts", {}))
+    anc = next((i for i in m.instances if i.part.role == "anclaje"), None)
+    if anc:            # anclaje al suelo: taladro y taco bajo cada pie
+        c = anc.part.data
+        texts[anc.group] = texts.get(anc.group, "") + (f" Anclar al suelo con tacos {c['thread']} (taladro "
+                                                       f"Ø{c['dims'][0]:g} × {c['embed_mm'] + 10:g} mm; par según la ETA).")
     shown: list = []
     for n, sa in enumerate(order[:4]):
         shown += [i for i in m.instances if i.group == sa.id]

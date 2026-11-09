@@ -169,3 +169,9 @@ figcaption { font-size: 11px; color: var(--muted); }
   body.framed #root { height: auto; min-height: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
+/* corrección automática comprobada y aviso de guardado */
+.fixbox { border: 1px solid var(--info); background: var(--panel2); border-radius: 6px; padding: 8px 10px; margin: 8px 0; font-size: 12.5px; max-width: 100ch; }
+.fixbox ul { margin: 4px 0 8px 18px; padding: 0; }
+.fixbox-float { position: absolute; left: 12px; right: 12px; top: 44px; z-index: 5; }
+.savestate { font-size: 11px; color: var(--muted); padding: 2px 6px; }
+.savestate.bad { color: var(--bad); }

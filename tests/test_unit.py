@@ -179,18 +179,32 @@ def test_interpreter_shelving_example_and_units():
     assert it.values["NUMERO_NIVELES"] == 5 and it.values["CARGA_POR_NIVEL"] == 150
 
 
-def test_assistant_asks_and_flags_unsupported():
+def test_assistant_adopts_missing_data_and_flags_unsupported():
     r = assistant.handle(assistant.new_state(), "Mesa de 2000 mm de largo, 800 de fondo y 900 de alto con 400 kg, "
                                                 "dos cajones y panel trasero perforado")
-    params = {q["param"] for q in r["questions"]}
-    assert "CARGA_BALDA" in params and "MATERIAL_ESTRUCTURAL" in params
+    # lo no indicado se adopta (supuestos con valor), no bloquea: la carga de la balda la calcula el motor por el uso
+    assumed = {a["param"]: a for a in r["assumptions"]}
+    assert assumed["CARGA_BALDA"]["value"] == 120.0                      # 75 kg/m² × 1,6 m²
+    assert assumed["MATERIAL_ESTRUCTURAL"]["value"] == "S235JRH" and r["ready_to_generate"]
+    assert {q["param"] for q in r["questions"]} >= {"CARGA_BALDA", "MATERIAL_ESTRUCTURAL"}   # botones para cambiarlos
     assert any("Cajones" in u for u in r["state"]["unsupported"])
     r2 = assistant.handle(r["state"], "La balda llevará 100 kg")
-    assert r2["parameters"]["CARGA_BALDA"] == 100
-    # el armario ya está implementado, pero con hasta dos puertas: las cuatro pedidas se señalan
+    assert r2["parameters"]["CARGA_BALDA"] == 100 and r2["to_apply"]["CARGA_BALDA"] == 100
+    # el armario ya está implementado, pero con hasta dos puertas: las cuatro pedidas se señalan; las medidas se proponen
     r3 = assistant.handle(assistant.new_state(), "Un armario de herramientas con 4 puertas")
-    assert r3["family_implemented"] and not r3["ready_to_generate"]          # faltan las dimensiones
+    assert r3["family_implemented"] and r3["ready_to_generate"]
+    assert r3["parameters"]["ANCHURA"] == 1000.0 and r3["parameters"]["ALTURA"] == 1950.0
     assert any("4 puertas" in u for u in r3["state"]["unsupported"]) and "NUMERO_PUERTAS" not in r3["parameters"]
+
+
+def test_assistant_applies_only_turn_changes_and_keeps_form_edits():
+    st = assistant.new_state("mesa_industrial")
+    r = assistant.handle(st, "mesa de 1800 x 800 x 900", current={"values": {}, "sources": {}})
+    cur = {"values": dict(r["to_apply"]), "sources": {k: r["sources"][k] for k in r["to_apply"]}}
+    cur["values"]["LONGITUD"], cur["sources"]["LONGITUD"] = 2100.0, "usuario"        # editado en el formulario
+    r2 = assistant.handle(r["state"], "con reposapiés", current=cur)
+    assert r2["to_apply"] == {"REPOSAPIES": 1}                          # no deshace la longitud del formulario
+    assert "Longitud: 2.100 mm." in r2["reply"]                         # y la describe con el valor del proyecto
 
 
 def test_llm_adapter_merges_without_overriding_rules():

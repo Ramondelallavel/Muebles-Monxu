@@ -27,8 +27,18 @@ const FAMILY_KEYWORDS = [
 const SUPPORTED_BY = { "puesto_trabajo|panel_trasero": ["PANEL_HERRAMIENTAS", 1], "carro_taller|ruedas": null, "carro_estanteria|ruedas": null,
   "carro_plataforma|ruedas": null, "armario|puertas": null };
 const CARTS = ["carro_taller", "carro_estanteria", "carro_plataforma"];
+/** La carga es de la balda sólo si va pegada a ella («balda de 100 kg», «balda inferior: 100 kg»); en «con balda y 400 kg» es la de la encimera. */
+const BALDA_BEFORE = /balda(?:\s+inferior)?\s*(?:(?:de|con|:|=)\s*(?:una\s+)?(?:carga\s+(?:de\s+)?)?)?$/;
 export const MESA_LIKE = ["mesa_industrial", "puesto_trabajo", "carro_taller", "mesa_soldadura"];
 export const SHELF_LIKE = ["estanteria", "carro_estanteria", "estanteria_bateria", "armario"];
+/** Parámetros que conservan su significado al cambiar de familia dentro del mismo grupo (mesas o estanterías). */
+export function carryParams(oldFamily, newFamily, values, sources, specs) {
+  if (![MESA_LIKE, SHELF_LIKE].some((gr) => gr.includes(oldFamily) && gr.includes(newFamily))) return [{}, {}];
+  const sp = Object.fromEntries(specs.map((x) => [x.name, x]));
+  const out = {};
+  for (const [k, v] of Object.entries(values)) if (sp[k]) { try { coerce(sp[k], v); out[k] = v; } catch { /* no admisible en la nueva familia */ } }
+  return [out, Object.fromEntries(Object.keys(out).map((k) => [k, sources[k] ?? "usuario"]))];
+}
 const MODULE_WORDS = "modulos|cuerpos|vanos";
 const BAY_MAX = 2000.0;          // anchura máxima de módulo (ParamSpec de ANCHURA en estanteria_bateria)
 const UNSUPPORTED = [
@@ -75,10 +85,12 @@ class Interp {
   pop(k) { const v = this.values[k]; delete this.values[k]; return v; }
 }
 
-export function parse(text, pending = null) {
+/** `contextFamily`: familia de la conversación, para los mensajes de seguimiento que no la nombran («con reposapiés»). */
+export function parse(text, pending = null, contextFamily = null) {
   let t = norm(text);
   const it = new Interp();
   for (const [fid, rx] of FAMILY_KEYWORDS) if (rx.test(t)) { it.family = fid; break; }
+  if (!it.family && contextFamily) it.family = contextFamily;
   // mesa o banco sobre ruedas: carro de taller sin asa de empuje (mesa móvil)
   const mobileTable = it.family === "mesa_industrial" && /\bruedas?\b|\bmovil\b|rodante/.test(t) && !/sin ruedas/.test(t);
   if (mobileTable) {
@@ -134,7 +146,7 @@ export function parse(text, pending = null) {
       it.set("CARGA_POR_NIVEL", val, mm[0] + " por nivel");
     else if (/^\s*(?:de\s+)?(?:carga\s+)?(?:puntual|concentrada)/.test(after) || /(?:puntual|concentrada)\s*(?:de|:|=)?\s*$/.test(before))
       it.set("CARGA_PUNTUAL", val, ctx);     // pegado al valor
-    else if ((/^\s*(?:de carga\s+)?(?:en|sobre|para) (?:la )?(?:balda|estante inferior)/.test(after) || /balda/.test(before)) && !onTop)
+    else if ((/^\s*(?:de carga\s+)?(?:en|sobre|para) (?:la )?(?:balda|estante inferior)/.test(after) || BALDA_BEFORE.test(before)) && !onTop)
       it.set("CARGA_BALDA", val, ctx);     // "100 kg en la balda" o "balda de 100 kg"
     else if (pending && ["CARGA_BALDA", "CARGA_PUNTUAL", "CARGA_TOTAL"].includes(pending[0]) && !/distribuid|encimera/.test(ctx)) it.set(pending[0], val, mm[0]);
     else {
@@ -337,7 +349,7 @@ function missingPlatform(values, asked) {
   for (const [p, lbl, prop] of [["LONGITUD", "longitud de la plataforma", 1000.0], ["ANCHURA", "anchura de la plataforma", 600.0]])
     if (!(p in values)) q.push(Q(p, `¿Qué ${lbl} necesita (mm)?`, "Dimensión principal necesaria para generar la geometría.", [], "generacion", prop));
   if (values.CARGA_TOTAL == null) q.push(Q("CARGA_TOTAL", "¿Qué carga transportará la plataforma (kg)?",
-    "Fija las ruedas, la chapa y el bastidor; sin carga el resultado quedaría PENDIENTE.", [250, 500, 800].map((n) => ({ label: `${n} kg`, value: n })), "verificacion"));
+    "Fija las ruedas, la chapa y el bastidor; si no la indica, se adoptan 250 kg/m².", [250, 500, 800].map((n) => ({ label: `${n} kg`, value: n })), "verificacion"));
   if (!("CARGA_HORIZONTAL" in values) && !asked.has("CARGA_HORIZONTAL")) q.push(Q("CARGA_HORIZONTAL",
     "¿Qué fuerza de maniobra se aplicará en el asa (empuje o tirón con las ruedas frenadas o contra un obstáculo)?",
     "Es la acción que puede volcar el carro vacío; se aplica en el asa.",
@@ -356,7 +368,7 @@ function missingTarima(values, asked) {
   if (values.CARGA_TOTAL == null) {
     const L = values.LONGITUD ?? 1200.0, W = values.ANCHURA ?? 800.0, prop = tarimaLoadKg(L, W);
     q.push(Q("CARGA_TOTAL", `¿Qué carga repartida soportará la tarima (kg en total)? EN ISO 14122-2 pide al menos 2 kN/m²: ${g(prop)} kg para ${g(L * W * 1e-6)} m².`,
-      "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.",
+      "Si no la indica, se adopta la de EN ISO 14122-2 (2 kN/m²).",
       [{ label: `EN ISO 14122-2 (${g(prop)} kg)`, value: prop }, { label: `Taller, 5 kN/m² (${g(tarimaLoadKg(L, W, 5.0))} kg)`, value: tarimaLoadKg(L, W, 5.0) }],
       "verificacion", prop));
   }
@@ -376,7 +388,7 @@ export function missingData(family, values, asked = new Set()) {
   for (const [p, lbl, prop] of [["LONGITUD", "longitud", dL], ["ANCHURA", "anchura (fondo)", dW], ["ALTURA", "altura de trabajo", dH]])
     if (!(p in values)) q.push(Q(p, `¿Qué ${lbl} necesita (mm)?`, "Dimensión principal necesaria para generar la geometría.", [], "generacion", prop));
   if (values.CARGA_TOTAL == null) q.push(Q("CARGA_TOTAL", "¿Qué carga debe soportar la encimera (kg) y está distribuida o concentrada?",
-    "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.", [{ label: "150 kg", value: 150 }, { label: "300 kg", value: 300 }, { label: "500 kg", value: 500 }]));
+    "Si no la indica, se adopta la carga de uso habitual por m² según el uso previsto.", [{ label: "150 kg", value: 150 }, { label: "300 kg", value: 300 }, { label: "500 kg", value: 500 }]));
   if ((values.NUMERO_BALDAS ?? (family === "mesa_soldadura" ? 0 : 1)) >= 1 && values.CARGA_BALDA == null && !asked.has("CARGA_BALDA")) q.push(Q("CARGA_BALDA",
     "¿Qué carga soportará la balda inferior (kg)? ¿La carga indicada para la encimera incluye la de la balda?", "La balda se dimensiona y verifica de forma independiente.",
     [{ label: "Sin carga", value: 0 }, { label: "100 kg", value: 100 }, { label: "200 kg", value: 200 }]));
@@ -416,7 +428,7 @@ function missingShelf(values, asked, family = "estanteria") {
     "confirmacion", "auto"));
   if (values.CARGA_POR_NIVEL == null) q.push(Q("CARGA_POR_NIVEL", (bat ? "¿Qué carga soportará cada bandeja (cada módulo y nivel, kg)" : "¿Qué carga soportará cada nivel (kg)")
     + " y estará repartida (cajas) o concentrada (piezas pesadas)?",
-    "Sin carga no puede verificarse la estructura: el resultado quedaría PENDIENTE.", (cart ? [25, 40, 60] : cab ? [30, 60, 100] : [80, 150, 250]).map((n) => ({ label: `${n} kg`, value: n }))));
+    "Si no la indica, se adopta la carga de uso habitual por m² de bandeja.", (cart ? [25, 40, 60] : cab ? [30, 60, 100] : [80, 150, 250]).map((n) => ({ label: `${n} kg`, value: n }))));
   if (cart && !("CARGA_HORIZONTAL" in values) && !asked.has("CARGA_HORIZONTAL")) q.push(Q("CARGA_HORIZONTAL",
     "¿Qué fuerza de maniobra tendrá el carro (empuje con las ruedas frenadas o contra un obstáculo)?", "Es la acción que puede volcar el carro; un carro no se ancla.",
     [{ label: "Ligera (50 N)", value: 50 }, { label: "Normal (100 N)", value: 100 }], "verificacion", 100.0));
@@ -443,7 +455,7 @@ export function proposalFor(family, values) {
   if (family === "tarima") {
     const p = {};
     for (const [k, v] of [["LONGITUD", 1200.0], ["ANCHURA", 800.0], ["ALTURA", 200.0]]) if (!(k in values)) p[k] = v;
-    if (values.CARGA_TOTAL == null) p.CARGA_TOTAL = tarimaLoadKg(values.LONGITUD ?? 1200.0, values.ANCHURA ?? 800.0);
+    // la carga repartida no se fija aquí: el motor adopta la de EN ISO 14122-2 con las medidas finales
     if (values.CARGA_PUNTUAL == null) p.CARGA_PUNTUAL = 153.0;
     for (const k of ["PERFIL_PATA", "PERFIL_LARGUERO", "PERFIL_TRAVESANO", "ESPESOR_PLACA"]) if (!(k in values)) p[k] = "auto";
     return p;
@@ -493,14 +505,14 @@ export function describe(it) {
     out.push(`Carga distribuida sobre ${{ tarima: "la tarima", carro_plataforma: "la plataforma" }[it.family] ?? "encimera"}: ${g(v.CARGA_TOTAL)} kg.`);
   if ("CARGA_BALDA" in v && v.CARGA_BALDA != null) out.push(`Carga sobre balda: ${g(v.CARGA_BALDA)} kg.`);
   if ("CARGA_PUNTUAL" in v && v.CARGA_PUNTUAL != null) out.push(`Carga puntual: ${g(v.CARGA_PUNTUAL)} kg.`);
-  out.push("Material: " + ("MATERIAL_ESTRUCTURAL" in v ? v.MATERIAL_ESTRUCTURAL : "pendiente de selección") + ".");
+  if ("MATERIAL_ESTRUCTURAL" in v) out.push(`Material: ${v.MATERIAL_ESTRUCTURAL}.`);
   if (it.family === "tarima") out.push("Superficie: chapa de acero soldada al bastidor (antideslizante a prever); cargas de EN ISO 14122-2.");
   if (it.family === "armario") {
     out.push("Puertas: " + ({ 0: "sin puertas (armario abierto)", 1: "una", 2: "dos" }[v.NUMERO_PUERTAS] ?? "una hasta 600 mm de anchura y dos por encima (propuesta)")
       + ", con bisagras de pernio y maneta con cerradura.");
     out.push("Cerramiento: laterales y fondo de chapa atornillados a los montantes; la bandeja superior es el techo.");
   }
-  if (["estanteria", "estanteria_bateria", "tarima", "armario"].includes(it.family)) out.push("Anclaje: " + ({ al_suelo: "al suelo", ninguno: "sin anclaje" }[v.ANCLAJE] ?? "pendiente") + ".");
+  if (["estanteria", "estanteria_bateria", "tarima", "armario"].includes(it.family)) out.push("Anclaje: " + ({ al_suelo: "al suelo", ninguno: "sin anclaje" }[v.ANCLAJE] ?? "lo decide el cálculo de vuelco") + ".");
   if (MESA_LIKE.includes(it.family)) {
     out.push("Balda inferior: " + (v.NUMERO_BALDAS === 1 ? "sí" : v.NUMERO_BALDAS === 0 ? "no" : "no indicada") + ".");
     out.push("Tipo de estructura: tubular soldada" + (it.accessories.includes("estructura tubular") ? " (indicada)." : " (propuesta)."));
@@ -542,11 +554,48 @@ export function llmPrompt(message, state) {
 }
 
 /** Procesa un mensaje y/o respuestas. `llmValues` = parámetros extraídos por Claude (opcional). */
-export function handle(state, message = "", answers = null, llmValues = null) {
+/** Cargas de uso que el motor adopta por el uso previsto cuando no se indican (defaultLoads de la familia). */
+const LOAD_PARAMS = ["CARGA_TOTAL", "CARGA_BALDA", "CARGA_POR_NIVEL", "CARGA_ESTANTE"];
+const fmtVal = (spec, v) => (typeof v === "boolean" ? (v ? "sí" : "no") : typeof v === "number" ? (spec?.unit ? `${g(v)} ${spec.unit}` : g(v)) : String(v).replaceAll("_", " "));
+
+/** Supuestos que se adoptan para lo no indicado: el valor propuesto de cada pregunta y, para las cargas, la carga de uso
+ * que el motor calcula para el uso previsto (antes eran preguntas que dejaban el cálculo PENDIENTE). */
+export function assumptions(fam, questions, params) {
+  const f = REGISTRY[fam];
+  const specs = Object.fromEntries(f.specs().map((sp) => [sp.name, sp]));
+  const merged = Object.fromEntries(Object.entries(specs).map(([k, sp]) => [k, sp.default]));
+  for (const [k, v] of Object.entries(params)) if (k in specs) merged[k] = v;
+  const loads = f.defaultLoads ? f.defaultLoads(merged) : {};
+  const out = [];
+  for (const q of questions) {
+    const sp = specs[q.param];
+    if (!sp) continue;
+    if (LOAD_PARAMS.includes(q.param) && merged[q.param] == null) {
+      if (!(q.param in loads)) continue;
+      const [kg, why] = loads[q.param];
+      out.push({ param: q.param, label: sp.label, value: kg, text: `${sp.label}: ${g(kg)} kg, calculada para el uso previsto (${why}).` });
+    } else if (q.param === "ANCLAJE") {
+      out.push({ param: q.param, label: sp.label, value: null, text: `${sp.label}: lo decide el cálculo (se ancla al suelo, con el taco dimensionado, sólo `
+        + "si el conjunto vacío volcaría con el empuje)." });
+    } else {
+      const v = q.param in params ? params[q.param] : q.proposal != null ? q.proposal : merged[q.param];
+      if (v == null) continue;
+      const txt = v === "auto" ? (q.param === "NUMERO_PUERTAS" ? "según la anchura" : "lo dimensiona el cálculo") : fmtVal(sp, v);
+      out.push({ param: q.param, label: sp.label, value: v, text: `${sp.label}: ${txt}.` });
+    }
+  }
+  return out;
+}
+
+/** Procesa un mensaje (y/o respuestas). `current`: parámetros de trabajo del proyecto ({values, sources}); lo ya definido
+ * cuenta como conocido y `to_apply` contiene sólo lo que este turno cambia o añade (no deshace el formulario). */
+export function handle(state, message = "", answers = null, llmValues = null, current = null) {
   const st = JSON.parse(JSON.stringify(state ?? newState()));
   st.values = st.values ?? {};
+  const curVals = { ...(current?.values ?? {}) }, curSrc = { ...(current?.sources ?? {}) };
+  const known = Object.fromEntries(Object.entries(curVals).filter(([k, v]) => v !== "auto" && (curSrc[k] ?? "usuario") !== "defecto"));
   const pending = (st.last_questions ?? []).map((q) => q.param);
-  const it = message ? parse(message, pending) : new Interp();
+  const it = message ? parse(message, pending, st.family) : new Interp();
   let engine = "reglas";
   if (llmValues && typeof llmValues === "object") {
     let used = false;
@@ -554,8 +603,9 @@ export function handle(state, message = "", answers = null, llmValues = null) {
     if (used) engine = "claude+reglas";
   }
   if (it.family && !st.family) st.family = it.family;
-  const values = { ...st.values, ...it.values };
+  const values = { ...st.values, ...known, ...it.values };          // el proyecto (formulario) prevalece sobre turnos anteriores
   for (const [k, v] of Object.entries(answers ?? {})) { values[k] = v; it.evidence[k] = "respuesta del usuario"; }
+  const turn = new Set([...Object.keys(it.values), ...Object.keys(answers ?? {})]);
   st.values = values;
   st.evidence = { ...(st.evidence ?? {}), ...it.evidence };
   st.unsupported = [...new Set([...(st.unsupported ?? []), ...it.unsupported])].sort();
@@ -563,12 +613,27 @@ export function handle(state, message = "", answers = null, llmValues = null) {
   const asked = new Set(st.asked ?? []);
   const fam = st.family;
   const questions = fam ? missingData(fam, values, asked) : [];
-  for (const q of questions) if (q.blocking === "confirmacion") asked.add(q.param);
+  // cada supuesto se expone una vez; las cargas se recuerdan mientras no se indiquen (dependen de las medidas)
+  for (const q of questions) if (!LOAD_PARAMS.includes(q.param)) asked.add(q.param);
   st.asked = [...asked].sort();
   st.last_questions = questions;
   st.engine = engine;
   const implemented = !!REGISTRY[fam];
   const proposal = implemented ? proposalFor(fam, values) : {};
+  // todo lo interpretado o respondido pasa al motor; abajo se filtra a los parámetros que existen en la familia y admiten el valor
+  let params = { ...proposal, ...values };
+  let labels = {};
+  if (implemented) {
+    const specs = Object.fromEntries(REGISTRY[fam].specs().map((s) => [s.name, s]));
+    labels = Object.fromEntries(Object.entries(specs).map(([k, sp]) => [k, sp.label]));
+    const clean = {};
+    for (const [k, val] of Object.entries(params)) if (specs[k]) {
+      try { coerce(specs[k], val); clean[k] = val; } catch { st.notes = [...new Set([...st.notes, `Valor «${val}» no admisible para ${k}: se ignora.`])]; }
+    }
+    params = clean;
+  }
+  const sources = Object.fromEntries(Object.keys(params).map((k) => [k, k in values ? "usuario" : "ia_propuesta"]));
+  const assumed = implemented ? assumptions(fam, questions, params) : [];
   const reply = [];
   if (!fam) reply.push("No identifico la familia de producto. ¿Se trata de una mesa, una estantería, un puesto de trabajo o un armario?");
   else {
@@ -579,26 +644,17 @@ export function handle(state, message = "", answers = null, llmValues = null) {
   }
   if (st.unsupported.length) reply.push("Elementos solicitados que esta versión todavía no genera (no se incluirán en el diseño): " + st.unsupported.join("; ") + ".");
   for (const n of st.notes) reply.push("Nota: " + n);
-  const genBlock = questions.filter((q) => q.blocking === "generacion");
-  if (questions.length) { reply.push("Necesito confirmar estos datos:"); questions.forEach((q, i) => reply.push(`${i + 1}. ${q.question} (${q.why})`)); }
-  if (implemented) {
-    if (Object.keys(proposal).length) reply.push("Propuesta constructiva preliminar (pendiente de verificación por cálculo): "
-      + Object.entries(proposal).map(([k, v]) => `${k} = ${v}`).join(", ") + ". 'auto' significa que el motor de cálculo dimensionará la sección.");
-    reply.push(genBlock.length ? "Faltan dimensiones para generar la geometría." : "Puede generar ya un diseño preliminar; los datos pendientes quedarán marcados como tales.");
+  if (assumed.length) {
+    reply.push("Lo que no ha indicado lo adopto yo (puede cambiarlo con los botones o escribiendo el dato):");
+    reply.push(...assumed.map((a) => "• " + a.text));
   }
-  // todo lo interpretado o respondido pasa al motor (antes sólo STRUCTURAL_KEYS: se perdían el asa, el peto o el reposapiés);
-  // abajo se filtra a los parámetros que existen en la familia y admiten el valor
-  let params = { ...proposal, ...values };
-  if (implemented) {
-    const specs = Object.fromEntries(REGISTRY[fam].specs().map((s) => [s.name, s]));
-    const clean = {};
-    for (const [k, val] of Object.entries(params)) if (specs[k]) {
-      try { coerce(specs[k], val); clean[k] = val; } catch { st.notes = [...new Set([...st.notes, `Valor «${val}» no admisible para ${k}: se ignora.`])]; }
-    }
-    params = clean;
-  }
-  const sources = Object.fromEntries(Object.keys(params).map((k) => [k, k in values ? "usuario" : "ia_propuesta"]));
+  if (implemented) reply.push("Perfiles, espesores de chapa, pies o ruedas y tacos de anclaje los dimensiona el cálculo, que verifica resistencia, pandeo, "
+    + "flechas, soldaduras, apoyos y vuelco con estos datos.");
   st.history = [...(st.history ?? []), { user: message, answers: answers ?? {} }];
+  // sólo lo que este turno cambia o añade, y lo que el proyecto todavía no tiene
+  const toApply = Object.fromEntries(Object.entries(params).filter(([k]) => turn.has(k) || !(k in curVals)));
+  const qs = questions.map((q) => ({ ...q, label: labels[q.param] ?? q.param }));
   return { state: st, reply: reply.join("\n"), interpretation: { family: it.family, values: it.values, evidence: it.evidence, unsupported: it.unsupported, notes: it.notes },
-    questions, proposal, parameters: params, sources, ready_to_generate: implemented && !genBlock.length, family: fam, family_implemented: implemented, engine };
+    questions: qs, assumptions: assumed, proposal, parameters: params, to_apply: toApply, sources, ready_to_generate: implemented, family: fam,
+    family_implemented: implemented, engine };
 }

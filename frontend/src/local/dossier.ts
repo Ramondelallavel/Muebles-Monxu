@@ -13,9 +13,9 @@ import { partGeometry } from "../engine/geometry";
 
 export function designInfo(project, rev, summary) {
   const e = summary.engineering;
-  const [stamp, level] = e.status === "NO_CUMPLE" ? ["NO APTO PARA FABRICACIÓN — verificación estructural preliminar no superada", "error"]
+  const [stamp, level] = e.status === "NO_CUMPLE" ? ["NO APTO PARA FABRICACIÓN — verificación estructural no superada", "error"]
     : e.status === "PENDIENTE" ? ["PRELIMINAR — verificación estructural pendiente de datos", "warn"]
-      : project.validated_by ? [`VALIDADO por ${project.validated_by}`, "info"] : ["PRELIMINAR — cálculo automatizado CUMPLE · pendiente de validación técnica", "info"];
+      : project.validated_by ? [`VALIDADO por ${project.validated_by}`, "info"] : ["CÁLCULO VERIFICADO — CUMPLE (EN 1990 / EN 1993)", "info"];
   return { product_name: `${family(project.family).name} ${summary.product_code}`, project_code: project.code, revision: rev.rev, date: rev.created.slice(0, 10),
     designer: project.designer || rev.author || "", checked: "—", approved: project.validated_by || "—", client: project.client ?? "", company: "MUEBLES MONXU",
     assembly_ref: summary.product_code, tolerances: summary.parameters.find((p) => p.name === "TOLERANCIAS")?.value ?? "ISO 2768-mK", status_stamp: stamp, status_level: level,
@@ -135,7 +135,7 @@ export async function buildDossier(project, rev, model, summary, onProgress = nu
     "04_LISTA_MATERIALES BOM en Excel con fórmulas (BOM, perfiles, plan de corte, anidado, compras, verificaciones y control de calidad) y CSV.",
     "05_OPTIMIZACION     Plan de corte de barras, anidado de chapa (SVG) y aprovechamientos.",
     "06_DOCUMENTACION    Instrucciones de montaje (PDF), documentación técnica, informe de cálculo y verificaciones (HTML/JSON) e historial.", "",
-    "Resultado preliminar automatizado. La validación definitiva corresponde a un técnico competente."].join("\r\n"));
+    "Cálculo automatizado según EN 1990 y EN 1993 con las hipótesis del informe; el expediente lo firma el responsable técnico del fabricante."].join("\r\n"));
   // ---- manifiesto y empaquetado
   await step("Expediente: manifiesto SHA-256 y compresión ZIP");
   const enc = new TextEncoder();

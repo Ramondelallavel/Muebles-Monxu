@@ -253,6 +253,19 @@ class Store:
             s.commit()
             return changes
 
+    def change_family(self, code: str, family: str, values: dict | None = None, sources: dict | None = None,
+                      author: str = "asistente") -> None:
+        """Cambia la familia de un proyecto que todavía no tiene revisiones; conserva sólo ``values`` (los parámetros
+        que mantienen su significado en la nueva familia)."""
+        with self.Session() as s:
+            p = self._project(s, code)
+            if p.revisions:
+                raise ValueError("El proyecto ya tiene revisiones: cree un proyecto nuevo para otra familia.")
+            old = p.family
+            p.family, p.working_params, p.working_sources = family, dict(values or {}), dict(sources or {})
+            s.add(ChangeLog(project_id=p.id, author=author, kind="familia", detail={"from": old, "to": family}))
+            s.commit()
+
     def set_assistant_state(self, code: str, state: dict):
         with self.Session() as s:
             p = self._project(s, code)

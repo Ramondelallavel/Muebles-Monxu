@@ -269,5 +269,11 @@ def button_screw_solid(c: dict) -> cq.Shape:
     return head.fuse(shank).clean()
 
 
+def anchor_solid(c: dict) -> cq.Shape:
+    """Taco de anclaje embebido en el suelo: cilindro del diámetro de la rosca y la profundidad de anclaje. Origen en el
+    fondo del taladro; la cara superior queda en el plano del suelo."""
+    return cylinder(float(c["thread"][1:]), float(c["embed_mm"]))
+
+
 def generic_box_solid(dims: Sequence[float]) -> cq.Shape:
     return box(-dims[0] / 2, -dims[1] / 2, 0, dims[0] / 2, dims[1] / 2, dims[2])

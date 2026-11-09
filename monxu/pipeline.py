@@ -22,6 +22,7 @@ from .core.model import PlatePart, SheetPart
 from .docs import dxf, excel, plans, report
 from .docs.bom import build_bom
 from .engineering.analysis import analyze
+from .engineering.autofix import propose_fix
 from .families import family
 from .manufacturing.costing import quotation
 from .manufacturing.plan import dfm_check, manufacturing_plan
@@ -48,6 +49,7 @@ class Design:
     qa: QA.QA
     timings: dict[str, float] = field(default_factory=dict)
     cost: dict[str, Any] = field(default_factory=dict)
+    fix: dict[str, Any] | None = None          # corrección automática comprobada si el diseño NO CUMPLE
 
     @property
     def geometry_complete(self) -> bool:
@@ -68,7 +70,7 @@ class Design:
             "interferences": self.interferences, "qa": self.qa.result(),
             "status": {"geometry_complete": self.geometry_complete, "technically_verified": self.technically_verified,
                        "structural": self.eng["status"], "structural_label": self.eng["status_label"]},
-            "mass_kg": self.bom["totals"]["total_mass"], "timings": self.timings, "cost": self.cost,
+            "mass_kg": self.bom["totals"]["total_mass"], "timings": self.timings, "cost": self.cost, "fix": self.fix,
             "catalog_versions": catalog.catalog_versions(),
         }
 
@@ -102,8 +104,13 @@ def regenerate(family_id: str, values: dict[str, Any], sources: dict[str, str] |
     t["interferencias"] = time.perf_counter() - t1
     q = QA.model_checks(model, interf, eng, dfm, bom)
     cost = quotation(model, plan)
+    fix = None
+    if eng["status"] == "NO_CUMPLE":       # corrección mínima de los valores fijados, comprobada antes de ofrecerla
+        t1 = time.perf_counter()
+        fix = propose_fix(family_id, values, sources, eng)
+        t["correccion"] = time.perf_counter() - t1
     t["total"] = time.perf_counter() - t0
-    return Design(family_id, model, eng, plan, bom, dfm, interf, q, {k: round(v, 3) for k, v in t.items()}, cost)
+    return Design(family_id, model, eng, plan, bom, dfm, interf, q, {k: round(v, 3) for k, v in t.items()}, cost, fix)
 
 
 def _sha(p: Path) -> str:
@@ -118,13 +125,13 @@ def design_info(design: Design, project: dict[str, Any]) -> dict[str, Any]:
     m, eng = design.model, design.eng
     qa = design.qa.result()
     if eng["status"] == "NO_CUMPLE":
-        stamp, level = "NO APTO PARA FABRICACIÓN — verificación estructural preliminar no superada", "error"
+        stamp, level = "NO APTO PARA FABRICACIÓN — verificación estructural no superada", "error"
     elif eng["status"] == "PENDIENTE":
         stamp, level = "PRELIMINAR — verificación estructural pendiente de datos", "warn"
     elif project.get("validated_by"):
         stamp, level = f"VALIDADO por {project['validated_by']}", "info"
     else:
-        stamp, level = "PRELIMINAR — cálculo automatizado CUMPLE · pendiente de validación técnica", "info"
+        stamp, level = "CÁLCULO VERIFICADO — CUMPLE (EN 1990 / EN 1993)", "info"
     return {
         "product_name": f"{m.family_name} {m.product_code}", "project_code": project["code"],
         "revision": project["revision"], "date": project.get("date") or time.strftime("%Y-%m-%d"),

@@ -3,7 +3,7 @@
   "materials": "2026.11-2",
   "profiles": "2026.11-2",
   "sheets": "2026.11-3",
-  "components": "2026.11-6",
+  "components": "2026.11-7",
   "standards": "2026.11-2",
   "criteria": "2026.11-2"
  },
@@ -1162,7 +1162,27 @@
      ],
      "allow_auto": false,
      "nullable": false,
-     "help": "",
+     "help": "'ninguno' por defecto: si el conjunto vacío volcara con el empuje, se ancla automáticamente.",
+     "advanced": false
+    },
+    {
+     "name": "TACO_ANCLAJE",
+     "label": "Taco de anclaje",
+     "type": "choice",
+     "default": "auto",
+     "unit": null,
+     "group": "cargas",
+     "min": null,
+     "max": null,
+     "choices": [
+      "ANCLAJE_M8",
+      "ANCLAJE_M10",
+      "ANCLAJE_M12",
+      "ANCLAJE_M16"
+     ],
+     "allow_auto": true,
+     "nullable": false,
+     "help": "'auto': el de menor capacidad que resiste la tracción de cálculo (sólo con anclaje al suelo).",
      "advanced": false
     }
    ],
@@ -1450,7 +1470,8 @@
     "FACTOR_K",
     "NUMERO_TRAVESANOS",
     "NUMERO_TRAVESANOS_BALDA",
-    "HOLGURA_ENCIMERA"
+    "HOLGURA_ENCIMERA",
+    "TACO_ANCLAJE"
    ]
   },
   "estanteria": {
@@ -2130,7 +2151,27 @@
      ],
      "allow_auto": false,
      "nullable": false,
-     "help": "",
+     "help": "'ninguno' por defecto: si el conjunto vacío volcara con el empuje, se ancla automáticamente.",
+     "advanced": false
+    },
+    {
+     "name": "TACO_ANCLAJE",
+     "label": "Taco de anclaje",
+     "type": "choice",
+     "default": "auto",
+     "unit": null,
+     "group": "cargas",
+     "min": null,
+     "max": null,
+     "choices": [
+      "ANCLAJE_M8",
+      "ANCLAJE_M10",
+      "ANCLAJE_M12",
+      "ANCLAJE_M16"
+     ],
+     "allow_auto": true,
+     "nullable": false,
+     "help": "'auto': el de menor capacidad que resiste la tracción de cálculo (sólo con anclaje al suelo).",
      "advanced": false
     },
     {
@@ -2328,7 +2369,8 @@
     "FACTOR_K",
     "NUMERO_TRAVESANOS_BALDA",
     "HOLGURA_BALDA",
-    "DISTANCIA_BALDAS"
+    "DISTANCIA_BALDAS",
+    "TACO_ANCLAJE"
    ]
   },
   "puesto_trabajo": {
@@ -3568,7 +3610,27 @@
      ],
      "allow_auto": false,
      "nullable": false,
-     "help": "",
+     "help": "'ninguno' por defecto: si el conjunto vacío volcara con el empuje, se ancla automáticamente.",
+     "advanced": false
+    },
+    {
+     "name": "TACO_ANCLAJE",
+     "label": "Taco de anclaje",
+     "type": "choice",
+     "default": "auto",
+     "unit": null,
+     "group": "cargas",
+     "min": null,
+     "max": null,
+     "choices": [
+      "ANCLAJE_M8",
+      "ANCLAJE_M10",
+      "ANCLAJE_M12",
+      "ANCLAJE_M16"
+     ],
+     "allow_auto": true,
+     "nullable": false,
+     "help": "'auto': el de menor capacidad que resiste la tracción de cálculo (sólo con anclaje al suelo).",
      "advanced": false
     },
     {
@@ -3798,6 +3860,7 @@
     "NUMERO_TRAVESANOS",
     "NUMERO_TRAVESANOS_BALDA",
     "HOLGURA_ENCIMERA",
+    "TACO_ANCLAJE",
     "NUMERO_TRAVESANOS_ESTANTE"
    ]
   },
@@ -5146,7 +5209,8 @@
     "FACTOR_K",
     "NUMERO_TRAVESANOS",
     "NUMERO_TRAVESANOS_BALDA",
-    "HOLGURA_ENCIMERA"
+    "HOLGURA_ENCIMERA",
+    "TACO_ANCLAJE"
    ]
   },
   "carro_estanteria": {
@@ -6123,7 +6187,8 @@
     "FACTOR_K",
     "NUMERO_TRAVESANOS_BALDA",
     "HOLGURA_BALDA",
-    "DISTANCIA_BALDAS"
+    "DISTANCIA_BALDAS",
+    "TACO_ANCLAJE"
    ]
   },
   "mesa_soldadura": {
@@ -7155,7 +7220,27 @@
      ],
      "allow_auto": false,
      "nullable": false,
-     "help": "",
+     "help": "'ninguno' por defecto: si el conjunto vacío volcara con el empuje, se ancla automáticamente.",
+     "advanced": false
+    },
+    {
+     "name": "TACO_ANCLAJE",
+     "label": "Taco de anclaje",
+     "type": "choice",
+     "default": "auto",
+     "unit": null,
+     "group": "cargas",
+     "min": null,
+     "max": null,
+     "choices": [
+      "ANCLAJE_M8",
+      "ANCLAJE_M10",
+      "ANCLAJE_M12",
+      "ANCLAJE_M16"
+     ],
+     "allow_auto": true,
+     "nullable": false,
+     "help": "'auto': el de menor capacidad que resiste la tracción de cálculo (sólo con anclaje al suelo).",
      "advanced": false
     }
    ],
@@ -7312,7 +7397,8 @@
     "FACTOR_K",
     "NUMERO_TRAVESANOS",
     "NUMERO_TRAVESANOS_BALDA",
-    "HOLGURA_ENCIMERA"
+    "HOLGURA_ENCIMERA",
+    "TACO_ANCLAJE"
    ]
   },
   "estanteria_bateria": {
@@ -8007,7 +8093,27 @@
      ],
      "allow_auto": false,
      "nullable": false,
-     "help": "",
+     "help": "'ninguno' por defecto: si el conjunto vacío volcara con el empuje, se ancla automáticamente.",
+     "advanced": false
+    },
+    {
+     "name": "TACO_ANCLAJE",
+     "label": "Taco de anclaje",
+     "type": "choice",
+     "default": "auto",
+     "unit": null,
+     "group": "cargas",
+     "min": null,
+     "max": null,
+     "choices": [
+      "ANCLAJE_M8",
+      "ANCLAJE_M10",
+      "ANCLAJE_M12",
+      "ANCLAJE_M16"
+     ],
+     "allow_auto": true,
+     "nullable": false,
+     "help": "'auto': el de menor capacidad que resiste la tracción de cálculo (sólo con anclaje al suelo).",
      "advanced": false
     },
     {
@@ -8177,7 +8283,8 @@
     "FACTOR_K",
     "NUMERO_TRAVESANOS_BALDA",
     "HOLGURA_BALDA",
-    "DISTANCIA_BALDAS"
+    "DISTANCIA_BALDAS",
+    "TACO_ANCLAJE"
    ]
   },
   "tarima": {
@@ -8784,7 +8891,27 @@
      ],
      "allow_auto": false,
      "nullable": false,
-     "help": "",
+     "help": "'ninguno' por defecto: si el conjunto vacío volcara con el empuje, se ancla automáticamente.",
+     "advanced": false
+    },
+    {
+     "name": "TACO_ANCLAJE",
+     "label": "Taco de anclaje",
+     "type": "choice",
+     "default": "auto",
+     "unit": null,
+     "group": "cargas",
+     "min": null,
+     "max": null,
+     "choices": [
+      "ANCLAJE_M8",
+      "ANCLAJE_M10",
+      "ANCLAJE_M12",
+      "ANCLAJE_M16"
+     ],
+     "allow_auto": true,
+     "nullable": false,
+     "help": "'auto': el de menor capacidad que resiste la tracción de cálculo (sólo con anclaje al suelo).",
      "advanced": false
     }
    ],
@@ -8909,7 +9036,8 @@
     "FACTOR_K",
     "NUMERO_TRAVESANOS",
     "NUMERO_TRAVESANOS_BALDA",
-    "HOLGURA_ENCIMERA"
+    "HOLGURA_ENCIMERA",
+    "TACO_ANCLAJE"
    ]
   },
   "carro_plataforma": {
@@ -9922,7 +10050,8 @@
     "RADIO_PLEGADO",
     "FACTOR_K",
     "NUMERO_TRAVESANOS",
-    "HOLGURA_ENCIMERA"
+    "HOLGURA_ENCIMERA",
+    "TACO_ANCLAJE"
    ]
   },
   "armario": {
@@ -10653,6 +10782,26 @@
      "advanced": false
     },
     {
+     "name": "TACO_ANCLAJE",
+     "label": "Taco de anclaje",
+     "type": "choice",
+     "default": "auto",
+     "unit": null,
+     "group": "cargas",
+     "min": null,
+     "max": null,
+     "choices": [
+      "ANCLAJE_M8",
+      "ANCLAJE_M10",
+      "ANCLAJE_M12",
+      "ANCLAJE_M16"
+     ],
+     "allow_auto": true,
+     "nullable": false,
+     "help": "'auto': el de menor capacidad que resiste la tracción de cálculo (sólo con anclaje al suelo).",
+     "advanced": false
+    },
+    {
      "name": "ENTORNO",
      "label": "Entorno",
      "type": "choice",
@@ -10819,6 +10968,7 @@
     "NUMERO_TRAVESANOS_BALDA",
     "HOLGURA_BALDA",
     "DISTANCIA_BALDAS",
+    "TACO_ANCLAJE",
     "NUMERO_PUERTAS",
     "ESPESOR_PANEL",
     "ESPESOR_PUERTA"

@@ -70,6 +70,11 @@ class MesaSoldadura(MesaIndustrial):
     candidates = CANDIDATES
     constructive_defaults = CONSTRUCTIVE_DEFAULTS
     top_iid, top_label = "ENC.PLACA", "Placa de soldadura"
+    #: carga de uso por defecto de la placa (piezas y utillaje pesados) y de la balda inferior
+    shelf_load_ratio = 0.3
+
+    def use_load_kg_m2(self, v) -> float:
+        return 500.0
 
     # ------------------------------------------------------------------ cálculo
     def plate_targets(self, v):
