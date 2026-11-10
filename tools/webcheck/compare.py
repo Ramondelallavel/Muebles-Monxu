@@ -78,7 +78,8 @@ for J, P in zip(js, py):
         for k in ("product_code", "n_instances", "n_parts", "status", "notes", "cutting", "dfm"):
             a, b = J[k], P[k]
             if k == "cutting":
-                a = [[x[0], x[1], round(x[2], 3)] for x in a]; b = [[x[0], x[1], round(x[2], 3)] for x in b]
+                a = [[x[0], x[1], round(x[2], 3), x[3], round(x[4], 1), round(x[5], 1)] for x in a]
+                b = [[x[0], x[1], round(x[2], 3), x[3], round(x[4], 1), round(x[5], 1)] for x in b]
             if a != b:
                 d.append(f"{k}: JS={a} PY={b}")
         if J["fem"] != P["fem"]:
@@ -129,8 +130,15 @@ for J, P in zip(js, py):
             if a["support"] != b["support"] or any(abs(a[k] - b[k]) > max(0.5, 1e-3 * abs(b[k])) for k in ("Rx_N", "Ry_N", "Rz_N")):
                 d.append(f"reacción {b['combination']} {b['support']}: JS={a} PY={b}")
         for a, b in zip(J["nesting"], P["nesting"]):
-            if a[:4] != b[:4] or not close(a[4], b[4], 2e-3, 1e-4):
+            if a[:4] != b[:4] or not close(a[4], b[4], 2e-3, 1e-4) or a[5:7] != b[5:7] or \
+                    any(not num_eq(x, y, 1e-6, 1e-6) for x, y in zip(a[7:], b[7:])):
                 d.append(f"anidado: JS={a} PY={b}")
+        for k in P["balance"]:
+            if not num_eq(J["balance"][k], P["balance"][k], 1e-6, 2e-3):
+                d.append(f"balance {k}: JS={J['balance'][k]} PY={P['balance'][k]}")
+        if [x[:3] for x in J["purchases"]] != [x[:3] for x in P["purchases"]] or \
+                any(not num_eq(x[3], y[3], 1e-6, 2e-3) for x, y in zip(J["purchases"], P["purchases"])):
+            d.append(f"compras: JS={J['purchases']} PY={P['purchases']}")
         for k in P["welding"]:
             if not num_eq(J["welding"][k], P["welding"][k], 1e-6, 1e-3):
                 d.append(f"soldadura {k}: JS={J['welding'][k]} PY={P['welding'][k]}")
@@ -140,6 +148,9 @@ for J, P in zip(js, py):
         for k in ("components", "distinct_parts", "manufactured_parts", "standard_parts", "standard_units"):
             if J["bom_totals"][k] != P["bom_totals"][k]:
                 d.append(f"BOM {k}: JS={J['bom_totals'][k]} PY={P['bom_totals'][k]}")
+        for k in ("mass_manufactured_kg", "mass_commercial_kg", "mass_purchased_kg", "mass_waste_kg", "mass_reusable_kg"):
+            if not num_eq(J["bom_totals"].get(k), P["bom_totals"][k], 1e-4, 2e-3):
+                d.append(f"BOM {k}: JS={J['bom_totals'].get(k)} PY={P['bom_totals'][k]}")
         for k in ("profile_meters", "sheet_area_m2"):
             a, b = J["bom_totals"][k], P["bom_totals"][k]
             if set(a) != set(b) or any(not close(a[x], b[x], 1e-6, 1e-3) for x in b):

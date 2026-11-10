@@ -110,6 +110,12 @@ class ProfilePart(PartDef):
     def nominal_mass(self) -> float:
         return self.profile.mass_per_m(self.density) * self.length / 1000
 
+    @property
+    def analytic_mass(self) -> float:
+        """Masa de la definición (sección × longitud − taladros), igual que el motor del navegador."""
+        holes = sum(math.pi * h[3] * h[3] / 4 * self.profile.t for h in self.holes)
+        return (self.profile.props.A * self.length - holes) * 1e-9 * self.density
+
     def bom_dims(self):
         return {"espesor": self.profile.t, "largo": self.length, "ancho": None,
                 "seccion": self.profile.code}
@@ -132,6 +138,15 @@ class SheetPart(PartDef):
     @cached_property
     def flat(self):
         return self.spec.flat_pattern()
+
+    @property
+    def analytic_mass(self) -> float:
+        """Masa de la definición (desarrollo neto × espesor + corrección de pliegues), igual que el navegador."""
+        s = self.spec
+        vol = self.flat.net_area() * s.t
+        for L in s.bend_lengths():
+            vol += math.pi / 2 * s.t * s.t * (0.5 - s.K) * L
+        return vol * 1e-9 * self.density
 
     def bom_dims(self):
         fp = self.flat
@@ -161,6 +176,10 @@ class PlatePart(PartDef):
         """Volumen de la definición (contorno con radios menos taladros): igual que el motor del navegador."""
         area = self.w * self.h - (4 - math.pi) * self.corner_r ** 2 - sum(math.pi * d * d / 4 for _, _, d in self.holes)
         return area * self.t
+
+    @property
+    def analytic_mass(self) -> float:
+        return self.analytic_volume * 1e-9 * self.density
 
     def outline_2d(self):
         from shapely.geometry import box as sbox

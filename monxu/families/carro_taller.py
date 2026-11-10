@@ -217,8 +217,8 @@ class CarroTaller(MesaIndustrial):
             "RUE": "Roscar las ruedas de espiga en las tuercas soldadas de las placas base hasta el tope y bloquearlas "
                    f"con su contratuerca. {brake}",
             "BAL": "Colocar la balda sobre el bastidor inferior, con las escotaduras alrededor de las patas, y fijarla con "
-                   "tornillos ISO 7380 M6 (8 N·m).",
-            "ENC": f"Colocar la encimera sobre el bastidor superior{notch} y fijarla con tornillos ISO 7380 M6 (8 N·m)."}
+                   "la tornillería indicada.",
+            "ENC": f"Colocar la encimera sobre el bastidor superior{notch} y fijarla con la tornillería indicada."}
         return st
 
     def _extra_dims(self, model, d):

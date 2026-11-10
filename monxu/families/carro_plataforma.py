@@ -157,7 +157,7 @@ class CarroPlataforma(CarroTaller):
         st["assembly_texts"] = {
             "RUE": "Roscar las ruedas de espiga en las tuercas soldadas de las placas base hasta el tope y bloquearlas "
                    f"con su contratuerca. {brake}",
-            "ENC": f"Colocar la plataforma sobre el bastidor{notch} y fijarla con tornillos ISO 7380 M6 (8 N·m)."}
+            "ENC": f"Colocar la plataforma sobre el bastidor{notch} y fijarla con la tornillería indicada."}
         return st
 
     def _extra_dims(self, model, d):

@@ -146,7 +146,8 @@ h3 { font-size: 14px; margin: 18px 0 8px; } h4 { margin: 14px 0 6px; font-size: 
 .bar-cut { fill: var(--bar-cut); stroke: var(--brand2); stroke-width: 4; } .bar-txt { font-size: 60px; text-anchor: middle; fill: var(--ink); }
 .nests { display: flex; gap: 14px; flex-wrap: wrap; } .nests figure { margin: 0; width: min(320px, 100%); }
 .nestsvg { width: 100%; background: var(--panel); } .nestsvg .sheet { fill: var(--nest-sheet); stroke: var(--muted); stroke-width: 6; }
-.nestsvg .part { fill: var(--nest-part); stroke: var(--brand); stroke-width: 5; } .nest-txt { font-size: 60px; text-anchor: middle; dominant-baseline: middle; fill: var(--ink); }
+.nestsvg .part { fill: var(--nest-part); stroke: var(--brand); stroke-width: 5; } .nestsvg .remnant { fill: none; stroke: var(--ok, #2a9d8f); stroke-width: 6; stroke-dasharray: 30 15; }
+.barrow { margin-bottom: 4px; } .small { font-size: 11px; } .nest-txt { font-size: 60px; text-anchor: middle; dominant-baseline: middle; fill: var(--ink); }
 figcaption { font-size: 11px; color: var(--muted); }
 .filelist div { font-size: 12px; padding: 1px 0; overflow-wrap: anywhere; }
 .gen p { font-size: 12px; } .loading { padding: 40px; color: var(--muted); }
@@ -175,3 +176,6 @@ figcaption { font-size: 11px; color: var(--muted); }
 .fixbox-float { position: absolute; left: 12px; right: 12px; top: 44px; z-index: 5; }
 .savestate { font-size: 11px; color: var(--muted); padding: 2px 6px; }
 .savestate.bad { color: var(--bad); }
+
+.approval { margin: 10px 0; } .approval .gates { margin: 4px 0 8px 18px; padding: 0; } .approval .gates li { margin: 2px 0; }
+.approval .gates li.good b { color: var(--ok, #2a9d8f); } .approval .gates li.pend b { color: var(--muted); }

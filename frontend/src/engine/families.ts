@@ -779,11 +779,11 @@ class Estanteria extends MesaIndustrial {
     return { levels: model.structure.levels ?? {}, surfaces, supports: supportsOf(model, legs, this.support_group[0]), horizontal_points: [legs.DI, legs.DD],
       worktop_height: model.params.values.ALTURA, leg_ids: Object.values(legs), product_word: "estantería", member_roles: memberRoles(model),
       assembly_texts: {
-        EST: "Recepción de la estructura soldada y pintada. Insertar las tuercas remachables M6 en los taladros Ø9,1 de largueros y "
+        EST: "Recepción de la estructura soldada y pintada. Insertar las tuercas remachables en los taladros de largueros y "
           + "travesaños de todos los niveles.",
         APO: "Roscar los pies niveladores en las tuercas soldadas. Nivelar y, si está previsto, anclar al suelo antes de cargar la estantería.",
         BAL: "Colocar las bandejas de abajo arriba sobre cada bastidor, con las escotaduras alrededor de los montantes, y fijarlas con "
-          + "tornillos ISO 7380 M6x12 (8 N·m)." } };
+          + "la tornillería indicada." } };
   }
 }
 
@@ -1015,6 +1015,7 @@ class PuestoTrabajo extends MesaIndustrial {
       for (const mid of ["EST.PATA.TI", "EST.PATA.TD"]) for (const z of d.panel_fix_z) pts.push([mid, z]);
       model.structure.attached_masses = [...(model.structure.attached_masses ?? []), ...pts.map(([mid, z]) => ({ member: mid,
         point: [model.instance(mid).axis[0][0], model.instance(mid).axis[0][1], z], mass_kg: pm / pts.length, label: "Panel portaherramientas" }))];
+      (model.structure.attached_instances ??= []).push("PAN.PANEL");
     });
   }
 
@@ -1028,8 +1029,8 @@ class PuestoTrabajo extends MesaIndustrial {
     st.attached_masses = model.structure.attached_masses ?? [];
     st.product_word = "puesto";
     st.assembly_texts = {
-      ALT: "Colocar el estante superior sobre su bastidor, con las escotaduras traseras alrededor de los montantes, y fijarlo con tornillos ISO 7380 M6 (8 N·m).",
-      PAN: "Presentar el panel perforado contra la cara delantera de los montantes y atornillarlo a las tuercas remachables M6 (8 N·m), de abajo arriba." };
+      ALT: "Colocar el estante superior sobre su bastidor, con las escotaduras traseras alrededor de los montantes, y fijarlo con la tornillería indicada.",
+      PAN: "Presentar el panel perforado contra la cara delantera de los montantes y atornillarlo a las tuercas remachables, de abajo arriba." };
     return st;
   }
 
@@ -1124,8 +1125,8 @@ class CarroTaller extends MesaIndustrial {
     const notch = { un_extremo: ", con las escotaduras alrededor de los montantes del asa,", dos_extremos: ", con las escotaduras alrededor de los montantes de las asas,", ninguna: "" }[mode];
     st.assembly_texts = {
       RUE: `Roscar las ruedas de espiga en las tuercas soldadas de las placas base hasta el tope y bloquearlas con su contratuerca. ${brake}`,
-      BAL: "Colocar la balda sobre el bastidor inferior, con las escotaduras alrededor de las patas, y fijarla con tornillos ISO 7380 M6 (8 N·m).",
-      ENC: `Colocar la encimera sobre el bastidor superior${notch} y fijarla con tornillos ISO 7380 M6 (8 N·m).` };
+      BAL: "Colocar la balda sobre el bastidor inferior, con las escotaduras alrededor de las patas, y fijarla con la tornillería indicada.",
+      ENC: `Colocar la encimera sobre el bastidor superior${notch} y fijarla con la tornillería indicada.` };
     return st;
   }
   _extraDims(model, d) {
@@ -1252,6 +1253,7 @@ class Armario extends Estanteria {
           const ax = model.instance(legs[k]).axis[0];
           masses.push({ member: legs[k], point: [ax[0], ax[1], z0 + z], mass_kg: pm / pts.length, label: name });
         }
+        (model.structure.attached_instances ??= []).push(iid);
       }
       // fondo: X local = X, Y local = Z, espesor según -Y; cubre los cantos traseros de los laterales
       const zb = d.enc_zs_back, Wb = A + 2 * (gp + tp);
@@ -1266,6 +1268,7 @@ class Armario extends Estanteria {
         const ax = model.instance(legs[k]).axis[0];
         masses.push({ member: legs[k], point: [ax[0], ax[1], z0 + z], mass_kg: pm / pts.length, label: "Fondo" });
       }
+      (model.structure.attached_instances ??= []).push("PAN.FONDO");
     });
     if (d.enc_n_doors) this._doors(model, ctx, d, legs, masses);
   }
@@ -1315,6 +1318,7 @@ class Armario extends Estanteria {
         const extra = nh * +hinge.mass_kg + (withLock ? +lock.mass_kg : 0.0);
         const ax = model.instance(legs[legK]).axis[0];
         for (const z of zh) masses.push({ member: legs[legK], point: [ax[0], ax[1], z], mass_kg: (pm + extra) / nh, label: `Puerta ${side}`.trim() });
+        (model.structure.attached_instances ??= []).push(iid, ...zh.map((_, j) => `${iid}.BISAGRA.${j + 1}`), ...(withLock ? [`${iid}.MANETA`] : []));
       });
     });
   }
@@ -1324,7 +1328,7 @@ class Armario extends Estanteria {
     st.product_word = "armario";
     const n = d.enc_n_doors;
     st.assembly_texts = { ...(st.assembly_texts ?? {}),
-      PAN: "Presentar los laterales contra la cara exterior de los montantes y atornillarlos a las tuercas remachables M6 (8 N·m), de abajo arriba; "
+      PAN: "Presentar los laterales contra la cara exterior de los montantes y atornillarlos a las tuercas remachables, de abajo arriba; "
         + "después, el fondo, que cubre los cantos traseros de los laterales. Los taladros grandes de los paneles alojan las cabezas de los tornillos de las bandejas.",
       PUE: n ? (n === 1 ? "Remachar las bisagras de pernio a la puerta y al lateral, con la puerta calzada a 2 mm del suelo del armario; comprobar el cierre y "
         + "montar la maneta con cerradura en el canto libre." : "Remachar las bisagras de pernio a cada puerta y a su lateral, con las puertas calzadas a 2 mm del "
@@ -1386,7 +1390,7 @@ class CarroPlataforma extends CarroTaller {
     const notch = { un_extremo: ", con las escotaduras alrededor de los montantes del asa,", dos_extremos: ", con las escotaduras alrededor de los montantes de las asas,", ninguna: "" }[mode];
     st.assembly_texts = {
       RUE: `Roscar las ruedas de espiga en las tuercas soldadas de las placas base hasta el tope y bloquearlas con su contratuerca. ${brake}`,
-      ENC: `Colocar la plataforma sobre el bastidor${notch} y fijarla con tornillos ISO 7380 M6 (8 N·m).` };
+      ENC: `Colocar la plataforma sobre el bastidor${notch} y fijarla con la tornillería indicada.` };
     return st;
   }
   _extraDims(model, d) {
@@ -1694,11 +1698,11 @@ class EstanteriaBateria extends Estanteria {
     return { levels: model.structure.levels ?? {}, surfaces, supports, horizontal_points: [legs.D0, legs[`D${N}`]],
       worktop_height: model.params.values.ALTURA, leg_ids: order.map((k) => legs[k]), product_word: "estantería", member_roles: memberRoles(model),
       assembly_texts: {
-        EST: `Recepción de la estructura soldada de ${N} módulos (montantes intermedios comunes). Insertar las tuercas remachables M6 en los `
-          + "taladros Ø9,1 de largueros y travesaños de todos los niveles.",
+        EST: `Recepción de la estructura soldada de ${N} módulos (montantes intermedios comunes). Insertar las tuercas remachables en los `
+          + "taladros de largueros y travesaños de todos los niveles.",
         APO: "Roscar los pies niveladores en las tuercas soldadas. Nivelar y, si está previsto, anclar al suelo antes de cargar la estantería.",
         BAL: "Colocar las bandejas de abajo arriba y de un extremo al otro, con las escotaduras alrededor de los montantes, y fijarlas con "
-          + "tornillos ISO 7380 M6x12 (8 N·m)." } };
+          + "la tornillería indicada." } };
   }
 }
 
@@ -2239,8 +2243,8 @@ class Cantilever extends MesaIndustrial {
         EST: "Recepción de la estructura soldada y pintada. Colocarla en su emplazamiento con los brazos hacia la zona de carga, sin cargarla.",
         APO: "Roscar los pies niveladores en las tuercas soldadas de las placas base. Nivelar los brazos (nivel de burbuja sobre los brazos "
           + "de un mismo nivel) y anclar al suelo antes de cargar." },
-      assembly_notes: ["HERRAMIENTAS:", "· Llave fija 17/19 para contratuerca de pies", "· Nivel de burbuja",
-        "· Taladro percutor y llave para los tacos de anclaje", "", "CARGA:", "· Repartir la carga por igual entre los brazos de un nivel",
+      assembly_notes: ["HERRAMIENTAS:", "· Nivel de burbuja",
+        "", "CARGA:", "· Repartir la carga por igual entre los brazos de un nivel",
         "· Cargar de abajo arriba y descargar de arriba abajo", "· Piezas largas apoyadas al menos en dos brazos", "",
         "SEGURIDAD:", "Señalizar la carga máxima por brazo en cada columna (EN 15635).", "No trepar por los brazos."] };
   }
@@ -2539,7 +2543,7 @@ class Escalon extends MesaIndustrial {
           + "suelo antes de usar el escalón.",
         PEL: `Colocar las chapas sobre cada bastidor, enrasadas con él, y soldarlas con cordones discontinuos de ${g(STITCH_L)} mm cada ${g(STITCH_PITCH)} mm, `
           + "alternos. Aplicar el recubrimiento antideslizante antes del montaje." },
-      assembly_notes: ["HERRAMIENTAS:", "· Llave fija 17/19 para contratuerca de pies", "· Nivel de burbuja", "· Equipo de soldadura MAG (chapas)", "",
+      assembly_notes: ["HERRAMIENTAS:", "· Nivel de burbuja", "· Equipo de soldadura MAG (chapas)", "",
         "USO:", "· Carga de proyecto: personas con herramienta de mano", "· Mantener los peldaños limpios y secos", "",
         "SEGURIDAD:", "Por encima de 500 mm EN ISO 14122-3 exige barandilla.", "Señalizar el borde de los peldaños (contraste)."] };
   }

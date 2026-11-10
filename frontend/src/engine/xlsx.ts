@@ -2,7 +2,8 @@
 // Libro Excel (OOXML) de fabricación generado en el navegador (port de monxu/docs/excel.py):
 // BOM con fórmulas, perfiles, plan de corte, anidado, compras, verificaciones, presupuesto y control de calidad.
 // Cada fórmula lleva su valor calculado en caché para que el libro se lea correctamente sin recalcular.
-import { zipAsync } from "./docs";
+import { sheetLabel, zipAsync } from "./docs";
+import { pyRound } from "./util";
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
 const col = (c) => { let s = ""; c += 1; while (c) { const m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = Math.floor((c - 1) / 26); } return s; };
@@ -95,13 +96,16 @@ export async function workbook(info, summary) {
   const wc = new Sheet("Plan de corte"); sheets.push(wc);
   r0 = header(wc, info, "PLAN DE CORTE DE BARRAS");
   const crow = [];
-  for (const c of plan.cutting) for (const bb of c.bars) crow.push([c.profile, c.material, bb.bar, c.bar_length, bb.cuts.length,
-    bb.cuts.map((x) => `${x.ref.split("-").at(-1)}:${x.length}`).join(" + "), bb.used, bb.kerf_loss, bb.remnant, bb.remnant_reusable ? "Sí" : "No"]);
-  last = table(wc, r0, ["Perfil", "Material", "Barra", "Long. barra (mm)", "Nº cortes", "Cortes (pos:long)", "Útil (mm)", "Pérdida sierra+refrentado (mm)", "Retal (mm)", "Retal aprovechable"],
-    crow, [14, 12, 8, 14, 10, 70, 12, 16, 12, 14]);
-  const used = crow.reduce((s, r) => s + r[6], 0), barL = crow.reduce((s, r) => s + r[3], 0);
+  for (const c of plan.cutting) for (const bb of c.bars) crow.push([c.profile, c.material, bb.bar, bb.source === "retal" ? `retal ${bb.stock_id}` : "comercial", bb.length,
+    bb.trim_start, bb.cuts.length, bb.n_cuts, bb.cuts.map((x) => `${x.ref.split("-").at(-1)}:${x.length}`).join(" + "), bb.used, bb.kerf_total, bb.trim_end, bb.remnant,
+    bb.remnant_status]);
+  last = table(wc, r0, ["Perfil", "Material", "Barra", "Origen", "Long. barra (mm)", "Despunte inicial (mm)", "Nº piezas", "Nº cortes", "Piezas (pos:long)", "Σ piezas (mm)",
+    "Sierra (mm)", "Despunte final (mm)", "Retal final (mm)", "Estado del retal", "Balance (mm)"],
+    crow.map((r, i) => { const k = r0 + 2 + i; return [...r, { f: `E${k}-F${k}-J${k}-K${k}-L${k}-M${k}`, v: pyRound(r[4] - r[5] - r[9] - r[10] - r[11] - r[12], 6) }]; }),
+    [14, 12, 7, 12, 12, 12, 9, 9, 60, 12, 10, 12, 12, 14, 11]);
+  const used = crow.reduce((s, r) => s + r[9], 0), barL = crow.reduce((s, r) => s + r[4], 0);
   wc.set(last + 2, 5, "Aprovechamiento global", S.bold);
-  wc.set(last + 2, 6, { f: `SUM(G${r0 + 2}:G${last + 1})/SUM(D${r0 + 2}:D${last + 1})`, v: barL ? used / barL : 0 }, S.pct);
+  wc.set(last + 2, 6, { f: `SUM(J${r0 + 2}:J${last + 1})/SUM(E${r0 + 2}:E${last + 1})`, v: barL ? used / barL : 0 }, S.pct);
   // ---------------------------------------------------------------- anidado
   const wn = new Sheet("Anidado chapa"); sheets.push(wn);
   r0 = header(wn, info, "ANIDADO DE CHAPA");
@@ -109,11 +113,11 @@ export async function workbook(info, summary) {
   for (const n of plan.nesting) {
     if (!n.feasible) { nrow.push([n.material, n.thickness, "—", 0, null, null, null, 0, n.reason ?? ""]); continue; }
     for (const s of n.sheets) {
-      const pa = Math.round((s.parts_area_mm2 / 1e6) * 1e4) / 1e4, sa = Math.round(((n.length * n.width) / 1e6) * 1e4) / 1e4;
-      nrow.push([n.material, n.thickness, n.format, s.sheet, s.placements.length, pa, sa, null, s.placements.map((p) => p.ref.split("-").at(-1) + (p.rot ? "(R)" : "")).join(", ")]);
+      const pa = pyRound(s.parts_area_mm2 / 1e6, 4), sa = pyRound((s.length * s.width) / 1e6, 4);
+      nrow.push([n.material, n.thickness, sheetLabel(n, s), s.sheet, s.placements.length, pa, sa, null, s.placements.map((p) => p.ref.split("-").at(-1) + (p.rot ? "(R)" : "")).join(", ")]);
     }
   }
-  table(wn, r0, ["Material", "Espesor (mm)", "Formato", "Chapa nº", "Piezas", "Superficie piezas (m²)", "Superficie chapa (m²)", "Aprovechamiento", "Piezas (R = girada)"],
+  table(wn, r0, ["Material", "Espesor (mm)", "Chapa comprada", "Chapa nº", "Piezas", "Superficie piezas (m²)", "Superficie chapa (m²)", "Aprovechamiento", "Piezas (R = girada)"],
     nrow.map((r, i) => { const k = r0 + 2 + i; return [...r.slice(0, 7), { f: `IFERROR(F${k}/G${k},0)`, v: r[5] && r[6] ? r[5] / r[6] : 0 }, r[8]]; }),
     [12, 12, 12, 9, 8, 18, 18, 15, 50], { 5: S.n4, 6: S.n4, 7: S.pct });
   // ---------------------------------------------------------------- compras
@@ -121,7 +125,7 @@ export async function workbook(info, summary) {
   r0 = header(wb, info, "LISTA DE COMPRAS");
   last = table(wb, r0, ["Tipo", "Descripción", "Cantidad", "Unidad", "Masa (kg)"], bom.purchases.map((p) => [p.type, p.description, p.qty, p.unit, p.mass_kg]), [26, 80, 10, 10, 12], { 4: S.n2 });
   wb.set(last + 2, 3, "Total", S.bold);
-  wb.set(last + 2, 4, { f: `SUBTOTAL(109,E${r0 + 2}:E${last + 1})`, v: Math.round(bom.purchases.reduce((s, p) => s + p.mass_kg, 0) * 100) / 100 }, S.n2);
+  wb.set(last + 2, 4, { f: `SUBTOTAL(109,E${r0 + 2}:E${last + 1})`, v: Math.round(bom.purchases.reduce((s, p) => s + (p.mass_kg ?? 0), 0) * 100) / 100 }, S.n2);
   wb.set(last + 4, 0, "CONSUMIBLES", S.bold);
   bom.consumables.forEach((c, n) => { wb.set(last + 5 + n, 1, c.description, S.normal); wb.set(last + 5 + n, 2, c.qty, S.normal); wb.set(last + 5 + n, 3, c.unit, S.normal); });
   // ---------------------------------------------------------------- verificaciones

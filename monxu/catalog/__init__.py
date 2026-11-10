@@ -311,7 +311,10 @@ def consumables() -> dict[str, dict[str, Any]]:
 
 
 # --------------------------------------------------------------------------- normas / criterios
-def standards(family: str | None = None, market: str = "EU", material_families: set[str] | None = None):
+def standards(family: str | None = None, market: str = "EU", material_families: set[str] | None = None,
+              processes: set[str] | None = None, material_standards: set[str] | None = None):
+    """Normas de referencia. Con ``material_families``, ``processes`` y ``material_standards`` solo las que aplican:
+    las de un material que se usa, las de un proceso presente y las de producto de un material o perfil empleado."""
     out = []
     for s in _load("standards")["standards"]:
         if family and "*" not in s["families"] and family not in s["families"]:
@@ -319,6 +322,10 @@ def standards(family: str | None = None, market: str = "EU", material_families: 
         if "*" not in s["markets"] and market not in s["markets"]:
             continue
         if material_families is not None and "materials" in s and not (set(s["materials"]) & material_families):
+            continue
+        if processes is not None and any(
+                (r == "norma_material" and not any(ms.startswith(s["code"]) for ms in (material_standards or ())))
+                or (r != "norma_material" and r not in processes) for r in s.get("requires", ())):
             continue
         out.append(s)
     return out

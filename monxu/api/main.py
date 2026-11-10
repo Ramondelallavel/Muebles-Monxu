@@ -23,6 +23,7 @@ from ..ai import interpreter as I
 from ..cad.export import viewer_payload
 from ..core.params import ParamError
 from ..families import REGISTRY, family, library
+from ..docs.dependencies import dependency_map
 from ..pipeline import Design, DossierError, generate_dossier, regenerate
 from ..storage.db import STATUS_LABELS, STATUSES, Store
 
@@ -70,15 +71,16 @@ def _key(fam, values, sources):
     return json.dumps([fam, values, sources], sort_keys=True, default=str)
 
 
-def design_for(fam: str, values: dict, sources: dict | None = None, viewer: bool = False) -> tuple[Design, dict | None]:
-    k = _key(fam, values, sources or {})
+def design_for(fam: str, values: dict, sources: dict | None = None, viewer: bool = False,
+               stock: list | None = None) -> tuple[Design, dict | None]:
+    k = _key(fam, values, sources or {}) + "|" + ",".join(sorted(r["id"] for r in stock or []))
     with _cache_lock:
         cached = _cache.get(k)
         if cached:
             _cache.move_to_end(k)
             if cached[1] is not None or not viewer:
                 return cached
-    d = cached[0] if cached else regenerate(fam, values, sources)
+    d = cached[0] if cached else regenerate(fam, values, sources, stock)
     v = viewer_payload(d.model) if viewer else (cached[1] if cached else None)
     with _cache_lock:
         _cache[k] = (d, v)
@@ -95,11 +97,13 @@ def project_dict(p) -> dict:
     return {"code": p.code, "name": p.name, "client": p.client, "description": p.description, "family": p.family,
             "designer": p.designer, "status": p.status, "status_label": STATUS_LABELS[p.status],
             "created": p.created.isoformat(), "updated": p.updated.isoformat(), "validated_by": p.validated_by,
+            "approval": _jsonable(store().approval(p.code)) if p.revisions else None,
             "working_params": p.working_params, "working_sources": p.working_sources,
             "revisions": [{"rev": r.rev, "created": r.created.isoformat(), "comment": r.comment, "author": r.author,
                            "product_code": r.product_code, "mass_kg": r.mass_kg, "structural": r.structural_status,
                            "qa": {k: (r.qa_summary or {}).get(k) for k in ("result", "summary", "blocking")},
-                           "dossier": bool(r.dossier_path), "changes": r.changes_from_previous} for r in p.revisions]}
+                           "dossier": bool(r.dossier_path), "changes": r.changes_from_previous,
+                           "affected_documents": (r.approval or {}).get("affected_documents", [])} for r in p.revisions]}
 
 
 # ============================================================================ esquemas de petición
@@ -267,7 +271,7 @@ def put_params(code: str, body: ParamsIn):
 async def post_design(code: str, viewer: bool = True):
     p = store().get(code)
     try:
-        d, v = await in_cad(design_for, p.family, p.working_params, p.working_sources, viewer)
+        d, v = await in_cad(design_for, p.family, p.working_params, p.working_sources, viewer, store().remnants())
     except ValueError as e:          # incluye ParamError: datos incompatibles con las reglas constructivas
         raise HTTPException(422, str(e))
     except Exception as e:
@@ -352,13 +356,15 @@ def post_assistant(code: str, body: AssistantIn):
 @app.post("/api/projects/{code}/revisions")
 async def post_revision(code: str, body: RevisionIn):
     p = store().get(code)
-    d, _ = await in_cad(design_for, p.family, p.working_params, p.working_sources, False)
+    stock = store().remnants()
+    d, _ = await in_cad(design_for, p.family, p.working_params, p.working_sources, False, stock)
     q = d.qa.result()
     if q["blocking"]:
         raise HTTPException(409, {"message": "El diseño tiene errores bloqueantes: no puede emitirse revisión.", "qa": q})
     m = d.model
     r = store().freeze_revision(code, body.comment, body.author, dict(m.params.values), dict(m.params.sources),
-                                m.product_code, d.bom["totals"]["total_mass"], d.eng["status"], q)
+                                m.product_code, d.bom["totals"]["total_mass"], d.eng["status"], q,
+                                dependency_map(m), stock)
     return {"rev": r.rev, "project": project_dict(store().get(code))}
 
 
@@ -368,10 +374,11 @@ def _run_dossier(job_id: str, code: str, rev: str):
         p = store().get(code)
         r = store().revision(code, rev)
         job["stage"] = "regenerando modelo"
-        d, _ = design_for(p.family, r.params, r.sources, False)
+        d, _ = design_for(p.family, r.params, r.sources, False, (r.approval or {}).get("stock") or [])
         job["stage"] = "generando archivos"
         proj = {"code": p.code, "revision": rev, "designer": p.designer or r.author, "client": p.client,
-                "validated_by": p.validated_by, "date": r.created.strftime("%Y-%m-%d")}
+                "date": r.created.strftime("%Y-%m-%d"), "approval": store().approval(code, rev),
+                "edition": bool(r.dossier_path)}
         res = generate_dossier(d, proj, store().dossiers / p.code, store().history(code))
         store().attach_dossier(code, rev, res)
         job.update(status="ok", result=_jsonable({k: v for k, v in res.items() if k != "files"} |
@@ -387,8 +394,9 @@ def _run_dossier(job_id: str, code: str, rev: str):
 @app.post("/api/projects/{code}/revisions/{rev}/dossier")
 def post_dossier(code: str, rev: str):
     r = store().revision(code, rev)
-    if r.dossier_path:
-        raise HTTPException(409, "La revisión ya tiene expediente generado (no se sobrescribe).")
+    if r.dossier_path and not store().dossier_outdated(code, rev):
+        raise HTTPException(409, "La revisión ya tiene expediente generado (no se sobrescribe; solo se emite una nueva "
+                                 "edición cuando la revisión se aprueba o se libera después de generarlo).")
     jid = uuid.uuid4().hex[:10]
     JOBS[jid] = {"id": jid, "status": "running", "stage": "en cola", "project": code, "rev": rev, "started": time.time()}
     DOSSIER.submit(_run_dossier, jid, code, rev)
@@ -430,6 +438,96 @@ def post_status(code: str, body: StatusIn):
     except ValueError as e:
         raise HTTPException(409, str(e))
     return project_dict(store().get(p.code))
+
+
+class ValidationIn(BaseModel):
+    code: str
+    by: str
+    reference: str
+    comment: str = ""
+    rev: str | None = None
+
+
+class SignoffIn(BaseModel):
+    stage: str
+    by: str
+    comment: str = ""
+    rev: str | None = None
+
+
+def _last_rev(code: str, rev: str | None) -> str:
+    p = store().get(code)
+    if not p.revisions:
+        raise HTTPException(409, "El proyecto no tiene revisiones.")
+    return rev or p.revisions[-1].rev
+
+
+@app.get("/api/projects/{code}/approval")
+def get_approval(code: str, rev: str | None = None):
+    return _jsonable(store().approval(code, rev))
+
+
+@app.post("/api/projects/{code}/validations")
+def post_validation(code: str, body: ValidationIn):
+    try:
+        return _jsonable(store().record_validation(code, _last_rev(code, body.rev), body.code, body.by, body.reference,
+                                                   body.comment))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/projects/{code}/signoff")
+def post_signoff(code: str, body: SignoffIn):
+    rev = _last_rev(code, body.rev)
+    try:
+        inv = None
+        if body.stage == "liberacion":       # retales que consume y produce el plan de la revisión (instantánea de stock)
+            p, r = store().get(code), store().revision(code, rev)
+            d, _ = design_for(p.family, r.params, r.sources, False, (r.approval or {}).get("stock") or [])
+            inv = release_movements(d.plan)
+            avail = {x["id"] for x in store().remnants()}
+            missing = [i for i in inv["used"] if i not in avail]
+            if missing:
+                raise ValueError(f"Retales del plan ya no disponibles: {', '.join(missing)}. Emita una revisión nueva.")
+        out = store().signoff(code, rev, body.stage, body.by, body.comment)
+        if inv is not None and out["state"] == "liberado_fabricacion":
+            out["inventory"] = store().release_inventory(code, rev, inv["used"], inv["produced"])
+        return _jsonable(out)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+def release_movements(plan: dict) -> dict:
+    """Retales del inventario que usa el plan y retales reutilizables que produce (para darlos de alta)."""
+    used = [i for c in plan["cutting"] for i in c.get("stock_used", [])] + \
+        [i for n in plan["nesting"] if n.get("feasible") for i in n.get("stock_used", [])]
+    produced = [{"kind": "barra", "profile": x["profile"], "material": x["material"], "length": x["length"]}
+                for x in plan["purchases"]["remnants"] if x["kind"] == "barra" and x["reusable"]]
+    produced += [{"kind": "chapa", "material": x["material"], "thickness": x["thickness"], "length": x["length"],
+                  "width": x["width"]} for x in plan["purchases"]["remnants"] if x["kind"] == "chapa"]
+    return {"used": used, "produced": produced}
+
+
+class RemnantIn(BaseModel):
+    kind: str
+    material: str
+    length: float
+    profile: str | None = None
+    thickness: float | None = None
+    width: float | None = None
+
+
+@app.get("/api/remnants")
+def get_remnants(status: str | None = "disponible"):
+    return store().remnants(status or None)
+
+
+@app.post("/api/remnants")
+def post_remnant(body: RemnantIn):
+    try:
+        return store().add_remnant(body.kind, body.material, body.length, body.profile, body.thickness, body.width)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
 
 
 @app.post("/api/projects/{code}/template")

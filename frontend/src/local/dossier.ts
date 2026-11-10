@@ -4,22 +4,26 @@
 // optimización, informe de cálculo y manifiesto con SHA-256. Cada archivo se verifica antes de empaquetar.
 import * as C from "../engine/catalog";
 import { QA } from "../engine/pipeline";
+import * as AP from "../engine/approval";
 import { family } from "../engine/families";
-import { csv, flatSvg, nestingDxf, nestingSvg, partDxf, reportHtml, sha256, stlBinary, zipAsync } from "../engine/docs";
+import { BALANCE_HEADER, CUT_PLAN_HEADER, PURCHASE_HEADER, balanceRows, csv, cutPlanRows, flatSvg, nestingDxf, nestingSvg, optimizationSummary, partDxf, purchaseRows,
+  reportHtml, sha256, stlBinary, verifyNestingDxf, verifyStl, weightSummaryRows, zipAsync } from "../engine/docs";
 import { assemblyStep, partStep } from "../engine/step";
 import { assemblyInstructions, drawingConsistency, drawingSet, isPerforatedPlate } from "../engine/drawings";
 import { workbook } from "../engine/xlsx";
-import { partGeometry } from "../engine/geometry";
+import { g, pyRound } from "../engine/util";
+import { modelBBox, partGeometry } from "../engine/geometry";
 
+/** Cajetín y sello (= pipeline.design_info): el sello sale del estado de aprobación; nunca «verificado» o «aprobado» con las
+ *  firmas vacías. */
 export function designInfo(project, rev, summary) {
-  const e = summary.engineering;
-  const [stamp, level] = e.status === "NO_CUMPLE" ? ["NO APTO PARA FABRICACIÓN — verificación estructural no superada", "error"]
-    : e.status === "PENDIENTE" ? ["PRELIMINAR — verificación estructural pendiente de datos", "warn"]
-      : project.validated_by ? [`VALIDADO por ${project.validated_by}`, "info"] : ["CÁLCULO VERIFICADO — CUMPLE (EN 1990 / EN 1993)", "info"];
+  const ev = project.approval_eval ?? { state: "diseno_generado", label: AP.LABELS.diseno_generado };
+  const sig = rev.approval?.signoffs ?? {};
+  const st = AP.stamp(ev.state, summary.engineering.status, sig);
   return { product_name: `${family(project.family).name} ${summary.product_code}`, project_code: project.code, revision: rev.rev, date: rev.created.slice(0, 10),
-    designer: project.designer || rev.author || "", checked: "—", approved: project.validated_by || "—", client: project.client ?? "", company: "MUEBLES MONXU",
-    assembly_ref: summary.product_code, tolerances: summary.parameters.find((p) => p.name === "TOLERANCIAS")?.value ?? "ISO 2768-mK", status_stamp: stamp, status_level: level,
-    project: project.code };
+    designer: project.designer || rev.author || "", checked: sig.calculo?.by || "—", approved: sig.aprobacion?.by || "—", client: project.client ?? "", company: "MUEBLES MONXU",
+    assembly_ref: summary.product_code, tolerances: summary.parameters.find((p) => p.name === "TOLERANCIAS")?.value ?? "ISO 2768-mK", status_stamp: st.text, status_level: st.level,
+    approval_state: ev.state, approval_label: AP.LABELS[ev.state], structural_verdict: summary.engineering.verdict ?? null, project: project.code };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -45,7 +49,22 @@ export async function buildDossier(project, rev, model, summary, onProgress = nu
   q.add(nauo === model.instances.length && breps === shells && !open.length ? "ok" : "bloqueante", "EXP-STEP",
     `STEP AP214: ${breps} sólidos facetados cerrados (${Object.keys(model.parts).length} piezas) y ${nauo} ocurrencias en el conjunto (modelo: ${model.instances.length} instancias)`
     + (open.length ? `; capas abiertas en ${open.join(", ")}` : "") + ".");
-  add(`01_MODELO_3D/${code}_conjunto.stl`, stlBinary(model));
+  const stl = stlBinary(model);
+  add(`01_MODELO_3D/${code}_conjunto.stl`, stl);
+  { // STL frente al modelo maestro: triángulos, volumen y envolvente
+    const vs = verifyStl(stl);
+    const ntri = model.instances.reduce((t, i) => t + partGeometry(i.part).indices.length / 3, 0);
+    const vol = model.instances.reduce((t, i) => t + partGeometry(i.part).volume, 0);
+    const [blo, bhi] = modelBBox(model);
+    const dBox = Math.max(...[0, 1, 2].flatMap((j) => [Math.abs(vs.bbox[0][j] - blo[j]), Math.abs(vs.bbox[1][j] - bhi[j])]));
+    const dVol = Math.abs(vs.volume - vol) / vol;
+    const ok = vs.bytes_ok && vs.triangles === ntri && dVol < 1e-4 && dBox < 0.01;
+    q.add(ok ? "ok" : "bloqueante", "EXP-STL", `STL binario releído: ${vs.triangles} triángulos (modelo ${ntri}), volumen ${(vs.volume / 1e6).toFixed(4)} dm³ (modelo ${(vol / 1e6).toFixed(4)} dm³), `
+      + `envolvente con desviación máxima ${dBox.toFixed(4)} mm; unidades mm, ejes del modelo.`, { expected: ntri, obtained: vs.triangles, difference: pyRound(dVol, 8),
+      criterion: "Mismos triángulos, volumen (±0,01 %) y envolvente (±0,01 mm) que la malla del modelo", action: "Regenerar el STL" });
+  }
+  q.add("ok", "EXP-STEP-TIPO", "STEP del navegador: sólidos facetados (FACETED_BREP, caras planas). No es geometría exacta: radios y taladros son poligonales "
+    + "(desviación de volumen < 0,2 %). El STEP exacto (B-rep analítico) lo genera el servidor.", { severity: "INFORMATIVO", document: "STEP" });
   add(`01_MODELO_3D/${code}_parametrico.json`, JSON.stringify({ format: "monxu-parametrico", version: 1, family: summary.family, parameters: model.params.values,
     sources: model.params.sources, requested: model.requested.values, catalog_versions: C.versions, product_code: code, feature_tree: model.featureTree(),
     note: "Formato editable nativo: abrir con la plataforma para regenerar el diseño paramétrico." }, null, 2));
@@ -73,7 +92,15 @@ export async function buildDossier(project, rev, model, summary, onProgress = nu
     q.add(ok ? "ok" : "bloqueante", "EXP-DXF", `${p.ref}.dxf: ${d.width}×${d.height} mm (esperado ${ew.toFixed(3)}×${eh.toFixed(3)}), capas de corte, plegado, grabado e información, unidades mm (R12).`);
   }
   for (const n of summary.manufacturing.nesting) if (n.feasible)
-    for (const s of nestingDxf(n, refs)) add(`03_DXF_CORTE/anidado/anidado_${n.material}_${n.thickness}mm_${s.sheet}.dxf`, s.text);
+    for (const s of nestingDxf(n, refs)) {
+      add(`03_DXF_CORTE/anidado/anidado_${n.material}_${n.thickness}mm_${s.sheet}.dxf`, s.text);
+      // DXF del anidado frente al anidado del plan (JSON y SVG salen del mismo objeto): contornos y formato
+      const sh = n.sheets.find((x) => x.sheet === s.sheet), vd = verifyNestingDxf(s.text);
+      const ok = vd.cut_contours === sh.placements.length && vd.format && Math.abs(vd.format[0] - sh.length) < 0.01 && Math.abs(vd.format[1] - sh.width) < 0.01;
+      q.add(ok ? "ok" : "bloqueante", "EXP-DXF-ANIDADO", `anidado_${n.material}_${n.thickness}mm_${s.sheet}.dxf: ${vd.cut_contours} contornos exteriores (anidado ${sh.placements.length}), `
+        + `chapa ${vd.format ? vd.format.map((v) => v.toFixed(1)).join("×") : "—"} mm (anidado ${g(sh.length)}×${g(sh.width)}).`, { expected: sh.placements.length, obtained: vd.cut_contours,
+        criterion: "El DXF del anidado tiene las mismas piezas y la misma chapa que el anidado del plan", action: "Regenerar el anidado" });
+    }
   // ---- 04 lista de materiales
   await step("Expediente: Excel y listas de materiales");
   const b = summary.bom;
@@ -87,25 +114,23 @@ export async function buildDossier(project, rev, model, summary, onProgress = nu
   add(`04_LISTA_MATERIALES/${code}_BOM.csv`, csv(["Pos", "Referencia", "Descripción", "Tipo", "Material", "Acabado", "Espesor mm", "Largo mm", "Ancho mm", "Cantidad",
     "Peso unit kg", "Peso total kg", "Proceso", "Norma"], b.rows.map((r) => [r.pos, r.ref, r.description, r.kind_label, r.material, r.finish, r.thickness, r.length, r.width,
     r.qty, r.unit_mass, r.total_mass, r.process, r.standard])));
-  add("04_LISTA_MATERIALES/lista_compras.csv", csv(["Tipo", "Descripción", "Cantidad", "Unidad", "Masa kg"], b.purchases.map((p) => [p.type, p.description, p.qty, p.unit, p.mass_kg])));
+  add("04_LISTA_MATERIALES/lista_compras.csv", csv(PURCHASE_HEADER, purchaseRows(b, summary.manufacturing.lot ?? 1)));
   const cost = summary.cost;
   if (cost) {
-    add("04_LISTA_MATERIALES/presupuesto_estimado.csv", csv(["Partida", "Concepto", "Cantidad", "Unidad", "Precio unitario EUR", "Importe EUR"],
-      [...cost.lines.map((l) => [l.group, l.concept, l.qty, l.unit, l.unit_eur, l.eur]), ["", "Coste directo", "", "", "", cost.direct],
+    add("04_LISTA_MATERIALES/presupuesto_estimado.csv", csv(["Partida", "Concepto", "Cantidad", "Unidad", "Precio unitario EUR", "Importe EUR", "Base"],
+      [...cost.lines.map((l) => [l.group, l.concept, l.qty, l.unit, l.unit_eur, l.eur, l.basis ?? ""]), ["", "Coste directo", "", "", "", cost.direct],
         ["", `Gastos generales ${cost.overhead_rate * 100} %`, "", "", "", cost.overheads], ["", "Coste total", "", "", "", cost.cost],
-        ["", `Margen ${cost.margin_rate * 100} %`, "", "", "", cost.margin], ["", "Precio de venta estimado", "", "", "", cost.price],
+        ["", `Margen ${cost.margin_rate * 100} %`, "", "", "", cost.margin], ["", "Precio de venta estimado", "", "", "", cost.price, `material: ${cost.material_basis}`],
         ...cost.by_lot.map((x) => ["Lote", `${x.lot} ud`, "", "", "coste/precio por unidad", `${x.cost} / ${x.price}`])]));
     add("04_LISTA_MATERIALES/presupuesto_estimado.json", JSON.stringify(cost, null, 2));
   }
   add("04_LISTA_MATERIALES/pesos_materiales.csv", csv(["Pos", "Referencia", "Descripción", "Material", "Cantidad", "Peso unit kg", "Peso total kg"],
-    b.rows.map((r) => [r.pos, r.ref, r.description, r.material, r.qty, r.unit_mass, r.total_mass])));
+    [...b.rows.map((r) => [r.pos, r.ref, r.description, r.material, r.qty, r.unit_mass, r.total_mass]), ...weightSummaryRows(b)]));
   // ---- 05 optimización
   const m = summary.manufacturing;
-  add("05_OPTIMIZACION/plan_corte_perfiles.csv", csv(["Perfil", "Material", "Barra", "Cortes", "Útil mm", "Retal mm", "Aprovechable"],
-    m.cutting.flatMap((c) => c.bars.map((bar) => [c.profile, c.material, bar.bar, bar.cuts.map((x) => `${x.ref}:${x.length}`).join(" + "), bar.used, bar.remnant, bar.remnant_reusable ? "sí" : "no"]))));
-  add("05_OPTIMIZACION/aprovechamientos.json", JSON.stringify({ perfiles: m.cutting.map((c) => ({ profile: c.profile, material: c.material, n_bars: c.n_bars, lower_bound: c.lower_bound,
-    utilization: c.utilization, scrap: c.scrap, reusable_remnants: c.reusable_remnants })), chapa: m.nesting.map((n) => ({ material: n.material, thickness: n.thickness, format: n.format ?? null,
-    n_sheets: n.n_sheets ?? null, utilization: n.utilization ?? null, waste_m2: n.waste_m2 ?? null })) }, null, 2));
+  add("05_OPTIMIZACION/plan_corte_perfiles.csv", csv(CUT_PLAN_HEADER, cutPlanRows(m)));
+  add("05_OPTIMIZACION/balance_material.csv", csv(BALANCE_HEADER, balanceRows(m)));
+  add("05_OPTIMIZACION/aprovechamientos.json", JSON.stringify(optimizationSummary(m), null, 2));
   for (const n of m.nesting) if (n.feasible) for (const s of n.sheets) add(`05_OPTIMIZACION/anidado_${n.material}_${n.thickness}mm_hoja${s.sheet}.svg`, nestingSvg(n, s));
   // ---- 06 documentación
   await step("Expediente: instrucciones de montaje e informe");
@@ -134,7 +159,8 @@ export async function buildDossier(project, rev, model, summary, onProgress = nu
     "04_LISTA_MATERIALES BOM en Excel con fórmulas (BOM, perfiles, plan de corte, anidado, compras, verificaciones y control de calidad) y CSV.",
     "05_OPTIMIZACION     Plan de corte de barras, anidado de chapa (SVG) y aprovechamientos.",
     "06_DOCUMENTACION    Instrucciones de montaje (PDF), documentación técnica, informe de cálculo y verificaciones (HTML/JSON) e historial.", "",
-    "Cálculo automatizado según EN 1990 y EN 1993 con las hipótesis del informe; el expediente lo firma el responsable técnico del fabricante."].join("\r\n"));
+    `Estado de aprobación al generar: ${info.approval_label}. Sello: ${info.status_stamp}.`,
+    "Cálculo automatizado según EN 1990 y EN 1993 con las hipótesis del informe; el expediente solo es apto para fabricar cuando su estado es «Liberado para fabricación»."].join("\r\n"));
   // ---- manifiesto y empaquetado
   await step("Expediente: manifiesto SHA-256 y compresión ZIP");
   const enc = new TextEncoder();
@@ -144,7 +170,8 @@ export async function buildDossier(project, rev, model, summary, onProgress = nu
     listed.push({ path: f.path, bytes: u8.length, sha256: await sha256(u8) });
   }
   const manifest = { dossier: name, project: project.code, revision: rev.rev, product: code, family: summary.family, generated: new Date().toISOString().slice(0, 19),
-    engine: "navegador", status: info.status_stamp, structural: summary.engineering.status, qa: qa.summary, parameters: model.params.values, files: listed };
+    engine: "navegador", status: info.status_stamp, approval_state: info.approval_state, structural: summary.engineering.status,
+    structural_verdict: summary.engineering.verdict ?? null, qa: qa.summary, release_blockers: qa.release_blockers ?? [], parameters: model.params.values, files: listed };
   files.push({ path: "manifest.json", data: JSON.stringify(manifest, null, 2) });
   const z = await zipAsync(files.map((f) => ({ path: `${name}/${f.path}`, data: f.data })));
   return { name, zip: z, qa, files: listed, info, sheets: dr.total };

@@ -535,8 +535,8 @@ class Cantilever(MesaIndustrial):
                            "hacia la zona de carga, sin cargarla.",
                     "APO": "Roscar los pies niveladores en las tuercas soldadas de las placas base. Nivelar los brazos "
                            "(nivel de burbuja sobre los brazos de un mismo nivel) y anclar al suelo antes de cargar."},
-                "assembly_notes": ["HERRAMIENTAS:", "· Llave fija 17/19 para contratuerca de pies", "· Nivel de burbuja",
-                                   "· Taladro percutor y llave para los tacos de anclaje", "",
+                "assembly_notes": ["HERRAMIENTAS:", "· Nivel de burbuja",
+                                   "",
                                    "CARGA:", "· Repartir la carga por igual entre los brazos de un nivel",
                                    "· Cargar de abajo arriba y descargar de arriba abajo",
                                    "· Piezas largas apoyadas al menos en dos brazos", "",

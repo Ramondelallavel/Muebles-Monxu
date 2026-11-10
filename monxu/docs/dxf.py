@@ -18,6 +18,7 @@ LAYERS = {
     "GRABADO": {"color": 2, "linetype": "CONTINUOUS"},
     "INFO": {"color": 8, "linetype": "CONTINUOUS"},
     "FORMATO": {"color": 9, "linetype": "CONTINUOUS"},
+    "RETAL": {"color": 5, "linetype": "DASHED"},
 }
 CUT_LAYERS = ("CORTE_EXTERIOR", "CORTE_INTERIOR")
 
@@ -109,22 +110,54 @@ def export_part_dxf(part, path: Path, project: dict[str, Any] | None = None) -> 
 
 
 def export_nesting_dxf(nest: dict[str, Any], parts_by_ref: dict[str, Any], path_pattern: str) -> list[Path]:
+    """Un DXF 1:1 por chapa del anidado comprado: contorno de la chapa (formato, corte a medida o retal del
+    inventario), piezas colocadas y, si existe, el retal reutilizable en la capa RETAL."""
     paths = []
+    total = len(nest["sheets"])
     for sh in nest["sheets"]:
         doc = new_doc()
         msp = doc.modelspace()
-        L, W = nest["length"], nest["width"]
+        L, W = sh.get("length", nest["length"]), sh.get("width", nest["width"])
         msp.add_lwpolyline([(0, 0), (L, 0), (L, W), (0, W)], close=True, dxfattribs={"layer": "FORMATO"})
         for pl in sh["placements"]:
             part = parts_by_ref[pl["ref"]]
             add_part_geometry(msp, part, (pl["x"], pl["y"], pl["rot"], 0.0), label=pl["ref"], info=False)
-        msp.add_text(f"Chapa {nest['material']} e={nest['thickness']:g} mm  formato {nest['format']}  "
-                     f"hoja {sh['sheet']}/{nest['n_sheets']}  aprovechamiento {sh['utilization'] * 100:.1f} %",
+        rem = sh.get("remnant")
+        if rem:
+            x0, y0 = (rem["at"], 0.0) if rem["axis"] == "x" else (0.0, rem["at"])
+            msp.add_lwpolyline([(x0, y0), (x0 + rem["length"], y0), (x0 + rem["length"], y0 + rem["width"]),
+                                (x0, y0 + rem["width"])], close=True, dxfattribs={"layer": "RETAL"})
+        msp.add_text(f"Chapa {nest['material']} e={nest['thickness']:g} mm  {sheet_label(nest, sh)}  "
+                     f"hoja {sh['sheet']}/{total}  aprovechamiento {sh['utilization'] * 100:.1f} %",
                      height=10, dxfattribs={"layer": "INFO"}).set_placement((0, -25))
         p = Path(path_pattern.format(n=sh["sheet"]))
         doc.saveas(p)
         paths.append(p)
     return paths
+
+
+def sheet_label(nest: dict[str, Any], sh: dict[str, Any]) -> str:
+    """Rótulo de la chapa comprada: formato comercial, corte a medida o retal del inventario."""
+    mode = sh.get("mode") or {"comercial": "formato"}.get(sh.get("source", "comercial"), sh.get("source"))
+    L, W = sh.get("length", nest["length"]), sh.get("width", nest["width"])
+    if mode == "corte_medida":
+        return f"corte a medida {L:.0f}x{W:.0f}"
+    if mode == "retal":
+        return f"retal {sh.get('stock_id')} {L:.0f}x{W:.0f}"
+    return f"formato {nest['format']}"
+
+
+def verify_nesting_dxf(path: Path) -> dict[str, Any]:
+    """Relee un DXF de anidado: contornos exteriores de corte y dimensiones del contorno de la chapa (FORMATO)."""
+    doc = ezdxf.readfile(path)
+    msp = doc.modelspace()
+    cut = [e for e in msp if e.dxf.layer == "CORTE_EXTERIOR" and e.dxftype() == "LWPOLYLINE"]
+    fmt = next((e for e in msp if e.dxf.layer == "FORMATO" and e.dxftype() == "LWPOLYLINE"), None)
+    size = None
+    if fmt is not None:
+        pts = [(p[0], p[1]) for p in fmt.get_points()]
+        size = (max(x for x, _ in pts) - min(x for x, _ in pts), max(y for _, y in pts) - min(y for _, y in pts))
+    return {"cut_contours": len(cut), "format": size, "errors": len(doc.audit().errors)}
 
 
 def verify_dxf(path: Path) -> dict[str, Any]:

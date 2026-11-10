@@ -2,14 +2,17 @@
 
 Todo sale del modelo y del plan de fabricación, con las tarifas orientativas de ``catalog/data/costs.json``:
 
-* Material: barras y chapas que hay que comprar. En lote, la compra se reparte por consumo real, con el
-  aprovechamiento de la chapa indicado en las tarifas.
+* Material: barras y chapas que hay que comprar para el lote según el plan de corte y el anidado reales
+  (``imputacion_material`` = "compra"), o lo comprado menos los retales reutilizables que vuelven al inventario
+  ("consumo"). Nunca porcentajes genéricos de merma o aprovechamiento.
 * Normalizados: pies, ruedas, tuercas y tornillos, a precio unitario de catálogo.
 * Consumibles: hilo y gas de soldadura.
-* Fabricación: cortes y taladros de perfiles, láser (metros de corte y perforaciones), plegado y soldadura.
-  La soldadura se calcula como horas de arco divididas por el factor de marcha.
+* Fabricación: cortes de sierra del plan de corte (refrentado + uno por pieza), taladros de los perfiles,
+  láser (metros de contorno y una perforación por contorno cerrado), plegado y soldadura. La soldadura se
+  calcula como horas de arco divididas por el factor de marcha.
 * Acabado: superficie tratada o masa (galvanizado).
 * Montaje: tiempo por tornillo, tuerca remachable y apoyo, más un tiempo fijo por unidad.
+* Control de calidad: tiempo fijo por unidad y por unión soldada (control dimensional y visual).
 * Preparación: programación del láser, puesta a punto de sierra y plegadora y útil de soldadura, repartidas
   entre las unidades del lote.
 * Gastos generales y margen sobre el coste directo.
@@ -24,6 +27,7 @@ from typing import Any
 
 from .. import catalog
 from ..core.model import PlatePart, ProfilePart, SheetPart, StandardPart
+from .plan import material_purchase
 
 
 def rates() -> dict[str, Any]:
@@ -89,44 +93,53 @@ def estimate(model, plan: dict[str, Any], lot: int = 1, R: dict[str, Any] | None
     op, lab, setup = R["operations"], R["labor_eur_h"], R["setup_eur"]
     lines: list[dict[str, Any]] = []
 
-    def add(group, concept, qty, unit, unit_eur, eur=None):
+    def add(group, concept, qty, unit, unit_eur, eur=None, basis=""):
         eur = qty * unit_eur if eur is None else eur
         lines.append({"group": group, "concept": concept, "qty": round(qty, 4), "unit": unit,
-                      "unit_eur": round(unit_eur, 4), "eur": eur})
+                      "unit_eur": round(unit_eur, 4), "eur": eur, "basis": basis})
 
     counts: dict[str, int] = defaultdict(int)
     for i in model.instances:
         counts[i.part.key] += 1
+    # el material del lote sale de su propio plan de corte y anidado (el del proyecto si coincide el lote)
+    mp = plan if plan.get("lot", 1) == lot else material_purchase(model, lot)
+    basis = op["imputacion_material"]
+    if basis not in ("compra", "consumo"):
+        raise ValueError(f"imputacion_material desconocida: {basis}")
     # ---------------------------------------------------------------- material
-    # "consumo": se imputa lo que se gasta (con merma) y el sobrante vuelve a almacén;
-    # "compra": barras y chapas completas necesarias para el lote.
-    by_use = op["imputacion_material"] == "consumo"
-    for c in plan["cutting"]:
-        used = c["pieces_length"] + c["pieces"] * c["kerf"]
+    for c in mp["cutting"]:
         eur_kg = _material_rate(R, c["material"], "tubo")
-        if by_use:
-            bars = used / c["bar_length"] * (1 + op["merma_perfil"])
-            kg = bars * c["mass_per_bar_kg"]
-            txt = f"Perfil {c['profile']} {c['material']} ({used / 1000:.2f} m + {op['merma_perfil'] * 100:g} % de merma)"
+        k = c["kg_per_m"] / 1000
+        if basis == "compra":
+            kg = c["n_bars"] * c["mass_per_bar_kg"]
+            what = f"{c['n_bars']} barras de {c['bar_length']:g} mm compradas"
         else:
-            bars = c["n_bars"] if lot == 1 else math.ceil(lot * used / (c["bar_length"] - c["trim"]))
-            kg = bars * c["mass_per_bar_kg"] / lot
-            txt = f"Perfil {c['profile']} {c['material']} (barras de {c['bar_length']:g} mm: {bars} por lote)"
-        add("Material", txt, kg, "kg", eur_kg)
-    for n in plan["nesting"]:
-        mat = catalog.material(n["material"])
+            kg = (c["purchased_length"] + c["stock_length"] - c["reusable_length"]) * k
+            what = f"consumo {(c['purchased_length'] + c['stock_length'] - c['reusable_length']) / 1000:.2f} m"
+        txt = (f"Perfil {c['profile']} {c['material']}: {what} por lote de {lot} (neto {c['pieces_length'] / 1000:.2f} m, "
+               f"desperdicio {c['waste_length'] / 1000:.2f} m, retal reutilizable {c['reusable_length'] / 1000:.2f} m)")
+        add("Material", txt, kg / lot, "kg", eur_kg, basis="plan de corte")
+    for n in mp["nesting"]:
         forms = catalog._load("materials")["materials"][n["material"]].get("forms", [])
         eur_kg = _material_rate(R, n["material"], "chapa" if "chapa" in forms else "pletina")
-        u = op["aprovechamiento_chapa_lote"]
-        if by_use or not n.get("feasible"):
-            kg = n["parts_area_m2"] * 1e6 * n["thickness"] * 1e-9 * mat.density / u
-            txt = (f"Chapa {n['material']} e={n['thickness']:g} mm ({n['parts_area_m2']:.3f} m² de piezas, "
-                   f"aprovechamiento {u * 100:g} %)")
+        k = n["thickness"] * 1e-3 * catalog.material(n["material"]).density
+        if not n.get("feasible"):
+            kg = n["parts_area_m2"] * k
+            txt = (f"Chapa {n['material']} e={n['thickness']:g} mm: sin formato comercial válido, superficie neta de "
+                   f"piezas {n['parts_area_m2']:.3f} m² (PENDIENTE: la pieza no cabe en ningún formato)")
+            add("Material", txt, kg / lot, "kg", eur_kg, basis="superficie neta (sin anidado válido)")
+            continue
+        pu = n["purchase"]
+        if basis == "compra":
+            kg = pu["purchased_area_m2"] * k
+            what = (f"{pu['n_full']} chapas {n['format']}" if pu["n_full"] else "") + \
+                   (f"{' + ' if pu['n_full'] else ''}{pu['n_custom']} cortada a medida" if pu["n_custom"] else "")
         else:
-            sheets = n["n_sheets"] if lot == 1 else math.ceil(lot * n["parts_area_m2"] / (n["sheet_area_m2"] * u))
-            kg = sheets * n["mass_per_sheet_kg"] / lot
-            txt = f"Chapa {n['material']} e={n['thickness']:g} mm (formato {n['format']}: {sheets} por lote)"
-        add("Material", txt, kg, "kg", eur_kg)
+            kg = (pu["purchased_area_m2"] + pu["stock_area_m2"] - pu["reusable_area_m2"]) * k
+            what = f"consumo {pu['purchased_area_m2'] + pu['stock_area_m2'] - pu['reusable_area_m2']:.3f} m²"
+        txt = (f"Chapa {n['material']} e={n['thickness']:g} mm: {what or 'retales de inventario'} por lote de {lot} "
+               f"(piezas {pu['parts_area_m2']:.3f} m², aprovechamiento real {pu['utilization'] * 100:.1f} %)")
+        add("Material", txt, kg / lot, "kg", eur_kg, basis="anidado")
     # ---------------------------------------------------------------- normalizados
     std: dict[str, int] = defaultdict(int)
     for i in model.instances:
@@ -137,9 +150,9 @@ def estimate(model, plan: dict[str, Any], lot: int = 1, R: dict[str, Any] | None
         eur, known = _component_price(R, code)
         if not known:
             unpriced.append(code)
-        add("Normalizados", catalog.component(code)["name"], std[code], "ud", eur)
+        add("Normalizados", catalog.component(code)["name"], std[code], "ud", eur, basis="BOM")
     # ---------------------------------------------------------------- fabricación
-    cuts = holes = 0
+    holes = 0
     laser_m: dict[tuple, float] = defaultdict(float)
     pierces = bends = 0
     sheet_refs = laser_refs = 0
@@ -147,7 +160,6 @@ def estimate(model, plan: dict[str, Any], lot: int = 1, R: dict[str, Any] | None
     for k, p in model.parts.items():
         q = counts[k]
         if isinstance(p, ProfilePart):
-            cuts += q
             holes += q * len(p.holes)
         elif isinstance(p, SheetPart):
             fp = p.flat
@@ -164,32 +176,36 @@ def estimate(model, plan: dict[str, Any], lot: int = 1, R: dict[str, Any] | None
             surf_m2 += q * _surface_mm2(p) / 1e6
             if p.finish == "GALVANIZADO":
                 galv_kg += q * p.mass
+    cuts = sum(c["n_cuts"] for c in mp["cutting"])
     if cuts:
-        add("Fabricación", "Corte de perfiles en sierra", cuts, "corte", op["sierra_eur_corte"])
+        add("Fabricación", f"Corte de perfiles en sierra ({cuts} cortes por lote de {lot}: refrentado de cada barra y uno "
+            "por pieza)", cuts / lot, "corte", op["sierra_eur_corte"], basis="plan de corte")
     if holes:
-        add("Fabricación", "Taladrado de perfiles", holes, "taladro", op["taladro_eur"])
+        add("Fabricación", "Taladrado de perfiles", holes, "taladro", op["taladro_eur"], basis="geometría (taladros de perfiles)")
     for (t, fam), m in sorted(laser_m.items()):
-        add("Fabricación", f"Corte por láser e={t:g} mm ({fam.replace('_', ' ')})", m, "m", _laser_rate(R, t, fam))
+        add("Fabricación", f"Corte por láser e={t:g} mm ({fam.replace('_', ' ')})", m, "m", _laser_rate(R, t, fam),
+            basis="contornos exteriores e interiores de los desarrollos")
     if pierces:
-        add("Fabricación", "Perforaciones del láser (contornos y taladros)", pierces, "ud", op["laser_eur_perforacion"])
+        add("Fabricación", "Perforaciones del láser (una por contorno cerrado)", pierces, "ud", op["laser_eur_perforacion"],
+            basis="contornos de los desarrollos")
     if bends:
-        add("Fabricación", "Plegado a 90°", bends, "pliegue", op["plegado_eur_pliegue"])
+        add("Fabricación", "Plegado a 90°", bends, "pliegue", op["plegado_eur_pliegue"], basis="pliegues del modelo")
     w = plan["welding"]
     if w["joints"]:
         h = w["arc_time_h"] / op["soldadura_factor_marcha"]
         add("Fabricación", f"Soldadura MAG ({w['total_length_mm'] / 1000:.2f} m de cordón, factor de marcha "
-            f"{op['soldadura_factor_marcha']:g})", h, "h", lab["soldadura"])
-        add("Consumibles", "Hilo de soldadura", w["wire_kg"], "kg", R["consumables_eur"]["hilo_kg"])
-        add("Consumibles", "Gas de protección", w["gas_l"], "l", R["consumables_eur"]["gas_l"])
+            f"{op['soldadura_factor_marcha']:g})", h, "h", lab["soldadura"], basis="cordones del modelo")
+        add("Consumibles", "Hilo de soldadura", w["wire_kg"], "kg", R["consumables_eur"]["hilo_kg"], basis="cordones del modelo")
+        add("Consumibles", "Gas de protección", w["gas_l"], "l", R["consumables_eur"]["gas_l"], basis="tiempo de arco")
     # ---------------------------------------------------------------- acabado
     fin = model.params.values.get("ACABADO")
     base, eur_f = _finish_rate(R, fin)
     if eur_f:
         name = catalog.finish(fin)["name"] if fin else "Acabado"
         if base == "kg":
-            add("Acabado", name, galv_kg, "kg", eur_f)
+            add("Acabado", name, galv_kg, "kg", eur_f, basis="masa de las piezas")
         else:
-            add("Acabado", name, surf_m2, "m²", eur_f)
+            add("Acabado", name, surf_m2, "m²", eur_f, basis="superficie de las piezas")
     # ---------------------------------------------------------------- montaje
     mm = op["montaje_min"]
     roles = defaultdict(int)
@@ -197,12 +213,19 @@ def estimate(model, plan: dict[str, Any], lot: int = 1, R: dict[str, Any] | None
         roles[i.part.role] += 1
     minutes = (roles["tornillo"] * mm["tornillo"] + roles["tuerca_remachable"] * mm["tuerca_remachable"]
                + (roles["pie_nivelador"] + roles["rueda"]) * mm["apoyo"] + mm["por_unidad"])
-    add("Montaje", "Montaje, ajuste y control final", minutes / 60, "h", lab["montaje"])
+    add("Montaje", "Montaje y ajuste final", minutes / 60, "h", lab["montaje"], basis="componentes del modelo")
+    # ---------------------------------------------------------------- control de calidad
+    cm = op.get("control_min")
+    if cm:
+        qmin = cm["por_unidad"] + cm["por_union_soldada"] * w["joints"]
+        add("Control de calidad", f"Control dimensional y visual de soldaduras ({w['joints']} uniones soldadas)",
+            qmin / 60, "h", lab["control"], basis="uniones del modelo")
     # ---------------------------------------------------------------- preparación del lote
-    n_prof = len(plan["cutting"])
+    n_prof = len(mp["cutting"])
     prep = (n_prof * setup["sierra_por_perfil"] + laser_refs * setup["laser_por_referencia"]
             + sheet_refs * setup["plegado_por_referencia"] + (setup["soldadura_util"] if w["joints"] else 0.0))
-    add("Preparación", f"Programación y preparación de máquinas y útil ({lot} ud por lote)", 1 / lot, "lote", prep)
+    add("Preparación", f"Programación y preparación de máquinas y útil ({lot} ud por lote)", 1 / lot, "lote", prep,
+        basis="referencias del modelo")
     # ---------------------------------------------------------------- totales
     groups: dict[str, float] = {}
     for ln in lines:
@@ -217,11 +240,13 @@ def estimate(model, plan: dict[str, Any], lot: int = 1, R: dict[str, Any] | None
         ln["eur"] = round(ln["eur"], 2)
     hours = {"soldadura": round(w["arc_time_h"] / op["soldadura_factor_marcha"], 3) if w["joints"] else 0.0,
              "montaje": round(minutes / 60, 3)}
+    mat_kg = sum(ln["qty"] for ln in lines if ln["group"] == "Material")
     return {"currency": R["_meta"]["currency"], "lot": lot, "lines": lines,
             "groups": {k: round(v, 2) for k, v in groups.items()}, "direct": round(direct, 2),
             "overheads": round(oh, 2), "cost": round(cost, 2), "margin": round(margin, 2), "price": round(price, 2),
             "eur_per_kg": round(cost / mass, 2) if mass else None, "hours": hours,
-            "rates_version": R["_meta"]["version"], "unpriced": unpriced, "material_basis": op["imputacion_material"],
+            "rates_version": R["_meta"]["version"], "unpriced": unpriced, "material_basis": basis,
+            "material_kg_per_unit": round(mat_kg, 3), "saw_cuts_lot": cuts,
             "overhead_rate": R["overheads"]["gastos_generales"], "margin_rate": R["overheads"]["margen"],
             "note": R["_meta"]["note"]}
 
@@ -232,6 +257,7 @@ def quotation(model, plan: dict[str, Any], R: dict[str, Any] | None = None) -> d
     lot = max(1, int(model.params.values.get("LOTE_FABRICACION") or 1))     # lote del proyecto (parámetro avanzado)
     base = estimate(model, plan, lot, R)
     lots = sorted(set(R["lots"]) | {lot})
-    base["by_lot"] = [{"lot": n, **{k: e[k] for k in ("direct", "cost", "price")}}
-                      for n in lots for e in [estimate(model, plan, n, R)]]
+    base["by_lot"] = [{"lot": n, **{k: e[k] for k in ("direct", "cost", "price")},
+                       "material": e["groups"].get("Material", 0.0)}
+                      for n in lots for e in [base if n == lot else estimate(model, plan, n, R)]]
     return base

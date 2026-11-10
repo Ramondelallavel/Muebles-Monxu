@@ -8,7 +8,7 @@ import { project, projectPoint } from "./hlr";
 import { mmul, translation } from "./model";
 import { PDF, textWidth } from "./pdf";
 import { Occupancy, auditPage, boxesOverlap, segHitsBox, segsCross, summarize, textBox } from "./layout";
-import { g } from "./util";
+import { g, pyRound } from "./util";
 
 const FRAME = [20, 10, 410, 287];
 const TB_W = 180, TB_H = 58;
@@ -635,8 +635,10 @@ function planGeneral(d, X) {
   }
   if (best) { best[1].label = isoLabel(best[0]); d.drawView(best[1], false, 0.35); }
   const ps = m.params.values;
-  const lines = [`Producto: ${m.family_name} ${m.product_code}`, `Masa total calculada desde la geometría: ${X.bom.totals.total_mass.toFixed(1)} kg`, m.dims.load_text ?? "",
-    `Estado de verificación: ${X.eng.status_label}`, supportLine(m),
+  const [mblo, mbhi] = modelBBox(m);
+  const envTxt = [0, 1, 2].map((j) => fmt(mbhi[j] - mblo[j], 0)).join(" × ");
+  const lines = [`Producto: ${m.family_name} ${m.product_code}`, `Masa total calculada desde la geometría: ${X.bom.totals.total_mass.toFixed(1)} kg · envolvente máx. ${envTxt} mm`,
+    m.dims.load_text ?? "", `Cálculo: ${X.eng.verdict ?? X.eng.status_label}`, supportLine(m),
     `Acabado: ${C.finish(ps.ACABADO).name}`];
   d.flushLabels();
   const cands = [];
@@ -716,19 +718,27 @@ function planProfiles(d, X) {
   d.text(32, y, "PLAN DE CORTE DE BARRAS", 3.2, "l", 0, true);
   y -= 7;
   for (const c of X.plan.cutting) {
-    d.text(32, y, `${c.profile} ${c.material} — barras de ${fmt(c.bar_length)} mm: ${c.n_bars} (cota inferior ${c.lower_bound}, aprovechamiento ${(c.utilization * 100).toFixed(1)} %, sierra ${fmt(c.kerf)} mm)`, 2.6);
+    const head = `${c.profile} ${c.material} — barras de ${fmt(c.bar_length)} mm: ${c.n_bars} (cota inferior ${c.lower_bound}, aprovechamiento ${(c.utilization * 100).toFixed(1)} %, sierra ${fmt(c.kerf)} mm`;
+    const extra = `, despuntes ${fmt(c.trim_start)}/${fmt(c.trim_end)} mm, ${c.n_cuts} cortes)`;
+    if (textWidth(head + extra, 2.6) <= (y - 5 < 86 ? 224 : 400) - 32) d.text(32, y, head + extra, 2.6);
+    else {            // sin sitio (junto al cajetín): los despuntes y cortes en una segunda línea
+      d.text(32, y, head + ")", 2.6);
+      y -= 4.5;
+      d.text(32, y, `Despuntes ${fmt(c.trim_start)}/${fmt(c.trim_end)} mm · ${c.n_cuts} cortes`, 2.6);
+    }
     y -= 5;
     for (const b of c.bars) {
-      const x = 40, W = y < 86 ? 110 : 180, k = W / c.bar_length;
+      const x = 40, W0 = y < 86 ? 110 : 180, k = W0 / c.bar_length, W = b.length * k;   // un retal del inventario, a su longitud
       d.polyline([[x, y], [x + W, y], [x + W, y + 3.5], [x, y + 3.5]], LW_THIN, null, BLACK, true);
-      let xx = x + c.trim * k;
+      let xx = x + b.trim_start * k;
       for (const cut of b.cuts) {
         const ww = cut.length * k;
         d.rect(xx, y, ww, 3.5, LW_THIN, [0.82, 0.86, 0.9]);
         if (ww > 9) d.text(xx + ww / 2, y + 0.9, cut.ref.split("-").at(-1), 2.0, "c");
         xx += ww + c.kerf * k;
       }
-      d.text(x + W + 3, y + 0.6, fitText(`Barra ${b.bar}: retal ${fmt(b.remnant)} mm${b.remnant_reusable ? " (aprovechable)" : ""}`, (y < 86 ? 224 : 400) - x - W - 3, 2.2), 2.2);
+      const src = b.source === "retal" ? ` (retal ${b.stock_id})` : "";
+      d.text(x + W0 + 3, y + 0.6, fitText(`Barra ${b.bar}${src}: ${b.n_cuts} cortes · retal ${fmt(b.remnant)} mm (${b.remnant_status})`, (y < 86 ? 224 : 400) - x - W0 - 3, 2.2), 2.2);
       y -= 5.5;
       if (y < 22) return;
     }
@@ -1104,38 +1114,102 @@ function planExploded(d, X) {
 }
 
 export const ASSEMBLY_TEXTS = {
-  EST: "Recepción de la estructura soldada y pintada. Insertar las tuercas remachables M6 en los taladros Ø9,1 de largueros y travesaños con remachadora manual.",
+  EST: "Recepción de la estructura soldada y pintada. Insertar las tuercas remachables en los taladros de largueros y travesaños.",
   APO: "Roscar los pies niveladores en las tuercas soldadas de las placas base. Nivelar la mesa en su emplazamiento (nivel de burbuja sobre encimera al final).",
-  BAL: "Colocar la balda sobre el bastidor inferior, con las escotaduras alrededor de las patas. Fijar con tornillos ISO 7380 M6x12 (par 8 N·m, llave Allen 4 mm).",
-  ENC: "Colocar la encimera sobre el bastidor superior y fijarla con tornillos ISO 7380 M6x12 por las pestañas (par 8 N·m). Apretar en cruz desde el centro.",
+  BAL: "Colocar la balda sobre el bastidor inferior, con las escotaduras alrededor de las patas, y fijarla con la tornillería indicada.",
+  ENC: "Colocar la encimera sobre el bastidor superior y fijarla por las pestañas con la tornillería indicada. Apretar en cruz desde el centro.",
 };
-/** Anclaje al suelo: taladro y taco bajo cada pie (texto del paso de los apoyos). */
-function withAnchorText(m, texts) {
+// ---------------------------------------------------------------- instrucciones desde el modelo (= monxu/docs/assembly.py)
+const FASTENER_ROLES = ["tornillo", "tuerca_remachable", "anclaje", "pie_nivelador", "rueda"];
+const fmtc = (v) => g(v).replace(".", ",");
+/** Par de un tornillo en sus uniones: el menor entre el del tornillo y el máximo de la tuerca remachable; [par, validado]. */
+export function jointTorque(m, screw) {
+  const sc = C.component(screw);
+  let tq = sc.tightening_torque_Nm ?? null, ok = sc.validation?.status === "definido_por_norma";
+  for (const j of m.joints) if (j.kind === "atornillada" && j.data && j.data.screw === screw && j.data.rivet) {
+    const rn = C.component(j.data.rivet);
+    if (rn.max_torque_Nm != null) tq = tq === null ? rn.max_torque_Nm : Math.min(tq, rn.max_torque_Nm);
+    if (rn.validation?.status !== "definido_por_norma") ok = false;
+  }
+  return [tq, ok];
+}
+export function fastenerLine(m, group) {
+  const cnt = {};
+  for (const i of m.instances) if (i.group === group && i.part.kind === "normalizado" && FASTENER_ROLES.includes(i.part.role)) cnt[i.part.code] = (cnt[i.part.code] ?? 0) + 1;
+  const codes = Object.keys(cnt).sort();
+  if (!codes.length) return "";
+  return "Elementos según BOM: " + codes.map((code) => {
+    const c = C.component(code);
+    let txt = `${cnt[code]} × N-${code}`;
+    if (c.hole_d) txt += ` (taladro Ø${fmtc(c.hole_d)})`;
+    if (c.category === "tornilleria" && c.thread && c.length) {
+      const [tq, ok] = jointTorque(m, code);
+      if (tq !== null) txt += ` (par ${fmtc(pyRound(tq, 1))} N·m${ok ? "" : "*"})`;
+    }
+    return txt;
+  }).join(", ") + ".";
+}
+/** Texto final de cada paso: descripción de la familia + elementos del BOM + anclaje al suelo. */
+export function stepTexts(m) {
+  const texts = { ...ASSEMBLY_TEXTS, ...(m.structure.assembly_texts ?? {}) };
   const anc = m.instances.find((i) => i.part.role === "anclaje");
   if (anc) {
     const c = anc.part.data;
-    texts[anc.group] = (texts[anc.group] ?? "") + ` Anclar al suelo con tacos ${c.thread} (taladro Ø${g(c.dims[0])} × ${g(c.embed_mm + 10)} mm; par según la ETA).`;
+    texts[anc.group] = (texts[anc.group] ?? "") + ` Anclar al suelo con los tacos N-${anc.part.code} (taladro Ø${g(c.dims[0])} × ${g(c.embed_mm + 10)} mm; par según la ETA).`;
   }
-  return texts;
+  const out = {};
+  for (const sa of Object.values(m.subassemblies)) { const line = fastenerLine(m, sa.id); out[sa.id] = ((texts[sa.id] ?? "") + (line ? " " + line : "")).trim(); }
+  return out;
 }
-/** Herramientas, pares y avisos de montaje según el tipo de apoyo (pies niveladores o ruedas). */
-const toolsFor = (m) => {
-  if (m.structure.assembly_notes) return m.structure.assembly_notes;
+export function componentTools(m) {
+  const codes = [...new Set(m.instances.filter((i) => i.part.kind === "normalizado" && FASTENER_ROLES.includes(i.part.role)).map((i) => i.part.code))].sort();
+  const tools = [], torques = [];
+  for (const code of codes) {
+    const c = C.component(code);
+    if (c.tool && !tools.includes(c.tool)) tools.push(c.tool);
+    if (c.category === "tornilleria" && c.length) {
+      const [tq, ok] = jointTorque(m, code);
+      const nut = m.joints.find((j) => j.kind === "atornillada" && j.data && j.data.screw === code && j.data.rivet)?.data.rivet;
+      torques.push(`· N-${code}${nut ? ` en N-${nut}` : ""}: ` + (tq !== null ? `${fmtc(pyRound(tq, 1))} N·m` : "según ficha") + (ok ? "" : " (orientativo, PENDIENTE DE VALIDACIÓN)"));
+    } else if (c.category === "anclajes") torques.push(`· N-${code}: par de instalación según la ETA (PENDIENTE DE VALIDACIÓN)`);
+  }
+  return [tools, torques];
+}
+export function assemblyNotes(m) {
   const sup = m.structure.supports?.[0];
   const castor = !!sup && C.component(sup.component).category.startsWith("ruedas");
-  return ["HERRAMIENTAS:", "· Remachadora para tuercas M6", "· Llave Allen 4 mm (dinamométrica)",
-    ...(castor ? ["· Llave fija 17/19 para contratuerca de ruedas"] : ["· Llave fija 17/19 para contratuerca de pies", "· Nivel de burbuja"]), "", ...TOOLS_TAIL];
-};
+  const base = m.structure.assembly_notes ?? ["HERRAMIENTAS:", ...(castor ? [] : ["· Nivel de burbuja"]), "", ...TOOLS_TAIL];
+  const [tools, torques] = componentTools(m);
+  const block = ["PARES DE APRIETE:", ...(torques.length ? torques : ["· Sin uniones atornilladas"])];
+  if (torques.some((t) => t.includes("PENDIENTE"))) block.push("* Par orientativo: confirmar con la ficha del fabricante.");
+  const k = base.indexOf("HERRAMIENTAS:");
+  if (k < 0) return ["HERRAMIENTAS:", ...tools.map((t) => `· ${t}`), "", ...block, "", ...base];
+  let end = base.findIndex((l, i) => i > k && l === "");
+  if (end < 0) end = base.length;
+  return [...base.slice(0, k + 1), ...tools.map((t) => `· ${t}`), ...base.slice(k + 1, end), "", ...block, ...base.slice(end)];
+}
 const TOOLS_TAIL = [
-  "PARES DE APRIETE:", "· ISO 7380 M6 8.8 en remachable de acero: 8 N·m", "", "DESMONTAJE:", "Chapas desmontables (uniones atornilladas). La estructura es un subconjunto soldado no desmontable.", "",
+  "DESMONTAJE:", "Chapas desmontables (uniones atornilladas). La estructura es un subconjunto soldado no desmontable.", "",
   "SEGURIDAD:", "Manipular las chapas entre dos personas; usar guantes (cantos de chapa)."];
+/** Referencias o designaciones de tornillería citadas en las instrucciones que no están en el BOM (= assembly.designation_issues). */
+export function designationIssues(m, texts) {
+  const codes = new Set(m.instances.filter((i) => i.part.kind === "normalizado").map((i) => i.part.code));
+  const des = new Set();
+  for (const code of codes) { const c = C.component(code); if (c.thread && c.length) des.add(`${Math.trunc(+c.thread.slice(1))}x${Math.trunc(c.length)}`); }
+  const bad = new Set();
+  for (const t of texts) {
+    for (const mm of t.matchAll(/\bN-[A-Z0-9_]+(?:x\d+)?[A-Z0-9_]*/g)) if (!codes.has(mm[0].slice(2))) bad.add(mm[0]);
+    for (const mm of t.matchAll(/\bM(\d+)\s*[x×]\s*(\d+)\b/g)) if (!des.has(`${+mm[1]}x${+mm[2]}`)) bad.add(mm[0]);
+  }
+  return [...bad].sort();
+}
 
 function planAssembly(d, X) {
   const m = X.m;
   const order = Object.values(m.subassemblies).sort((a, b) => a.step - b.step);
   d.newSheet("07", "Instrucciones de montaje", "S/E", "—");
   const cells = [[28, 178, 152, 270], [156, 178, 280, 270], [284, 178, 408, 270], [28, 84, 152, 174], [156, 84, 280, 174]];
-  const texts = withAnchorText(m, { ...ASSEMBLY_TEXTS, ...(m.structure.assembly_texts ?? {}) });
+  const texts = stepTexts(m);
   const shown = [];
   order.slice(0, 4).forEach((sa, n) => {
     shown.push(...m.instances.filter((i) => i.group === sa.id));
@@ -1148,7 +1222,7 @@ function planAssembly(d, X) {
     d.notes(cell[0] + 3, cell[1] + 14, [texts[sa.id] ?? ""], 2.1, 118);
   });
   d.rect(284, 84, 124, 90, 0.3);
-  d.notes(287, 170, toolsFor(m), 2.2, 118);
+  d.notes(287, 170, assemblyNotes(m), 2.2, 118);
 }
 
 function planBom(d, X) {
@@ -1156,6 +1230,7 @@ function planBom(d, X) {
   d.newSheet("08", "Despiece y lista de materiales", "—", "Ver lista");
   const y = d.table(30, 268, [["Pos", 10, "c"], ["Referencia", 42, "l"], ["Descripción", 105, "l"], ["Material", 42, "l"], ["Espesor", 16, "r"], ["Largo", 20, "r"], ["Ancho", 18, "r"],
     ["Cant.", 13, "c"], ["Peso unit. kg", 22, "r"], ["Peso total kg", 22, "r"]], rows, 5.2, 6, 2.4);
+  for (const r of X.bom.rows) d.recordDim(`CANT_${r.ref}`, r.qty, "despiece");       // control BOM ↔ planos ↔ 3D
   const t = X.bom.totals;
   d.notes(30, y - 6, [`Componentes: ${t.components} (${t.manufactured_parts} fabricados, ${t.standard_parts} normalizados) · Referencias distintas: ${t.distinct_parts} · Masa total: ${t.total_mass.toFixed(2)} kg (calculada desde los sólidos).`,
     "Metros de perfil: " + Object.entries(t.profile_meters).map(([k, v]) => `${k}: ${v.toFixed(3)} m`).join("; "),
@@ -1202,7 +1277,7 @@ export async function assemblyInstructions(model, summary, info, X = null, onPro
   const m = model;
   const order = Object.values(m.subassemblies).sort((a, b) => a.step - b.step);
   const d = new Drawing({ ...info, total_sheets: order.length + 1, title: `Instrucciones de montaje ${m.product_code}`, assembly_ref: m.product_code });
-  const texts = withAnchorText(m, { ...ASSEMBLY_TEXTS, ...(m.structure.assembly_texts ?? {}) });
+  const texts = stepTexts(m);
   d.newSheet("M0", "Instrucciones de montaje: conjunto y herramientas", "S/E", "—");
   const all = X.proj("all", m.instances, "iso", false, true);
   const [, v0] = fitView(all, "iso", [30, 90, 270, 270], [], true);
@@ -1213,7 +1288,7 @@ export async function assemblyInstructions(model, summary, info, X = null, onPro
   d.reserve([283, 83, 409, 275]);
   balloons(d, v0, partTargets(X, m.instances, true), { region: [24, 84, 280, 285] });
   let y = d.notes(287, 268, [`${m.family_name} ${m.product_code}`, `Masa total ${summary.bom.totals.total_mass.toFixed(1)} kg · ${summary.bom.totals.components} componentes`, "",
-    "ORDEN DE MONTAJE:", ...order.map((s, n) => `${n + 1}. ${s.name}`), "", ...toolsFor(m)], 2.4, 118, true);
+    "ORDEN DE MONTAJE:", ...order.map((s, n) => `${n + 1}. ${s.name}`), "", ...assemblyNotes(m)], 2.4, 118, true);
   void y;
   const shown = [];
   order.forEach((sa, n) => {
@@ -1256,6 +1331,8 @@ export function drawingConsistency(model, sheets) {
       exp[`${p.ref}_LX`] = p.spec.Lx; exp[`${p.ref}_LY`] = p.spec.Ly; exp[`${p.ref}_ESPESOR`] = p.spec.t;
     }
     if (p.kind === "perfil") exp[`L_${p.ref}`] = p.length;
+    // cantidades impresas en el despiece frente a las instancias del 3D
+    exp[`CANT_${p.ref}`] = model.instances.filter((i) => i.part.key === p.key).length;
   }
   const mism = [];
   let checked = 0;

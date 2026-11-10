@@ -11,6 +11,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from ..core.model import PlatePart, SheetPart
+from .dxf import sheet_label
 from .drawing_kit import LW_THICK, LW_THIN, Drawing, fmt
 
 ST = getSampleStyleSheet()
@@ -135,10 +136,10 @@ def optimization_pdf(path: Path, info: dict[str, Any], model, plan: dict[str, An
         if not n.get("feasible"):
             continue
         for sh in n["sheets"]:
-            L, W = n["length"], n["width"]
+            L, W = sh.get("length", n["length"]), sh.get("width", n["width"])
             k = min(360 / L, 170 / W)
             d.new_sheet(f"OPT-{sh['sheet']}", f"Anidado chapa {n['material']} e={fmt(n['thickness'])} mm — "
-                                              f"formato {n['format']}", f"1:{round(1 / k)}" if k < 1 else "1:1",
+                                              f"{sheet_label(n, sh)}", f"1:{round(1 / k)}" if k < 1 else "1:1",
                         f"{n['material']} e={fmt(n['thickness'])}")
             ox, oy = 35, 95
             d.polyline([(ox, oy), (ox + L * k, oy), (ox + L * k, oy + W * k), (ox, oy + W * k), (ox, oy)], LW_THICK)
@@ -153,11 +154,25 @@ def optimization_pdf(path: Path, info: dict[str, Any], model, plan: dict[str, An
                 d.polyline([(ox + (pl["x"] + x) * k, oy + (pl["y"] + y) * k) for x, y in tr], LW_THIN)
                 d.text(ox + (pl["x"] + pl["w"] / 2) * k, oy + (pl["y"] + pl["h"] / 2) * k, pl["ref"].split("-")[-1],
                        2.6, "c")
-            d.notes(35, 85, [f"Chapa {sh['sheet']} de {n['n_sheets']} · aprovechamiento {sh['utilization'] * 100:.1f} % · "
+            rem = sh.get("remnant")
+            if rem:
+                x0, y0 = (rem["at"], 0.0) if rem["axis"] == "x" else (0.0, rem["at"])
+                d.c.setDash(2, 1)
+                d.polyline([(ox + x0 * k, oy + y0 * k), (ox + (x0 + rem["length"]) * k, oy + y0 * k),
+                            (ox + (x0 + rem["length"]) * k, oy + (y0 + rem["width"]) * k),
+                            (ox + x0 * k, oy + (y0 + rem["width"]) * k), (ox + x0 * k, oy + y0 * k)], LW_THIN)
+                d.c.setDash()
+            pu = n.get("purchase") or {}
+            d.notes(35, 85, [f"Chapa {sh['sheet']} de {len(n['sheets'])} · aprovechamiento {sh['utilization'] * 100:.1f} % · "
                              f"margen {fmt(n['margin'])} mm · separación {fmt(n['spacing'])} mm · ancho de corte "
                              f"{fmt(n['kerf'])} mm.",
+                             (f"Retal reutilizable {fmt(rem['length'])}×{fmt(rem['width'])} mm (línea de trazos). " if rem
+                              else "Sin retal reutilizable en esta chapa. ") +
+                             f"Compra del grupo: {pu.get('n_full', 0)} chapas enteras, {pu.get('n_custom', 0)} a medida; "
+                             f"aprovechamiento real {pu.get('utilization', 0) * 100:.1f} %.",
                              "Anidado por envolvente rectangular (MaxRects). Alternativas de formato: " +
-                             "; ".join(f"{a['format']}: " + (f"{a['n_sheets']} ch., {a['utilization'] * 100:.1f} %"
+                             "; ".join(f"{a['format']}: " + (f"{a['n_sheets']} ch., {a['utilization'] * 100:.1f} %, "
+                                                             f"{a['purchased_area_m2']:.3f} m² comprados"
                                                              if a["feasible"] else "no cabe")
                                        for a in n.get("alternatives", []))], width=185)
     d.finish()

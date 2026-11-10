@@ -2,11 +2,14 @@
 // Motor de verificación estructural (port de monxu/engineering/analysis.py).
 import * as C from "./catalog";
 import { Frame3D, lineLoadToNodes, navier } from "./fem";
-import { instanceCentroid } from "./geometry";
+import { instanceBBox, instanceCentroid } from "./geometry";
 import { AUTO } from "./model";
 import { f as fx, g, pyRound } from "./util";
 
 export const OK = "CUMPLE", FAIL = "NO_CUMPLE", PENDING = "PENDIENTE";
+/** Comprobación calculada con datos no certificados o hipótesis por validar, y comprobación que no procede. */
+export const VAL = "PENDIENTE_VALIDACION", NA = "NO_APLICA";
+const PHI0 = 1 / 200;
 export const G_ACC = 9.81;
 const MAX_ELEMENT = 100.0;
 const N_ZERO = 1e-3;   // N: axil por debajo del cual la barra se considera sin compresión
@@ -167,10 +170,12 @@ export class StructuralModel {
       });
     }
   }
+  /** Peso de las barras: la masa real de cada pieza (la del BOM) repartida a lo largo de su eje de cálculo. */
   selfWeight(c = "G") {
     let total = 0.0;
     for (const mm of Object.values(this.members)) {
-      const w = mm.props.A * 1e-9 * mm.material.density * G_ACC;
+      const Lt = mm.elements.reduce((t, k) => t + this.frame.elements[k].L, 0);
+      const w = (mm.instance.part.mass * G_ACC) / Lt;
       for (const k of mm.elements) {
         const e = this.frame.elements[k];
         const P = w * e.L;
@@ -233,8 +238,113 @@ export class StructuralModel {
 // ============================================================================ análisis
 /** [masa en kg, espesor en mm] de la chapa plegada o placa de una superficie de carga. */
 export function surfaceSheet(part) {
-  if (part.kind === "chapa") return [part.flat.netArea * part.spec.t * 1e-9 * C.material(part.material).density, part.spec.t];
-  return [part.volume * 1e-9 * C.material(part.material).density, part.t];
+  return [part.mass, part.kind === "chapa" ? part.spec.t : part.t];
+}
+/** Componentes bajo los apoyos: su peso va directamente al suelo y no carga la estructura. */
+const BELOW_SUPPORT_ROLES = ["pie_nivelador", "rueda", "anclaje"];
+/** Masas de las piezas que no son barras, chapas de superficie ni masas colgadas declaradas, en el nudo más próximo
+ *  al centro de su envolvente (= analysis.lump_remaining_masses). */
+export function lumpRemainingMasses(model, sm, c = "G") {
+  const st = model.structure;
+  const covered = new Set([...Object.keys(sm.members), ...(st.surfaces ?? []).map((s) => s.sheet_instance), ...(st.attached_instances ?? [])]);
+  const nodes = sm.frame.nodes;
+  let lumped = 0.0, below = 0.0, nLumped = 0;
+  for (const i of model.instances) {
+    if (covered.has(i.id)) continue;
+    const m = i.part.mass;
+    if (BELOW_SUPPORT_ROLES.includes(i.part.role)) { below += m; continue; }
+    const [lo, hi] = instanceBBox(i);
+    const cc = [0, 1, 2].map((k) => (lo[k] + hi[k]) / 2);
+    let best = 0, bd = Infinity;
+    nodes.forEach((q, n) => { const dx = q[0] - cc[0], dy = q[1] - cc[1], dz = q[2] - cc[2]; const dd = dx * dx + dy * dy + dz * dz; if (dd < bd) { best = n; bd = dd; } });
+    sm.frame.addNodalLoad(c, best, [0, 0, -m * G_ACC]);
+    lumped += m; nLumped++;
+  }
+  return { lumped_kg: lumped, n_lumped: nLumped, below_supports_kg: below };
+}
+
+/** Fuerzas horizontales equivalentes a la imperfección global φ·N en X (IX<c>) y en Y (IY<c>) para G y Q (= analysis.imperfection_cases). */
+export function imperfectionCases(model, sm, casesV = ["G", "Q"]) {
+  const fr = sm.frame;
+  const sups = model.structure.supports ?? [];
+  const z0 = sups.length ? Math.min(...sups.map((s) => s.point[2])) : Math.min(...fr.nodes.map((n) => n[2]));
+  const h = Math.max(...fr.nodes.map((n) => n[2])) - z0;
+  const alpha_h = Math.min(1.0, Math.max(2 / 3, 2 / Math.sqrt(Math.max(h, 1.0) / 1000)));
+  const phi = PHI0 * alpha_h;
+  const V = {};
+  for (const c of casesV) {
+    if (!(c in fr.loads)) continue;
+    const F = fr.loads[c];
+    let tot = 0.0;
+    for (let n = 0; n < fr.nodes.length; n++) {
+      const fz = F[6 * n + 2];
+      if (fz !== 0.0) { fr.addNodalLoad(`IX${c}`, n, [-fz * phi, 0, 0]); fr.addNodalLoad(`IY${c}`, n, [0, -fz * phi, 0]); tot += -fz; }
+    }
+    V[c] = tot;
+  }
+  return { phi, alpha_h, h, V };
+}
+/** α_cr por el método de Horne (EN 1993-1-1 §5.2.1(4)B) en X y en Y (= analysis.alpha_cr). */
+export function alphaCr(res, imp, fac) {
+  const out = {};
+  const nn = res.frame.nodes.length;
+  for (const [d, comp] of [["X", 0], ["Y", 1]]) {
+    const f = {};
+    for (const c of Object.keys(imp.V)) if (c in fac) f[`I${d}${c}`] = fac[c];
+    if (!Object.keys(f).length) continue;
+    const u = res.combine(f);
+    let delta = 0;
+    for (let n = 0; n < nn; n++) delta = Math.max(delta, Math.abs(u[6 * n + comp]));
+    out[d] = { alpha_cr: delta > 1e-12 ? (imp.phi * imp.h) / delta : Infinity, delta_mm: delta };
+  }
+  return out;
+}
+/** Normas que aplican al proyecto: por familia, material empleado, procesos presentes y normas de producto. */
+export function applicableStandards(model) {
+  const mats = new Set(model.instances.filter((i) => i.part.material).map((i) => i.part.material));
+  const fams = new Set([...mats].map((m) => C.material(m).family));
+  const mstd = new Set([...[...mats].map((m) => C.material(m).standard), ...model.instances.filter((i) => i.part.kind === "perfil").map((i) => i.part.profile.standard)]);
+  const procs = new Set();
+  if (model.joints.some((j) => j.kind === "soldadura")) procs.add("soldadura");
+  if (model.instances.some((i) => i.part.kind === "chapa" || i.part.kind === "pletina")) procs.add("corte_termico");
+  return C.standards(model.family, fams, procs, mstd);
+}
+/** CUMPLE / NO CUMPLE / PENDIENTE DE VALIDACIÓN / NO APLICABLE de cada comprobación (= analysis.classify_checks). */
+export function classifyChecks(model, sm, checks) {
+  const ps = model.params.values;
+  const sups = model.structure.supports ?? [];
+  const comp = sups.length ? C.component(sups[0].component) : null;
+  const anc = model.instances.find((i) => i.part.role === "anclaje")?.part.data ?? null;
+  const unguaranteed = new Set(model.instances.filter((i) => i.part.material && !C.material(i.part.material).fy_guaranteed).map((i) => C.material(i.part.material).code));
+  for (const c of checks) {
+    if (c.status !== OK) continue;
+    let reason = null;
+    if (c.id === "A.PIES" && comp && (comp.rated_load_source === "catalogo_generico" || comp.validation?.status !== "definido_por_norma"))
+      reason = `capacidad de ${comp.name} de catálogo genérico, no certificada (ficha del fabricante pendiente)`;
+    else if (c.id.startsWith("E.ANCLAJE") && anc && anc.rated_load_source === "catalogo_generico" && c.utilization !== null)
+      reason = "resistencia del taco de catálogo genérico (ETA y soporte real pendientes)";
+    else if (c.category === "placa" && unguaranteed.size) {
+      const sf = (model.structure.surfaces ?? []).find((s) => s.label === c.element);
+      if (sf && unguaranteed.has(model.instance(sf.sheet_instance).part.material)) reason = "límite elástico no garantizado por la norma del material (certificado 3.1 pendiente)";
+    }
+    if (reason) { c.status = VAL; c.details = { ...(c.details ?? {}), validacion: reason }; }
+  }
+  const na = C.criteria().national_annex ?? {};
+  checks.push(check("N.ANEJO-NACIONAL", "criterios", "Conjunto", "Coeficientes parciales y de combinación", "EN 1990 / EN 1993 (valores recomendados)", null, null, "-", null,
+    na.applied ? OK : VAL, "", na.applied ? { anejo: na.applied } : { validacion: na.note ?? "anejo nacional no fijado" }));
+  const exterior = ps.ENTORNO === "exterior";
+  checks.push(check("N.VIENTO-NIEVE", "acciones", "Conjunto", "Acciones de viento y nieve", "EN 1991-1-4 / EN 1991-1-3", null, null, "-", null, exterior ? VAL : NA, "",
+    exterior ? { validacion: "uso en exterior: acciones de viento y nieve no evaluadas por la aplicación" } : { motivo: "uso en interior: no hay acciones de viento ni de nieve" }));
+  const seen = new Set();
+  for (const mm of Object.values(sm.members)) {
+    const prof = mm.profile, mat = mm.material, key = `${prof.code}|${mat.code}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const eps = Math.sqrt(235 / mat.fy), r = (Math.max(prof.H, prof.B) - 3 * prof.t) / prof.t, lim = 72 * eps;
+    checks.push(check(`B.ABOLL.${prof.code}.${mat.code}`, "resistencia", prof.code, `Abolladura por cortante del alma (${prof.code}, ${mat.code}): c/t = ${fx(r, 1)} ≤ 72ε/η = ${fx(lim, 1)}`,
+      "EN 1993-1-1 §6.2.6(6) (η = 1)", pyRound(r, 2), pyRound(lim, 2), "-", null, r <= lim ? NA : VAL, "",
+      r <= lim ? { motivo: "alma poco esbelta: no requiere comprobación de abolladura (EN 1993-1-5)" } : { validacion: "alma esbelta: comprobar abolladura según EN 1993-1-5" }));
+  }
 }
 
 export function analyze(model, includeStability = true, includeWelds = true) {
@@ -244,7 +354,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   const st = model.structure;
   const checks = [], hyp = [], pending = [];
   const limitations = [
-    "Análisis elástico lineal de primer orden (sin efectos P-Δ ni imperfecciones globales explícitas).",
+    "Análisis elástico lineal de primer orden con imperfecciones globales equivalentes (EN 1993-1-1 §5.3.2) y sensibilidad a segundo orden por α_cr con el método de Horne (§5.2.1(4)B), válido para pórticos con poca compresión en las vigas; sin análisis de segundo orden explícito (con α_cr < 3 la verificación no se da por superada). Las imperfecciones de barra quedan incluidas en las curvas de pandeo.",
     "Uniones soldadas consideradas rígidas; excentricidades de unión entre ejes no modeladas.",
     "Chapas de encimera y balda verificadas como placas simplemente apoyadas en el emparrillado (Navier); no se considera su contribución a la rigidez del bastidor.",
     "Comprobaciones de barras por el método simplificado lineal de EN 1993-1-1 §6.2.1(7) y §6.3.3 con coeficientes de interacción unitarios (conservador).",
@@ -255,6 +365,8 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   const levels = st.levels ?? {};
   const cases = [];
   let Gm = sm.selfWeight("G");
+  const G_members = Gm;
+  let G_attached = 0.0;
   // masas no estructurales colgadas de barras (p. ej. un panel atornillado a los montantes)
   for (const am of st.attached_masses ?? []) {
     const chain = sm.chains[am.member];
@@ -264,7 +376,11 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     const P = am.mass_kg * G_ACC;
     fr.addNodalLoad("G", best[1], [0, 0, -P]);
     Gm += P;
+    G_attached += P;
   }
+  // resto de piezas y componentes (placas base, tuercas, tornillería, tapones...) en el nudo más próximo
+  const lump = lumpRemainingMasses(model, sm, "G");
+  Gm += lump.lumped_kg * G_ACC;
   let gSheets = 0.0;
   const phi = dynamicFactor(ps);
   if (phi > 1.0) hyp.push(`Cargas de uso y carga puntual amplificadas por el coeficiente dinámico φ = ${g(phi)} (rodadura sobre juntas, rampas o umbrales).`);
@@ -330,8 +446,14 @@ export function analyze(model, includeStability = true, includeWelds = true) {
       }
     } else hyp.push(`${lab}: sin sobrecarga de uso (0 kg indicados); se verifica con el peso propio.`);
   }
-  cases.unshift({ id: "G", label: "Peso propio (perfiles y chapas, calculado desde la geometría)", value: `${fx((Gm + gSheets) / G_ACC, 1)} kg`,
+  cases.unshift({ id: "G", label: "Peso propio (masas reales de barras, chapas, piezas y componentes)", value: `${fx((Gm + gSheets) / G_ACC, 1)} kg`,
     total_N: pyRound(Gm + gSheets, 1) });
+  const selfWeightInfo = { members_kg: pyRound(G_members / G_ACC, 3), surfaces_kg: pyRound(gSheets / G_ACC, 3), attached_kg: pyRound(G_attached / G_ACC, 3),
+    lumped_kg: pyRound(lump.lumped_kg, 3), n_lumped: lump.n_lumped, below_supports_kg: pyRound(lump.below_supports_kg, 3),
+    applied_kg: pyRound((Gm + gSheets) / G_ACC, 3), total_kg: pyRound((Gm + gSheets) / G_ACC + lump.below_supports_kg, 3) };
+  hyp.push(`Peso propio con la masa real de cada pieza (la del BOM): barras ${fx(selfWeightInfo.members_kg, 2)} kg, chapas de superficie ${fx(selfWeightInfo.surfaces_kg, 2)} kg, `
+    + `masas colgadas ${fx(selfWeightInfo.attached_kg, 2)} kg y ${lump.n_lumped} piezas y componentes (${fx(selfWeightInfo.lumped_kg, 2)} kg) en el nudo más próximo a su centro; `
+    + `${fx(selfWeightInfo.below_supports_kg, 2)} kg de pies, ruedas y tacos bajo los apoyos no cargan la estructura.`);
   const hasQ = "Q" in fr.loads;
   // verificación completa si hay sobrecarga o si todas las cargas de uso están indicadas (0 kg incluidos)
   const qDefined = hasQ || !undefinedLoads.length;
@@ -371,8 +493,13 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     cases.push({ id: "HX/HY", label: st.push_label ?? "Empuje horizontal en el plano de la encimera (direcciones X e Y)", value: `${g(H_N)} N`, total_N: H_N });
     if (model.params.sources.CARGA_HORIZONTAL === "defecto") hyp.push(`Empuje horizontal de ${g(H_N)} N: ${st.push_note ?? crit.horizontal_service_load_note}`);
   }
+  // ---------------------------------------------------------------- imperfecciones globales (EN 1993-1-1 §5.3.2)
+  const imp = imperfectionCases(model, sm);
   const gG = pf.gamma_G, gQ = pf.gamma_Q, psi = pf.psi0_Q;
-  const uls = { "ELU-1": { G: gG } };
+  const V_Ed = gG * (imp.V.G ?? 0.0) + gQ * (imp.V.Q ?? 0.0);
+  const H_Ed = "HX" in fr.loads ? gQ * H_N : 0.0;
+  const useImp = !(H_Ed >= 0.15 * V_Ed && 0.15 * V_Ed > 0);       // §5.3.2(4)B: se pueden omitir si H_Ed ≥ 0,15·V_Ed
+  let uls = { "ELU-1": { G: gG } };
   if (hasQ) uls["ELU-1"] = { G: gG, Q: gQ };
   if ("HX" in fr.loads) {
     uls["ELU-2"] = { G: gG, Q: gQ * psi, HX: gQ };
@@ -387,9 +514,44 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   if ("QA" in fr.loads) sls["ELS-QA"] = { G: 1.0, QA: 1.0 };
   for (const pl of st.point_loads ?? []) if (pl.id in fr.loads) { uls[`ELU-${pl.id}`] = { G: gG, [pl.id]: gQ }; sls[`ELS-${pl.id}`] = { G: 1.0, [pl.id]: 1.0 }; }
   if ("HX" in fr.loads) { sls["ELS-3"] = { HX: 1.0 }; sls["ELS-4"] = { HY: 1.0 }; }
-  const all = { ...uls, ...sls };
   const res = fr.solve();
+  // sensibilidad a segundo orden y amplificación de las acciones horizontales (EN 1993-1-1 §5.2.1, §5.2.2(5)B)
+  const acr = alphaCr(res, imp, { G: gG, Q: gQ });
+  const kAmp = Object.fromEntries(Object.entries(acr).map(([d, v]) => [d, v.alpha_cr >= 3.0 && v.alpha_cr < 10.0 ? 1 / (1 - 1 / v.alpha_cr) : 1.0]));
+  if (useImp) {            // fuerzas equivalentes en las combinaciones de ELU, con los factores de G y Q de cada una
+    const nu = {};
+    for (const [cname, f] of Object.entries(uls)) {
+      nu[cname] = { ...f };
+      if (cname === "ELU-1") for (const d of ["X", "Y"]) {
+        const add = {};
+        for (const c of Object.keys(imp.V)) if (c in f) add[`I${d}${c}`] = f[c];
+        nu[`ELU-1${d}`] = { ...f, ...add };
+      }
+    }
+    for (const [cname, d] of [["ELU-2", "X"], ["ELU-3", "Y"], ["ELU-4", "X"]]) if (cname in nu)
+      for (const c of Object.keys(imp.V)) if (c in nu[cname]) nu[cname][`I${d}${c}`] = nu[cname][c];
+    uls = nu;
+  }
+  for (const f of Object.values(uls)) for (const cs of Object.keys(f)) {   // 3 ≤ α_cr < 10: acciones horizontales × 1/(1 − 1/α_cr)
+    const d = cs === "HX" || cs.startsWith("IX") ? "X" : cs === "HY" || cs.startsWith("IY") ? "Y" : null;
+    if (d && (kAmp[d] ?? 1.0) !== 1.0) f[cs] = f[cs] * kAmp[d];
+  }
+  const all = { ...uls, ...sls };
   const U = Object.fromEntries(Object.entries(all).map(([c, f]) => [c, res.combine(f)]));
+  const phiImp = imp.phi;
+  checks.push(check("S.IMPERF", "estabilidad", "Estructura", `Imperfecciones globales equivalentes φ = φ0·αh·αm = 1/200 × ${fx(imp.alpha_h, 3)} × 1 = ${fx(phiImp, 5)} (h = ${fx(imp.h)} mm)`,
+    "EN 1993-1-1 §5.3.2(3) y (4)B", pyRound(phiImp, 6), null, "rad", null, useImp ? OK : NA, "ELU",
+    { h_mm: imp.h, alpha_h: imp.alpha_h, alpha_m: 1.0, H_Ed_N: H_Ed, V_Ed_N: V_Ed, incluidas: useImp }));
+  if (useImp) hyp.push(`Imperfección global: fuerzas horizontales equivalentes φ·N (φ = ${fx(phiImp, 5)}, αm = 1 del lado de la seguridad) en X y en Y con las cargas verticales G y Q de cada combinación de ELU.`);
+  else hyp.push(`Imperfección global omitida: H_Ed = ${fx(H_Ed)} N ≥ 0,15·V_Ed = ${fx(0.15 * V_Ed)} N (EN 1993-1-1 §5.3.2(4)B).`);
+  for (const [d, v] of Object.entries(acr)) {
+    const a = v.alpha_cr, fin = Number.isFinite(a);
+    const note = a >= 10 ? "análisis de primer orden suficiente (α_cr ≥ 10)" : a >= 3 ? `efectos de segundo orden por amplificación 1/(1 − 1/α_cr) = ${fx(kAmp[d], 3)} de las acciones horizontales`
+      : "α_cr < 3: requiere análisis de segundo orden, no disponible en este método";
+    checks.push(check(`S.ALFA-CR-${d}`, "estabilidad", "Estructura", `Sensibilidad a efectos de segundo orden en ${d} (método de Horne): ${note}`,
+      "EN 1993-1-1 §5.2.1(3) y (4)B, §5.2.2(5)B", fin ? pyRound(a, 2) : null, 3.0, "-", fin ? pyRound(3.0 / a, 4) : 0.0, fin ? status(3.0 / a) : OK, "ELU",
+      { delta_mm: v.delta_mm, h_mm: imp.h, k_amplificacion: kAmp[d] }));
+  }
 
   // ---------------------------------------------------------------- barras
   const alpha = crit.imperfection_factors[crit.buckling_curve_cold_formed_hollow];
@@ -631,9 +793,13 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     const [Wtot, cog] = ownWeight(model);
     stability = { weight_N: Wtot, cog, levers: supportLevers(sups, cog) };
   }
+  // ---------------------------------------------------------------- comprobaciones no aplicables y validaciones
+  classifyChecks(model, sm, checks);
   // ---------------------------------------------------------------- resultado global
   const sts = checks.map((c) => c.status);
   const stG = sts.includes(FAIL) ? FAIL : sts.includes(PENDING) || pending.length ? PENDING : OK;
+  const toValidate = checks.filter((c) => c.status === VAL);
+  const verdict = stG === FAIL ? "NO CUMPLE" : stG === PENDING ? "PENDIENTE" : toValidate.length ? "PENDIENTE DE VALIDACIÓN" : "CUMPLE";
   let governing = null;
   for (const c of checks) if (c.utilization !== null && (!governing || c.utilization > governing.utilization)) governing = c;
   const mats = {};
@@ -647,7 +813,11 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   }
   return {
     status: stG,
-    status_label: { [OK]: "Verificación estructural automatizada completa: CUMPLE (EN 1990 · EN 1993)", [FAIL]: "NO CUMPLE: requiere modificación del diseño",
+    verdict, self_weight: selfWeightInfo,
+    validation_pending: toValidate.map((c) => ({ id: c.id, description: c.description, reason: c.details?.validacion ?? "" })),
+    not_applicable: checks.filter((c) => c.status === NA).map((c) => ({ id: c.id, description: c.description, reason: c.details?.motivo ?? "" })),
+    status_label: { [OK]: toValidate.length ? `Comprobaciones calculadas: CUMPLEN · PENDIENTE DE VALIDACIÓN: ${toValidate.length} comprobaciones con datos no certificados o hipótesis por validar`
+      : "Verificación estructural automatizada completa: CUMPLE (EN 1990 · EN 1993)", [FAIL]: "NO CUMPLE: requiere modificación del diseño",
       [PENDING]: "Verificación incompleta: datos pendientes" }[stG],
     validation_note: "Cálculo automatizado según EN 1990 y EN 1993 con las hipótesis indicadas. El expediente lo firma el responsable técnico del fabricante.",
     governing, checks, load_cases: cases, combinations: { ELU: uls, ELS: sls }, partial_factors: pf,
@@ -663,6 +833,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     reactions, pending, limitations, stability,
     fem: { nodes: fr.nodes.length, elements: fr.elements.length, dof: fr.ndof() },
     member_utilization: memberResults,
-    standards: C.standards(model.family).filter((s) => s.scope.includes("calculo") || s.scope.includes("soldadura")).map((s) => `${s.code}:${s.version}`),
+    standards: applicableStandards(model).filter((s) => s.scope.includes("calculo") || s.scope.includes("soldadura")).map((s) => `${s.code}:${s.version}`),
+    applicable_standards: applicableStandards(model).map((s) => ({ code: s.code, version: s.version, title: s.title, applicability: s.applicability ?? null, scope: s.scope })),
   };
 }

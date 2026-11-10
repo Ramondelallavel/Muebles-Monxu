@@ -41,48 +41,206 @@ def routing(part) -> list[str]:
     return ["Compra"]
 
 
-def manufacturing_plan(model) -> dict[str, Any]:
+def lot_size(model) -> int:
+    """Lote de fabricación del proyecto (LOTE_FABRICACION, 1 por defecto): el plan de corte, el anidado y la
+    lista de compras se calculan para el lote completo."""
+    return max(1, int(model.params.values.get("LOTE_FABRICACION") or 1))
+
+
+def cutting_params(model) -> dict[str, float]:
+    cm = catalog.profile_meta().get("cutting", {})
+    return {"bar_length": bar_length(model), "kerf": float(model.params.values.get("CORTE_SIERRA") or 3.0),
+            "trim": float(cm.get("trim_start_mm", 10.0)), "trim_end": float(cm.get("trim_end_mm", 0.0)),
+            "reusable_min": float(cm.get("reusable_min_mm", 500.0))}
+
+
+def _stock_for(stock, kind, **key):
+    return [s for s in (stock or []) if s.get("kind") == kind and all(s.get(k) == v for k, v in key.items())
+            and s.get("status", "disponible") == "disponible"]
+
+
+def material_purchase(model, lot: int = 1, stock: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Plan de corte de perfiles, anidado de chapa y balance de material de ``lot`` unidades.
+
+    ``stock`` es el inventario de retales reutilizables ([{"id", "kind": "barra"|"chapa", "profile"/"thickness",
+    "material", "length", "width"}]); los compatibles se consumen antes de comprar material nuevo."""
     counts = _counts(model)
     sd = catalog.sheet_data()
-    meta = catalog.profile_meta()
-    bar_len = bar_length(model)
-    kerf = float(model.params.values.get("CORTE_SIERRA") or 3.0)
+    cp = cutting_params(model)
     # ------------------------------------------------------------- perfiles
     groups: dict[tuple, list] = defaultdict(list)
     for k, p in model.parts.items():
         if isinstance(p, ProfilePart):
             groups[(p.profile.code, p.material)].append({"ref": p.ref, "label": p.name, "length": p.length,
-                                                         "qty": counts[k]})
+                                                         "qty": counts[k] * lot})
     cutting = []
     for (code, mat), pieces in sorted(groups.items()):
-        r = optimize_bars(pieces, bar_length=bar_len, kerf=kerf)
-        r.update({"profile": code, "material": mat,
-                  "mass_per_bar_kg": round(catalog.profile(code).mass_per_m(catalog.material(mat).density) * bar_len / 1000, 2)})
+        st = [{"id": s["id"], "length": s["length"]} for s in _stock_for(stock, "barra", profile=code, material=mat)]
+        r = optimize_bars(pieces, bar_length=cp["bar_length"], kerf=cp["kerf"], trim=cp["trim"],
+                          trim_end=cp["trim_end"], reusable_min=cp["reusable_min"], stock=st)
+        kg_m = catalog.profile(code).mass_per_m(catalog.material(mat).density)
+        r.update({"profile": code, "material": mat, "kg_per_m": round(kg_m, 4),
+                  "mass_per_bar_kg": round(kg_m * cp["bar_length"] / 1000, 2)})
         cutting.append(r)
     # ------------------------------------------------------------- chapa y pletinas
     sgroups: dict[tuple, list] = defaultdict(list)
     for k, p in model.parts.items():
         if isinstance(p, SheetPart):
             fp = p.flat
-            sgroups[(p.material, p.spec.t)].append({"ref": p.ref, "w": fp.width, "h": fp.height, "qty": counts[k],
+            sgroups[(p.material, p.spec.t)].append({"ref": p.ref, "w": fp.width, "h": fp.height, "qty": counts[k] * lot,
                                                      "area": fp.net_area(), "rotate": p.finish != "INOX_SATINADO",
                                                      "kind": "chapa"})
         elif isinstance(p, PlatePart):
-            sgroups[(p.material, p.t)].append({"ref": p.ref, "w": p.w, "h": p.h, "qty": counts[k],
-                                                "area": p.outline_2d().area - sum(math.pi * d * d / 4 for _, _, d in p.holes),
-                                                "rotate": True, "kind": "pletina"})
+            sgroups[(p.material, p.t)].append({"ref": p.ref, "w": p.w, "h": p.h, "qty": counts[k] * lot,
+                                                "area": plate_net_area(p), "rotate": True, "kind": "pletina"})
     nesting = []
-    las = sd["laser"]
+    las, pur = sd["laser"], sd.get("purchase", {})
     fmt = model.params.values.get("FORMATO_CHAPA")
     formats = [f for f in catalog.sheet_formats() if f["code"] == fmt] or catalog.sheet_formats()
     for (mat, t), parts in sorted(sgroups.items()):
+        st = [{"id": s["id"], "length": s["length"], "width": s["width"]}
+              for s in _stock_for(stock, "chapa", material=mat, thickness=t)]
         r = best_format(parts, formats, margin=las["sheet_margin_mm"], spacing=las["part_spacing_mm"],
-                        kerf=las["kerf_mm"])
-        r.update({"material": mat, "thickness": t,
-                  "mass_per_sheet_kg": round(r.get("length", 0) * r.get("width", 0) * t * 1e-9 *
-                                             catalog.material(mat).density, 2) if r.get("feasible") else None})
+                        kerf=las["kerf_mm"], stock=st,
+                        purchase={"min_utilization": pur.get("custom_cut_min_utilization", 0.10),
+                                  "remnant_min": pur.get("remnant_min_mm", 300.0),
+                                  "round_to": pur.get("custom_cut_round_mm", 10.0)})
+        rho = catalog.material(mat).density
+        r.update({"material": mat, "thickness": t, "kg_per_m2": round(t * 1e-3 * rho, 4),
+                  "mass_per_sheet_kg": round(r.get("length", 0) * r.get("width", 0) * t * 1e-9 * rho, 2)
+                  if r.get("feasible") else None})
         nesting.append(r)
-    # ------------------------------------------------------------- soldadura
+    return {"lot": lot, "cutting": cutting, "nesting": nesting, "balance": material_balance(cutting, nesting),
+            "cutting_params": cp}
+
+
+def material_balance(cutting, nesting) -> dict[str, Any]:
+    """Balance de material por grupo, en longitudes o superficies y en masa nominal (kg/m o kg/m²):
+    comprado + retales de inventario = neto en piezas + desperdicio no recuperable + retales reutilizables."""
+    rows = []
+    for c in cutting:
+        k = c["kg_per_m"] / 1000
+        rows.append({"kind": "perfil", "group": f"{c['profile']} {c['material']}", "unit": "mm",
+                     "purchased": c["purchased_length"], "from_stock": c["stock_length"], "net": c["pieces_length"],
+                     "waste": c["waste_length"], "reusable": c["reusable_length"],
+                     "purchased_kg": c["purchased_length"] * k, "from_stock_kg": c["stock_length"] * k,
+                     "net_kg": c["pieces_length"] * k, "waste_kg": c["waste_length"] * k,
+                     "reusable_kg": c["reusable_length"] * k, "balance": c["balance_mm"]})
+    for n in nesting:
+        if not n.get("feasible"):
+            rows.append({"kind": "chapa", "group": f"{n['material']} e={n['thickness']:g} mm", "unit": "m2",
+                         "purchased": None, "from_stock": 0.0, "net": n["parts_area_m2"], "waste": None, "reusable": 0.0,
+                         "purchased_kg": None, "from_stock_kg": 0.0, "net_kg": None, "waste_kg": None,
+                         "reusable_kg": 0.0, "balance": None, "infeasible": True})
+            continue
+        pu, k = n["purchase"], n["kg_per_m2"]
+        rows.append({"kind": "chapa", "group": f"{n['material']} e={n['thickness']:g} mm", "unit": "m2",
+                     "purchased": pu["purchased_area_m2"], "from_stock": pu["stock_area_m2"],
+                     "net": pu["parts_area_m2"], "waste": pu["waste_area_m2"], "reusable": pu["reusable_area_m2"],
+                     "purchased_kg": pu["purchased_area_m2"] * k, "from_stock_kg": pu["stock_area_m2"] * k,
+                     "net_kg": pu["parts_area_m2"] * k, "waste_kg": pu["waste_area_m2"] * k,
+                     "reusable_kg": pu["reusable_area_m2"] * k,
+                     "balance": round(pu["purchased_area_m2"] + pu["stock_area_m2"] - pu["parts_area_m2"]
+                                      - pu["waste_area_m2"] - pu["reusable_area_m2"], 6)})
+    tot = {}
+    for key in ("purchased_kg", "from_stock_kg", "net_kg", "waste_kg", "reusable_kg"):
+        tot[key] = round(sum(r[key] or 0.0 for r in rows), 3)
+    for r in rows:
+        for key in ("purchased_kg", "from_stock_kg", "net_kg", "waste_kg", "reusable_kg"):
+            if r[key] is not None:
+                r[key] = round(r[key], 3)
+    return {"rows": rows, "totals": tot}
+
+
+def plate_net_area(p) -> float:
+    """Superficie neta de una pletina (contorno con radios exactos menos taladros), igual en los dos motores."""
+    return p.w * p.h - (4 - math.pi) * p.corner_r * p.corner_r - sum(math.pi * d * d / 4 for _, _, d in p.holes)
+
+
+def _std_label(c: dict[str, Any]) -> str:
+    """Norma del componente comercial, o la indicación de que no hay norma de producto aplicable."""
+    if c.get("standard"):
+        return c["standard"]
+    return "sin norma de producto, según fabricante"
+
+
+def purchases(model, mp: dict[str, Any], welding: dict[str, Any], painting: dict[str, Any]) -> dict[str, Any]:
+    """Lista de compras del lote: barras y chapas del plan de corte y del anidado, componentes comerciales del
+    modelo y consumibles. Cada línea indica el documento del que procede."""
+    lot = mp["lot"]
+    out = []
+    for c in mp["cutting"]:
+        if c["n_bars"]:
+            out.append({"type": "Perfil", "description": f"Barra {c['profile']} {c['material']} L={c['bar_length']:.0f} mm",
+                        "qty": c["n_bars"], "unit": "barra", "mass_kg": round(c["n_bars"] * c["mass_per_bar_kg"], 2),
+                        "basis": "plan de corte", "group": f"{c['profile']} {c['material']}"})
+        if c["n_stock_used"]:
+            out.append({"type": "Perfil (retal de inventario)", "description": f"Retales {c['profile']} {c['material']}: "
+                        + ", ".join(str(i) for i in c["stock_used"]), "qty": c["n_stock_used"], "unit": "retal",
+                        "mass_kg": round(c["stock_length"] * c["kg_per_m"] / 1000, 2), "basis": "inventario de retales",
+                        "group": f"{c['profile']} {c['material']}", "purchase": False})
+    for n in mp["nesting"]:
+        grp = f"{n['material']} e={n['thickness']:g} mm"
+        if not n.get("feasible"):
+            out.append({"type": "Chapa", "description": f"Chapa {n['material']} e={n['thickness']:g} mm — sin formato "
+                        "comercial válido (pieza mayor que los formatos)", "qty": None, "unit": "chapa", "mass_kg": None,
+                        "basis": "anidado", "group": grp, "blocking": True})
+            continue
+        pu = n["purchase"]
+        if pu["n_full"]:
+            out.append({"type": "Chapa", "description": f"Chapa {n['material']} e={n['thickness']:g} mm formato "
+                        f"{n['format']}", "qty": pu["n_full"], "unit": "chapa",
+                        "mass_kg": round(pu["n_full"] * n["length"] * n["width"] * 1e-6 * n["kg_per_m2"], 2),
+                        "basis": "anidado", "group": grp})
+        for x in pu["sheets"]:
+            if x["mode"] == "corte_medida":
+                out.append({"type": "Chapa (corte a medida)", "description": f"Chapa {n['material']} e={n['thickness']:g} "
+                            f"mm cortada a medida {x['length']:.0f}x{x['width']:.0f} mm (hoja {x['sheet']} del anidado)",
+                            "qty": 1, "unit": "ud", "mass_kg": round(x["area_mm2"] * 1e-6 * n["kg_per_m2"], 2),
+                            "basis": "anidado", "group": grp})
+            elif x["mode"] == "retal":
+                out.append({"type": "Chapa (retal de inventario)", "description": f"Retal {x['stock_id']} {n['material']} "
+                            f"e={n['thickness']:g} mm {x['length']:.0f}x{x['width']:.0f} mm", "qty": 1, "unit": "retal",
+                            "mass_kg": round(x["area_mm2"] * 1e-6 * n["kg_per_m2"], 2), "basis": "inventario de retales",
+                            "group": grp, "purchase": False})
+    std: dict[str, int] = defaultdict(int)
+    for i in model.instances:
+        if isinstance(i.part, StandardPart):
+            std[i.part.code] += 1
+    for code in sorted(std):
+        c = catalog.component(code)
+        val = (c.get("validation") or {}).get("status", "pendiente_validacion")
+        out.append({"type": "Comercial", "description": f"{c['name']} ({_std_label(c)})", "qty": std[code] * lot,
+                    "unit": "ud", "mass_kg": round(c["mass_kg"] * std[code] * lot, 4), "code": code,
+                    "ref": f"N-{code}", "basis": "BOM", "validation": val})
+    consumables = [
+        {"description": welding["wire"], "qty": round(welding["wire_kg"] * lot, 3), "unit": "kg", "basis": "cordones del modelo"},
+        {"description": welding["gas"], "qty": round(welding["gas_l"] * lot, 1), "unit": "l", "basis": "tiempo de arco"},
+    ] if welding["joints"] else []
+    if painting["powder_kg"]:
+        consumables.append({"description": catalog.finish(painting["finish"])["name"],
+                            "qty": round(painting["powder_kg"] * lot, 3), "unit": "kg",
+                            "basis": f"{painting['area_m2']} m² pintados por unidad"})
+    remnants = []
+    for c in mp["cutting"]:
+        for b in c["bars"]:
+            if b["remnant"] > 0:
+                remnants.append({"kind": "barra", "profile": c["profile"], "material": c["material"], "bar": b["bar"],
+                                 "length": b["remnant"], "reusable": b["remnant_reusable"], "status": b["remnant_status"]})
+    for n in mp["nesting"]:
+        for x in (n.get("purchase") or {}).get("sheets", []):
+            if x["remnant"]:
+                remnants.append({"kind": "chapa", "material": n["material"], "thickness": n["thickness"], "sheet": x["sheet"],
+                                 "length": x["remnant"]["length"], "width": x["remnant"]["width"], "reusable": True,
+                                 "status": "reutilizable"})
+    return {"lot": lot, "items": out, "consumables": consumables, "remnants": remnants}
+
+
+def manufacturing_plan(model, stock: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    counts = _counts(model)
+    lot = lot_size(model)
+    mp = material_purchase(model, lot, stock)
+    # ------------------------------------------------------------- soldadura (por unidad)
     welds = [j for j in model.joints if j.kind == "soldadura"]
     weld_len = sum(j.weld["length"] for j in welds)
     wire = catalog.consumables()["HILO_G3Si1"]
@@ -91,7 +249,7 @@ def manufacturing_plan(model) -> dict[str, Any]:
     wire_kg = deposit_kg / wire["efficiency"]
     arc_h = deposit_kg / gas["deposit_rate_kg_h"]
     gas_l = arc_h * 60 * gas["flow_l_min"]
-    # ------------------------------------------------------------- pintura
+    # ------------------------------------------------------------- pintura (por unidad)
     painted = 0.0
     for k, p in model.parts.items():
         if p.finish and catalog.finish(p.finish)["consumable_kg_m2"] > 0:
@@ -107,15 +265,37 @@ def manufacturing_plan(model) -> dict[str, Any]:
     fin = model.params.values.get("ACABADO")
     film = float(model.params.values.get("ESPESOR_PINTURA") or PAINT_REF_UM)      # consumo ∝ espesor de película
     paint_kg = painted / 1e6 * catalog.finish(fin)["consumable_kg_m2"] * film / PAINT_REF_UM if fin else 0.0
-    return {"cutting": cutting, "nesting": nesting,
-            "welding": {"joints": len(welds), "total_length_mm": round(weld_len, 1), "deposit_kg": round(deposit_kg, 3),
-                        "wire_kg": round(wire_kg, 3), "arc_time_h": round(arc_h, 3), "gas_l": round(gas_l, 1),
-                        "wire": wire["name"], "gas": gas["name"]},
-            "painting": {"area_m2": round(painted / 1e6, 3), "powder_kg": round(paint_kg, 3), "finish": fin},
+    welding = {"joints": len(welds), "total_length_mm": round(weld_len, 1), "deposit_kg": round(deposit_kg, 3),
+               "wire_kg": round(wire_kg, 3), "arc_time_h": round(arc_h, 3), "gas_l": round(gas_l, 1),
+               "wire": wire["name"], "gas": gas["name"]}
+    painting = {"area_m2": round(painted / 1e6, 3), "powder_kg": round(paint_kg, 3), "finish": fin}
+    return {"lot": lot, "cutting": mp["cutting"], "nesting": mp["nesting"], "balance": mp["balance"],
+            "cutting_params": mp["cutting_params"], "welding": welding, "painting": painting,
+            "purchases": purchases(model, mp, welding, painting),
+            "stock_offered": len(stock or []),
             "routing": {p.ref: routing(p) for p in model.parts.values()}}
 
 
 # ============================================================================ DFM
+def flush_weld_joints(model, tol: float = 0.05) -> int:
+    """Uniones soldadas de un perfil con una pata en las que ambos comparten una cara exterior vertical (enrase)."""
+    legs = set(model.structure.get("leg_ids", []))
+    n = 0
+    for j in model.joints:
+        if j.kind != "soldadura" or len(j.members) < 2:
+            continue
+        ms = [model.instance(i) for i in j.members]
+        if not all(m.part.kind == "perfil" for m in ms[:2]):
+            continue
+        a, b = ms[0], ms[1]
+        if (a.id in legs) == (b.id in legs):
+            continue
+        (alo, ahi), (blo, bhi) = a.bbox, b.bbox
+        if any(abs(alo[k] - blo[k]) <= tol or abs(ahi[k] - bhi[k]) <= tol for k in (0, 1)):
+            n += 1
+    return n
+
+
 def dfm_check(model, plan: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     sd = catalog.sheet_data()
     pb, las = sd["press_brake"], sd["laser"]
@@ -209,8 +389,23 @@ def dfm_check(model, plan: dict[str, Any] | None = None) -> list[dict[str, Any]]
                 "del tornillo.", "Usar arandela ancha ISO 7093 o tornillo de cabeza mayor.")
         if rnd["head_h"] > dd["gap"] + 1e-9:
             add("error", "DFM-HOLGURA-REMACHABLE", tray.ref, "La cabeza de la tuerca remachable no cabe en la holgura.")
+        # compatibilidad tornillo – tuerca remachable – pared (datos de la base de componentes)
+        if sc["thread"] != rnd["thread"]:
+            add("error", "MON-ROSCA", tray.ref, f"Rosca del tornillo {sc['thread']} distinta de la de la tuerca remachable "
+                f"{rnd['thread']}.", "Usar tornillo y tuerca de la misma métrica.")
+        engaged = sc["length"] - clamp
+        need = min(sc["d"], rnd.get("thread_len", sc["d"]))
+        if engaged < need - 1e-9:
+            add("error", "MON-ROSCA-UTIL", tray.ref, f"Rosca útil {engaged:g} mm menor que la mínima {need:g} mm en la tuerca "
+                "remachable.", "Usar un tornillo más largo.")
+        if sc["length"] > clamp + rnd["body_l"] + 1e-9:
+            add("error", "MON-PROFUNDIDAD", tray.ref, f"El tornillo ({sc['length']:g} mm) sobrepasa el cuerpo de la tuerca "
+                f"remachable ({clamp + rnd['body_l']:g} mm desde la cabeza).", "Usar un tornillo más corto.")
+        tq = [v for v in (sc.get("tightening_torque_Nm"), rnd.get("max_torque_Nm")) if v is not None]
+        pend = (rnd.get("validation") or {}).get("status") != "definido_por_norma"
         add("ok", "MON-TORNILLERIA", tray.ref, f"{sc['name']} con {rnd['name'].split(',')[0]} (pared {dd['wall']:g} mm, "
-            f"paquete {clamp:g} mm, rosca útil {sc['length'] - clamp:g} mm).")
+            f"paquete {clamp:g} mm, rosca útil {engaged:g} mm, par {min(tq):g} N·m"
+            f"{' orientativo' if pend else ''}, {sc.get('tool', 'herramienta según ficha')}).")
     # soldadura
     leg_ids = model.structure.get("leg_ids", [])
     if leg_ids and model.structure.get("nuts_inside_legs", True):     # tuerca dentro del tubo de la pata
@@ -250,12 +445,15 @@ def dfm_check(model, plan: dict[str, Any] | None = None) -> list[dict[str, Any]]
             "riesgo de corrosión en ambiente húmedo.", "Usar el mismo material en las piezas soldadas.")
     weld_notes = model.structure.get("dfm_weld_notes")     # advertencias de soldeo propias de la familia
     if weld_notes is None:
-        weld_notes = [
-            ("SOL-ENRASE", "Bastidores", "Largueros y travesaños extremos enrasados con la cara exterior de las patas: en "
-             "la cara enrasada el cordón es en ángulo exterior/borde y debe amolarse antes de pintar."),
-            ("SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: puntear en "
-             "mesa plana con escuadras, soldar en secuencia simétrica alterna y verificar planitud de la superficie de "
-             "apoyo de la encimera (EN ISO 13920 clase F).")]
+        weld_notes = []
+        n_flush = flush_weld_joints(model)
+        if n_flush:          # solo si la geometría tiene caras enrasadas (calculado, no supuesto)
+            weld_notes.append(("SOL-ENRASE", "Bastidores", f"{n_flush} uniones de largueros o travesaños enrasados con la "
+                               "cara exterior de las patas: en la cara enrasada el cordón es en ángulo exterior/borde y "
+                               "debe amolarse antes de pintar."))
+        weld_notes.append(("SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: "
+                           "puntear en mesa plana con escuadras, soldar en secuencia simétrica alterna y verificar la "
+                           "planitud de las superficies de apoyo de las chapas (EN ISO 13920 clase F)."))
     for code, elem, msg in weld_notes:
         add("advertencia", code, elem, msg)
     # galvanizado en caliente: los tubos cerrados por soldadura necesitan venteo y drenaje (no modelados)

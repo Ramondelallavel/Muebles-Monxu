@@ -21,8 +21,11 @@ for (const c of cases) {
       reactions: e.reactions.filter((r) => r.combination === "ELS-1" || r.combination === "ELU-1"),
       notes: summary.design_notes.map((n) => [n.level, n.code]),
       qa: summary.qa.items.map((i) => [i.level, i.code]),
-      cutting: summary.manufacturing.cutting.map((k) => [k.profile, k.n_bars, k.utilization]),
-      nesting: summary.manufacturing.nesting.map((k) => [k.material, k.thickness, k.n_sheets ?? null, k.format ?? null, k.utilization ?? null]),
+      cutting: summary.manufacturing.cutting.map((k) => [k.profile, k.n_bars, k.utilization, k.n_cuts, k.waste_length, k.reusable_length]),
+      nesting: summary.manufacturing.nesting.map((k) => [k.material, k.thickness, k.n_sheets ?? null, k.format ?? null, k.utilization ?? null,
+        k.purchase?.n_full ?? null, k.purchase?.n_custom ?? null, k.purchase?.purchased_area_m2 ?? null, k.purchase?.reusable_area_m2 ?? null]),
+      balance: summary.manufacturing.balance.totals,
+      purchases: summary.manufacturing.purchases.items.map((p) => [p.type, p.description, p.qty, p.mass_kg]),
       welding: summary.manufacturing.welding, painting: summary.manufacturing.painting,
       dfm: summary.dfm.map((d) => [d.level, d.code, d.element]), bom_totals: summary.bom.totals,
       fix: summary.fix ? summary.fix.params : null });

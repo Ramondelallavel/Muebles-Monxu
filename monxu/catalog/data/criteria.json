@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026.11-2",
+    "version": "2026.11-3",
     "note": "Criterios de verificación por defecto. Son hipótesis de proyecto configurables; cualquier modificación queda registrada en la revisión del proyecto."
   },
   "partial_factors": {
@@ -42,5 +42,9 @@
     "montaje": 2.0,
     "trabajo_pesado": 3.0
   },
-  "min_support_spacing_mm": 250
+  "min_support_spacing_mm": 250,
+  "national_annex": {
+    "applied": null,
+    "note": "valores recomendados de EN 1990 y EN 1993, sin anejo nacional; el anejo nacional del país de instalación puede fijar otros (p. ej. γM0 y γM1) y debe confirmarse antes de aprobar el cálculo"
+  }
 }

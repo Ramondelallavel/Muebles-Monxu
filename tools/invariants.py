@@ -122,9 +122,17 @@ def check_case(fid: str, values: dict) -> list[str]:
         if dict(cut) != want:
             out.append(f"CORTE {c['profile']}: piezas cortadas {dict(cut)} frente a {want}")
         for b in c["bars"]:
-            s = sum(x["length"] for x in b["cuts"]) + b["kerf_loss"] + b["remnant"]
-            if abs(s - c["bar_length"]) > 0.5 or b["remnant"] < -1e-6:
-                out.append(f"CORTE {c['profile']} barra {b['bar']}: balance {s} frente a {c['bar_length']}")
+            s = b["trim_start"] + sum(x["length"] for x in b["cuts"]) + b["kerf_total"] + b["trim_end"] + b["remnant"]
+            if abs(s - b["length"]) > 1e-6 or b["remnant"] < -1e-6 or abs(b["balance_mm"]) > 1e-6:
+                out.append(f"CORTE {c['profile']} barra {b['bar']}: balance {s} frente a {b['length']}")
+            if b["n_cuts"] not in (len(b["cuts"]), len(b["cuts"]) + 1):
+                out.append(f"CORTE {c['profile']} barra {b['bar']}: {b['n_cuts']} cortes para {len(b['cuts'])} piezas")
+            if b["remnant_reusable"] != (b["remnant"] >= c["reusable_min"]):
+                out.append(f"CORTE {c['profile']} barra {b['bar']}: estado del retal incoherente")
+        tot = c["pieces_length"] + c["waste_length"] + c["reusable_length"]
+        if abs(c["purchased_length"] + c["stock_length"] - tot) > 0.5 or abs(c["balance_mm"]) > 1e-6 or \
+                abs(c["purchased_length"] - c["n_bars"] * c["bar_length"]) > 1e-6:
+            out.append(f"CORTE {c['profile']}: balance de grupo {c['purchased_length']} frente a {tot}")
     for n in plan["nesting"]:
         if not n.get("feasible"):
             continue
@@ -133,8 +141,13 @@ def check_case(fid: str, values: dict) -> list[str]:
                 and abs((p.spec.t if p.kind == "chapa" else p.t) - n["thickness"]) < 1e-9}
         if dict(placed) != want:
             out.append(f"ANIDADO {n['material']} {n['thickness']}: colocadas {dict(placed)} frente a {want}")
-        L, W, mg = n["length"], n["width"], n["margin"]
+        mg = n["margin"]
+        pu = n["purchase"]
+        if abs(pu["purchased_area_m2"] + pu["stock_area_m2"] - pu["parts_area_m2"] - pu["waste_area_m2"]
+               - pu["reusable_area_m2"]) > 1e-6 or pu["waste_area_m2"] < -1e-9:
+            out.append(f"ANIDADO {n['material']} {n['thickness']}: balance de superficie incoherente")
         for sh in n["sheets"]:
+            L, W = sh["length"], sh["width"]
             rects = [(p["x"], p["y"], p["x"] + p["w"], p["y"] + p["h"]) for p in sh["placements"]]
             for r in rects:
                 if r[0] < mg - 1e-6 or r[1] < mg - 1e-6 or r[2] > L - mg + 1e-6 or r[3] > W - mg + 1e-6:
@@ -149,9 +162,27 @@ def check_case(fid: str, values: dict) -> list[str]:
     q = quotation(m, plan)
     if not (q["direct"] > 0 and q["cost"] >= q["direct"] - 0.01 and q["price"] >= q["cost"] - 0.01):
         out.append(f"PRESUPUESTO directo {q['direct']} coste {q['cost']} precio {q['price']}")
-    prices = [b["price"] for b in q["by_lot"]]
-    if any(b > a + 0.01 for a, b in zip(prices, prices[1:])):
-        out.append(f"PRESUPUESTO precio unitario creciente con el lote: {prices}")
+    # con compras reales el material por unidad puede subir con el lote (barras y chapas enteras); el resto del
+    # coste directo por unidad (preparación repartida) no puede crecer
+    rest = [round(b["direct"] - b["material"], 2) for b in q["by_lot"]]
+    if any(b > a + 0.02 for a, b in zip(rest, rest[1:])):
+        out.append(f"PRESUPUESTO coste unitario sin material creciente con el lote: {rest}")
+    raw = sum(p["mass_kg"] for p in plan["purchases"]["items"] if p["type"].startswith(("Perfil", "Chapa"))
+              and p.get("purchase", True) and p["mass_kg"] is not None)
+    if q["material_basis"] == "compra" and q["lot"] == plan["lot"]:
+        mkg = sum(ln["qty"] for ln in q["lines"] if ln["group"] == "Material") * plan["lot"]
+        if abs(mkg - raw) > 0.02 * max(1, len([p for p in plan["purchases"]["items"] if p["type"] != "Comercial"])):
+            out.append(f"PRESUPUESTO material {mkg:.3f} kg frente a compras {raw:.3f} kg")
+    for row in plan["balance"]["rows"]:
+        if row["balance"] is not None and abs(row["balance"]) > 1e-6:
+            out.append(f"BALANCE {row['group']}: {row['balance']}")
+    bt = bom["totals"]
+    if abs(bt["mass_product_kg"] - bt["mass_manufactured_kg"] - bt["mass_commercial_kg"]) > 0.002:
+        out.append("MASA producto distinta de fabricadas + comerciales")
+    std = collections.Counter(i.part.code for i in m.instances if i.part.kind == "normalizado")
+    for p in plan["purchases"]["items"]:
+        if p["type"] == "Comercial" and p["qty"] != std[p["code"]] * plan["lot"]:
+            out.append(f"COMPRAS {p['code']}: {p['qty']} frente a {std[p['code']] * plan['lot']} del BOM")
     return out
 
 

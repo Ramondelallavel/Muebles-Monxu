@@ -32,8 +32,14 @@ def run(c):
             "checks": {k["id"]: [k["status"], k["utilization"], k["value"]] for k in eng["checks"]},
             "reactions": [r for r in eng["reactions"] if r["combination"] in ("ELS-1", "ELU-1")],
             "notes": [[n["level"], n["code"]] for n in m.design_notes],
-            "cutting": [[k["profile"], k["n_bars"], k["utilization"]] for k in plan["cutting"]],
-            "nesting": [[k["material"], k["thickness"], k.get("n_sheets"), k.get("format"), k.get("utilization")] for k in plan["nesting"]],
+            "cutting": [[k["profile"], k["n_bars"], k["utilization"], k["n_cuts"], k["waste_length"], k["reusable_length"]]
+                        for k in plan["cutting"]],
+            "nesting": [[k["material"], k["thickness"], k.get("n_sheets"), k.get("format"), k.get("utilization"),
+                         (k.get("purchase") or {}).get("n_full"), (k.get("purchase") or {}).get("n_custom"),
+                         (k.get("purchase") or {}).get("purchased_area_m2"), (k.get("purchase") or {}).get("reusable_area_m2")]
+                        for k in plan["nesting"]],
+            "balance": plan["balance"]["totals"],
+            "purchases": [[p["type"], p["description"], p["qty"], p["mass_kg"]] for p in plan["purchases"]["items"]],
             "welding": plan["welding"], "painting": plan["painting"],
             "dfm": [[d["level"], d["code"], d["element"]] for d in dfm], "bom_totals": bom["totals"]}
 

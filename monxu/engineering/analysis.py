@@ -20,6 +20,10 @@ from .fem import Frame3D, line_load_to_nodes
 from .plate import navier
 
 OK, FAIL, PENDING, WARN = "CUMPLE", "NO_CUMPLE", "PENDIENTE", "ADVERTENCIA"
+#: comprobación calculada con datos no certificados o hipótesis por validar, y comprobación que no procede
+VAL, NA = "PENDIENTE_VALIDACION", "NO_APLICA"
+#: imperfección global inicial φ0 (EN 1993-1-1 §5.3.2(3)a)
+PHI0 = 1 / 200
 G_ACC = 9.81
 MAX_ELEMENT = 100.0
 N_ZERO = 1e-3          # N: axil por debajo del cual la barra se considera sin compresión
@@ -139,12 +143,168 @@ class Check:
 
 
 
+#: componentes bajo los apoyos: su peso va directamente al suelo y no carga la estructura
+BELOW_SUPPORT_ROLES = ("pie_nivelador", "rueda", "anclaje")
+
+
+def part_mass(part) -> float:
+    """Masa de la definición de la pieza (la misma en los dos motores); normalizados: masa de catálogo."""
+    return part.analytic_mass if hasattr(part, "analytic_mass") else part.mass
+
+
+def lump_remaining_masses(model, sm, case: str = "G") -> dict[str, Any]:
+    """Masas de las piezas que no son barras, chapas de superficie ni masas colgadas declaradas: cada una en el nudo
+    más próximo al centro de su envolvente. Las de los apoyos (pies, ruedas, tacos) quedan bajo ellos."""
+    st = model.structure
+    covered = set(sm.members) | {s["sheet_instance"] for s in st.get("surfaces", [])} | \
+        set(st.get("attached_instances", []))
+    nodes = sm.frame.nodes
+    lumped = below = 0.0
+    n_lumped = 0
+    for i in model.instances:
+        if i.id in covered:
+            continue
+        m = part_mass(i.part)
+        if i.part.role in BELOW_SUPPORT_ROLES:
+            below += m
+            continue
+        lo, hi = i.bbox
+        c = [(lo[k] + hi[k]) / 2 for k in range(3)]
+        best, bd = 0, math.inf
+        for n, q in enumerate(nodes):
+            dx, dy, dz = q[0] - c[0], q[1] - c[1], q[2] - c[2]
+            dd = dx * dx + dy * dy + dz * dz
+            if dd < bd:
+                best, bd = n, dd
+        sm.frame.add_nodal_load(case, best, (0, 0, -m * G_ACC))
+        lumped += m
+        n_lumped += 1
+    return {"lumped_kg": lumped, "n_lumped": n_lumped, "below_supports_kg": below}
+
+
+def applicable_standards(model) -> list[dict[str, Any]]:
+    """Normas que aplican al proyecto: por familia, material empleado, procesos presentes y normas de producto."""
+    mats = {i.part.material for i in model.instances if i.part.material}
+    fams = {catalog.material(m).family for m in mats}
+    mstd = {catalog.material(m).standard for m in mats} | {i.part.profile.standard for i in model.instances
+                                                            if i.part.kind == "perfil"}
+    procs = set()
+    if any(j.kind == "soldadura" for j in model.joints):
+        procs.add("soldadura")
+    if any(i.part.kind in ("chapa", "pletina") for i in model.instances):
+        procs.add("corte_termico")
+    return catalog.standards(model.family, material_families=fams, processes=procs, material_standards=mstd)
+
+
+def classify_checks(model, sm, checks: list, hyp: list[str]) -> None:
+    """Resultado de cada comprobación en CUMPLE / NO CUMPLE / PENDIENTE DE VALIDACIÓN / NO APLICABLE.
+
+    * Una comprobación que cumple con capacidades de catálogo genérico (pies, ruedas, tacos) o con un límite elástico
+      no garantizado por la norma del material queda PENDIENTE DE VALIDACIÓN: el cálculo no puede certificarla.
+    * Se declaran las comprobaciones que no proceden y por qué (viento y nieve en interior; abolladura por cortante
+      de almas poco esbeltas)."""
+    ps = model.params.values
+    sups = model.structure.get("supports", [])
+    comp = catalog.component(sups[0]["component"]) if sups else None
+    anc = next((i.part.data for i in model.instances if i.part.role == "anclaje"), None)
+    unguaranteed = {catalog.material(i.part.material).code for i in model.instances
+                    if i.part.material and not catalog.material(i.part.material).fy_guaranteed}
+    for c in checks:
+        if c.status != OK:
+            continue
+        reason = None
+        if c.id == "A.PIES" and comp and (comp.get("rated_load_source") == "catalogo_generico" or
+                                          (comp.get("validation") or {}).get("status") != "definido_por_norma"):
+            reason = f"capacidad de {comp['name']} de catálogo genérico, no certificada (ficha del fabricante pendiente)"
+        elif c.id.startswith("E.ANCLAJE") and anc and anc.get("rated_load_source") == "catalogo_generico" and \
+                c.utilization is not None:
+            reason = "resistencia del taco de catálogo genérico (ETA y soporte real pendientes)"
+        elif c.category == "placa" and unguaranteed:
+            surf_mat = next((s for s in model.structure.get("surfaces", []) if s["label"] == c.element), None)
+            if surf_mat and model.instance(surf_mat["sheet_instance"]).part.material in unguaranteed:
+                reason = "límite elástico no garantizado por la norma del material (certificado 3.1 pendiente)"
+        if reason:
+            c.status = VAL
+            c.details = {**(c.details or {}), "validacion": reason}
+    # anejo nacional: valores recomendados de las EN mientras el proyecto no fije uno
+    na = catalog.criteria().get("national_annex") or {}
+    checks.append(Check("N.ANEJO-NACIONAL", "criterios", "Conjunto", "Coeficientes parciales y de combinación",
+                        "EN 1990 / EN 1993 (valores recomendados)", None, None, "-", None,
+                        OK if na.get("applied") else VAL, "",
+                        {"anejo": na.get("applied")} if na.get("applied") else
+                        {"validacion": na.get("note", "anejo nacional no fijado")}))
+    # acciones climáticas
+    exterior = ps.get("ENTORNO") == "exterior"
+    checks.append(Check("N.VIENTO-NIEVE", "acciones", "Conjunto", "Acciones de viento y nieve",
+                        "EN 1991-1-4 / EN 1991-1-3", None, None, "-", None, VAL if exterior else NA, "",
+                        {"validacion": "uso en exterior: acciones de viento y nieve no evaluadas por la aplicación"}
+                        if exterior else {"motivo": "uso en interior: no hay acciones de viento ni de nieve"}))
+    # abolladura por cortante de las almas (EN 1993-1-1 §6.2.6(6)), con η = 1 del lado de la seguridad
+    seen = set()
+    for mm in sm.members.values():
+        prof, mat = mm["profile"], mm["material"]
+        if (prof.code, mat.code) in seen:
+            continue
+        seen.add((prof.code, mat.code))
+        eps = math.sqrt(235 / mat.fy)
+        r = (max(prof.H, prof.B) - 3 * prof.t) / prof.t
+        lim = 72 * eps
+        checks.append(Check(f"B.ABOLL.{prof.code}.{mat.code}", "resistencia", prof.code,
+                            f"Abolladura por cortante del alma ({prof.code}, {mat.code}): c/t = {r:.1f} ≤ 72ε/η = {lim:.1f}",
+                            "EN 1993-1-1 §6.2.6(6) (η = 1)", round(r, 2), round(lim, 2), "-", None,
+                            NA if r <= lim else VAL, "",
+                            {"motivo": "alma poco esbelta: no requiere comprobación de abolladura (EN 1993-1-5)"}
+                            if r <= lim else {"validacion": "alma esbelta: comprobar abolladura según EN 1993-1-5"}))
+
+
+def imperfection_cases(model, sm, cases_v=("G", "Q")) -> dict[str, Any]:
+    """Fuerzas horizontales equivalentes a la imperfección global (EN 1993-1-1 §5.3.2(3) y (7)): φ·N en cada nudo con
+    carga vertical, en X (casos IX<c>) y en Y (casos IY<c>), para las cargas verticales G y Q. Con m = 1 (αm = 1),
+    del lado de la seguridad."""
+    fr = sm.frame
+    sups = model.structure.get("supports", [])
+    z0 = min((s["point"][2] for s in sups), default=min(n[2] for n in fr.nodes))
+    h = max(n[2] for n in fr.nodes) - z0
+    alpha_h = min(1.0, max(2 / 3, 2 / math.sqrt(max(h, 1.0) / 1000)))
+    phi = PHI0 * alpha_h
+    V = {}
+    for c in cases_v:
+        if c not in fr.loads:
+            continue
+        F = fr.loads[c]
+        tot = 0.0
+        for n in range(len(fr.nodes)):
+            fz = F[6 * n + 2]
+            if fz != 0.0:
+                fr.add_nodal_load(f"IX{c}", n, (-fz * phi, 0, 0))
+                fr.add_nodal_load(f"IY{c}", n, (0, -fz * phi, 0))
+                tot += -fz
+        V[c] = tot
+    return {"phi": phi, "alpha_h": alpha_h, "h": h, "V": V}
+
+
+def alpha_cr(res, imp: dict[str, Any], fac: dict[str, float]) -> dict[str, Any]:
+    """α_cr por el método de Horne (EN 1993-1-1 §5.2.1(4)B): α_cr = (H_Ed/V_Ed)·(h/δ_H,Ed) con las fuerzas
+    equivalentes φ·V_Ed como acción horizontal, en X y en Y; δ es el mayor desplazamiento horizontal de un nudo."""
+    out = {}
+    nn = len(res.frame.nodes)
+    for d, comp in (("X", 0), ("Y", 1)):
+        f = {f"I{d}{c}": fac[c] for c in imp["V"] if c in fac}
+        if not f:
+            continue
+        u = res.combine(f)
+        delta = max(abs(u[6 * n + comp]) for n in range(nn))
+        a = imp["phi"] * imp["h"] / delta if delta > 1e-12 else math.inf
+        out[d] = {"alpha_cr": a, "delta_mm": delta}
+    return out
+
+
 def surface_sheet(part) -> tuple[float, float]:
     """(masa en kg, espesor en mm) de la chapa plegada o placa de una superficie de carga."""
     from ..core.model import SheetPart
     if isinstance(part, SheetPart):
-        return part.flat.net_area() * part.spec.t * 1e-9 * part.density, part.spec.t
-    return part.analytic_volume * 1e-9 * part.density, part.t
+        return part.analytic_mass, part.spec.t
+    return part.analytic_mass, part.t
 
 def _status(u: float | None) -> str:
     if u is None:
@@ -250,9 +410,11 @@ class StructuralModel:
 
     # -- utilidades de carga
     def self_weight(self, case: str = "G") -> float:
+        """Peso de las barras: la masa real de cada pieza (la del BOM) repartida a lo largo de su eje de cálculo."""
         total = 0.0
         for mid, mm in self.members.items():
-            w = mm["props"].A * 1e-9 * mm["material"].density * G_ACC   # N/mm
+            Lt = sum(self.frame.elements[k].L for k in mm["elements"])
+            w = part_mass(mm["instance"].part) * G_ACC / Lt   # N/mm
             for k in mm["elements"]:
                 e = self.frame.elements[k]
                 P = w * e.L
@@ -324,7 +486,10 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
     hyp: list[str] = []
     pending: list[str] = []
     limitations = [
-        "Análisis elástico lineal de primer orden (sin efectos P-Δ ni imperfecciones globales explícitas).",
+        "Análisis elástico lineal de primer orden con imperfecciones globales equivalentes (EN 1993-1-1 §5.3.2) y "
+        "sensibilidad a segundo orden por α_cr con el método de Horne (§5.2.1(4)B), válido para pórticos con poca "
+        "compresión en las vigas; sin análisis de segundo orden explícito (con α_cr < 3 la verificación no se da por "
+        "superada). Las imperfecciones de barra quedan incluidas en las curvas de pandeo.",
         "Uniones soldadas consideradas rígidas; excentricidades de unión entre ejes no modeladas.",
         "Chapas de encimera y balda verificadas como placas simplemente apoyadas en el emparrillado "
         "(Navier); no se considera su contribución a la rigidez del bastidor.",
@@ -339,7 +504,9 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
     # ---------------------------------------------------------------- casos de carga
     cases: list[dict[str, Any]] = []
     Gm = sm.self_weight("G")
+    G_members = Gm
     # masas no estructurales colgadas de barras (p. ej. un panel atornillado a los montantes)
+    G_attached = 0.0
     for am in st.get("attached_masses", []):
         if am["member"] in sm.chains:
             q = np.array(am["point"], float)
@@ -347,6 +514,10 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             P = am["mass_kg"] * G_ACC
             fr.add_nodal_load("G", n, (0, 0, -P))
             Gm += P
+            G_attached += P
+    # resto de piezas y componentes (placas base, tuercas, tornillería, tapones...) en el nudo más próximo
+    lump = lump_remaining_masses(model, sm, "G")
+    Gm += lump["lumped_kg"] * G_ACC
     g_sheets = 0.0
     phi = dynamic_factor(ps)
     if phi > 1.0:
@@ -421,8 +592,19 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
                            "la cara opuesta), además de todos los brazos cargados.")
         else:
             hyp.append(f"{lab}: sin sobrecarga de uso (0 kg indicados); se verifica con el peso propio.")
-    cases.insert(0, {"id": "G", "label": "Peso propio (perfiles y chapas, calculado desde la geometría)",
+    cases.insert(0, {"id": "G", "label": "Peso propio (masas reales de barras, chapas, piezas y componentes)",
                      "value": f"{(Gm + g_sheets) / G_ACC:.1f} kg", "total_N": round(Gm + g_sheets, 1)})
+    self_weight = {"members_kg": round(G_members / G_ACC, 3), "surfaces_kg": round(g_sheets / G_ACC, 3),
+                   "attached_kg": round(G_attached / G_ACC, 3), "lumped_kg": round(lump["lumped_kg"], 3),
+                   "n_lumped": lump["n_lumped"], "below_supports_kg": round(lump["below_supports_kg"], 3),
+                   "applied_kg": round((Gm + g_sheets) / G_ACC, 3),
+                   "total_kg": round((Gm + g_sheets) / G_ACC + lump["below_supports_kg"], 3)}
+    hyp.append(f"Peso propio con la masa real de cada pieza (la del BOM): barras {self_weight['members_kg']:.2f} kg, "
+               f"chapas de superficie {self_weight['surfaces_kg']:.2f} kg, masas colgadas "
+               f"{self_weight['attached_kg']:.2f} kg y {lump['n_lumped']} piezas y componentes "
+               f"({self_weight['lumped_kg']:.2f} kg) en el nudo más próximo a su centro; "
+               f"{self_weight['below_supports_kg']:.2f} kg de pies, ruedas y tacos bajo los apoyos no cargan la "
+               "estructura.")
     has_Q = "Q" in fr.loads
     # verificación completa si hay sobrecarga o si todas las cargas de uso están indicadas (0 kg incluidos)
     q_defined = has_Q or not undefined_loads
@@ -468,7 +650,12 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         if model.params.sources.get("CARGA_HORIZONTAL") == "defecto":
             hyp.append(f"Empuje horizontal de {H_N:g} N: {st.get('push_note', crit['horizontal_service_load_note'])}")
 
+    # ---------------------------------------------------------------- imperfecciones globales (EN 1993-1-1 §5.3.2)
+    imp = imperfection_cases(model, sm)
     gG, gQ, psi = pf["gamma_G"], pf["gamma_Q"], pf["psi0_Q"]
+    V_Ed = gG * imp["V"].get("G", 0.0) + gQ * imp["V"].get("Q", 0.0)
+    H_Ed = gQ * H_N if "HX" in fr.loads else 0.0
+    use_imp = not (H_Ed >= 0.15 * V_Ed > 0)              # §5.3.2(4)B: se pueden omitir si H_Ed ≥ 0,15·V_Ed
     combos_uls = {"ELU-1": {"G": gG}}
     if has_Q:
         combos_uls["ELU-1"] = {"G": gG, "Q": gQ}
@@ -497,7 +684,50 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         combos_sls["ELS-4"] = {"HY": 1.0}
 
     res = fr.solve()
+    # sensibilidad a segundo orden y amplificación de las acciones horizontales (EN 1993-1-1 §5.2.1, §5.2.2(5)B)
+    acr = alpha_cr(res, imp, {"G": gG, "Q": gQ})
+    k_amp = {d: (1 / (1 - 1 / v["alpha_cr"]) if 3.0 <= v["alpha_cr"] < 10.0 else 1.0) for d, v in acr.items()}
+    if use_imp:              # fuerzas equivalentes en las combinaciones de ELU, con los factores de G y Q de cada una
+        new_uls = {}
+        for cname, f in combos_uls.items():
+            new_uls[cname] = dict(f)
+            if cname == "ELU-1":
+                for d in ("X", "Y"):
+                    new_uls[f"ELU-1{d}"] = {**f, **{f"I{d}{c}": f[c] for c in imp["V"] if c in f}}
+        for cname, d in (("ELU-2", "X"), ("ELU-3", "Y"), ("ELU-4", "X")):
+            if cname in new_uls:
+                new_uls[cname].update({f"I{d}{c}": new_uls[cname][c] for c in imp["V"] if c in new_uls[cname]})
+        combos_uls = new_uls
+    for cname, f in combos_uls.items():          # 3 ≤ α_cr < 10: acciones horizontales × 1/(1 − 1/α_cr)
+        for case in list(f):
+            d = "X" if case in ("HX",) or case.startswith("IX") else "Y" if case in ("HY",) or case.startswith("IY") else None
+            if d and k_amp.get(d, 1.0) != 1.0:
+                f[case] = f[case] * k_amp[d]
     U = {c: res.combine(f) for c, f in {**combos_uls, **combos_sls}.items()}
+    phi_imp = imp["phi"]
+    checks.append(Check("S.IMPERF", "estabilidad", "Estructura",
+                        f"Imperfecciones globales equivalentes φ = φ0·αh·αm = 1/200 × {imp['alpha_h']:.3f} × 1 = "
+                        f"{phi_imp:.5f} (h = {imp['h']:.0f} mm)",
+                        "EN 1993-1-1 §5.3.2(3) y (4)B", round(phi_imp, 6), None, "rad", None, OK if use_imp else NA,
+                        "ELU", {"h_mm": imp["h"], "alpha_h": imp["alpha_h"], "alpha_m": 1.0, "H_Ed_N": H_Ed,
+                                "V_Ed_N": V_Ed, "incluidas": use_imp}))
+    if use_imp:
+        hyp.append(f"Imperfección global: fuerzas horizontales equivalentes φ·N (φ = {phi_imp:.5f}, αm = 1 del lado de la "
+                   "seguridad) en X y en Y con las cargas verticales G y Q de cada combinación de ELU.")
+    else:
+        hyp.append(f"Imperfección global omitida: H_Ed = {H_Ed:.0f} N ≥ 0,15·V_Ed = {0.15 * V_Ed:.0f} N "
+                   "(EN 1993-1-1 §5.3.2(4)B).")
+    for d, v in acr.items():
+        a = v["alpha_cr"]
+        fin = math.isfinite(a)
+        note = ("análisis de primer orden suficiente (α_cr ≥ 10)" if a >= 10 else
+                f"efectos de segundo orden por amplificación 1/(1 − 1/α_cr) = {k_amp[d]:.3f} de las acciones horizontales"
+                if a >= 3 else "α_cr < 3: requiere análisis de segundo orden, no disponible en este método")
+        checks.append(Check(f"S.ALFA-CR-{d}", "estabilidad", "Estructura",
+                            f"Sensibilidad a efectos de segundo orden en {d} (método de Horne): {note}",
+                            "EN 1993-1-1 §5.2.1(3) y (4)B, §5.2.2(5)B", round(a, 2) if fin else None, 3.0, "-",
+                            round(3.0 / a, 4) if fin else 0.0, _status(3.0 / a) if fin else OK, "ELU",
+                            {"delta_mm": v["delta_mm"], "h_mm": imp["h"], "k_amplificacion": k_amp[d]}))
 
     # ---------------------------------------------------------------- barras
     alpha = crit["imperfection_factors"][crit["buckling_curve_cold_formed_hollow"]]
@@ -806,6 +1036,9 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         Wtot, cog = own_weight(model)
         stability = {"weight_N": Wtot, "cog": cog.tolist(), "levers": support_levers(sups, cog)}
 
+    # ---------------------------------------------------------------- comprobaciones no aplicables y validaciones
+    classify_checks(model, sm, checks, hyp)
+
     # ---------------------------------------------------------------- resultado global
     statuses = [c.status for c in checks]
     if FAIL in statuses:
@@ -815,6 +1048,8 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
     else:
         status = OK
     governing = max((c for c in checks if c.utilization is not None), key=lambda c: c.utilization, default=None)
+    to_validate = [c for c in checks if c.status == VAL]
+    verdict = {FAIL: "NO CUMPLE", PENDING: "PENDIENTE"}.get(status, "PENDIENTE DE VALIDACIÓN" if to_validate else "CUMPLE")
     mats = {}
     for mm in sm.members.values():
         mats[mm["material"].code] = mm["material"]
@@ -822,9 +1057,18 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         mats[info["part"].material] = catalog.material(info["part"].material)
     return {
         "status": status,
-        "status_label": {OK: "Verificación estructural automatizada completa: CUMPLE (EN 1990 · EN 1993)",
+        "status_label": {OK: "Verificación estructural automatizada completa: CUMPLE (EN 1990 · EN 1993)"
+                         if not to_validate else
+                         f"Comprobaciones calculadas: CUMPLEN · PENDIENTE DE VALIDACIÓN: {len(to_validate)} "
+                         "comprobaciones con datos no certificados o hipótesis por validar",
                          FAIL: "NO CUMPLE: requiere modificación del diseño",
                          PENDING: "Verificación incompleta: datos pendientes"}[status],
+        "verdict": verdict,
+        "self_weight": self_weight,
+        "validation_pending": [{"id": c.id, "description": c.description, "reason": (c.details or {}).get("validacion", "")}
+                               for c in to_validate],
+        "not_applicable": [{"id": c.id, "description": c.description, "reason": (c.details or {}).get("motivo", "")}
+                           for c in checks if c.status == NA],
         "validation_note": ("Cálculo automatizado según EN 1990 y EN 1993 con las hipótesis indicadas. El expediente lo "
                             "firma el responsable técnico del fabricante."),
         "governing": asdict(governing) if governing else None,
@@ -855,6 +1099,8 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         "stability": stability,
         "fem": {"nodes": len(fr.nodes), "elements": len(fr.elements), "dof": fr.ndof()},
         "member_utilization": dict(member_results),
-        "standards": [f"{s['code']}:{s['version']}" for s in catalog.standards(model.family)
+        "standards": [f"{s['code']}:{s['version']}" for s in applicable_standards(model)
                       if "calculo" in s["scope"] or "soldadura" in s["scope"]],
+        "applicable_standards": [{k: s.get(k) for k in ("code", "version", "title", "applicability", "scope")}
+                                 for s in applicable_standards(model)],
     }

@@ -425,6 +425,7 @@ class PuestoTrabajo(MesaIndustrial):
             model.structure.setdefault("attached_masses", []).extend(
                 {"member": m, "point": (model.instance(m).axis[0][0], model.instance(m).axis[0][1], z),
                  "mass_kg": pm / len(pts), "label": "Panel portaherramientas"} for m, z in pts)
+            model.structure.setdefault("attached_instances", []).append("PAN.PANEL")
 
     def _structure(self, model, d, legs):
         st = super()._structure(model, d, legs)
@@ -439,9 +440,9 @@ class PuestoTrabajo(MesaIndustrial):
         st["product_word"] = "puesto"
         st["assembly_texts"] = {
             "ALT": "Colocar el estante superior sobre su bastidor, con las escotaduras traseras alrededor de los "
-                   "montantes, y fijarlo con tornillos ISO 7380 M6 (8 N·m).",
+                   "montantes, y fijarlo con la tornillería indicada.",
             "PAN": "Presentar el panel perforado contra la cara delantera de los montantes y atornillarlo a las tuercas "
-                   "remachables M6 (8 N·m), de abajo arriba."}
+                   "remachables, de abajo arriba."}
         return st
 
     def _extra_dims(self, model, d):

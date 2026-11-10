@@ -20,6 +20,7 @@ from .. import catalog
 from ..cad import geometry as G
 from ..core.model import PlatePart, ProfilePart, SheetPart, StandardPart
 from . import hlr
+from . import assembly
 from .drawing_kit import (FRAME, GREY, LW_DIM, LW_THICK, LW_THIN, SCALES, Drawing, choose_scale, fmt, place_view,
                           scale_label, text_width)
 
@@ -226,10 +227,12 @@ def plan_general(d: Drawing, X: _Ctx):
     # datos del producto
     eng = X.eng
     ps = m.params.values
+    blo, bhi = m.bounding_box()
+    env = " × ".join(f"{v:.0f}" for v in (bhi - blo))
     lines = [f"Producto: {m.family_name} {m.product_code}",
-             f"Masa total calculada desde la geometría: {X.bom['totals']['total_mass']:.1f} kg",
+             f"Masa total calculada desde la geometría: {X.bom['totals']['total_mass']:.1f} kg · envolvente máx. {env} mm",
              m.dims.get("load_text", ""),
-             f"Estado de verificación: {eng['status_label']}",
+             f"Cálculo: {eng.get('verdict') or eng['status_label']}",
              _support_line(m),
              f"Acabado: {catalog.finish(ps['ACABADO'])['name']}"]
     if pl.oy - 30 > 52:
@@ -343,18 +346,28 @@ def plan_profiles(d: Drawing, X: _Ctx):
     d.text(32, y, "PLAN DE CORTE DE BARRAS", 3.2, "l", bold=True)
     y -= 7
     for c in X.plan["cutting"]:
-        d.text(32, y, f"{c['profile']} {c['material']} — barras de {fmt(c['bar_length'])} mm: {c['n_bars']} "
-                      f"(cota inferior {c['lower_bound']}, aprovechamiento {c['utilization'] * 100:.1f} %, sierra "
-                      f"{fmt(c['kerf'])} mm)", 2.6)
+        head = (f"{c['profile']} {c['material']} — barras de {fmt(c['bar_length'])} mm: {c['n_bars']} "
+                f"(cota inferior {c['lower_bound']}, aprovechamiento {c['utilization'] * 100:.1f} %, sierra "
+                f"{fmt(c['kerf'])} mm")
+        extra = f", despuntes {fmt(c['trim_start'])}/{fmt(c['trim_end'])} mm, {c['n_cuts']} cortes)"
+        lim = (TB_RESERVED[0] - 4 if y - 5 < TB_RESERVED[3] else 405) - 32
+        if text_width(head + extra, 2.6) <= lim:
+            d.text(32, y, head + extra, 2.6)
+        else:              # sin sitio (junto al cajetín): los despuntes y cortes en una segunda línea
+            d.text(32, y, head + ")", 2.6)
+            y -= 4.5
+            d.text(32, y, f"Despuntes {fmt(c['trim_start'])}/{fmt(c['trim_end'])} mm · {c['n_cuts']} cortes", 2.6)
         y -= 5
         for b in c["bars"]:
             x = 40.0
-            lbl = f"Barra {b['bar']}: retal {fmt(b['remnant'])} mm{' (aprovechable)' if b['remnant_reusable'] else ''}"
+            src = f" (retal {b['stock_id']})" if b["source"] == "retal" else ""
+            lbl = f"Barra {b['bar']}{src}: {b['n_cuts']} cortes · retal {fmt(b['remnant'])} mm ({b['remnant_status']})"
             # a la altura del cajetín la barra se acorta para que su rótulo termine antes de él
             W = 180.0 if y > TB_RESERVED[3] else min(180.0, TB_RESERVED[0] - 4 - 3 - text_width(lbl, 2.2) - x)
-            d.polyline([(x, y), (x + W, y), (x + W, y + 3.5), (x, y + 3.5), (x, y)], LW_THIN)
             k = W / c["bar_length"]
-            xx = x + c["trim"] * k
+            W = b["length"] * k          # un retal del inventario se dibuja a su longitud, en la misma escala
+            d.polyline([(x, y), (x + W, y), (x + W, y + 3.5), (x, y + 3.5), (x, y)], LW_THIN)
+            xx = x + b["trim_start"] * k
             for cut in b["cuts"]:
                 ww = cut["length"] * k
                 d.c.setFillColorRGB(0.82, 0.86, 0.9)
@@ -693,22 +706,7 @@ def plan_assembly(d: Drawing, X: _Ctx):
     d.new_sheet("07", "Instrucciones de montaje", "S/E", "—")
     cells = [(28, 178, 152, 270), (156, 178, 280, 270), (284, 178, 408, 270), (28, 84, 152, 174),
              (156, 84, 280, 174)]
-    texts = {
-        "EST": "Recepción de la estructura soldada y pintada. Insertar las tuercas remachables M6 en los taladros "
-               "Ø9,1 de largueros y travesaños con remachadora manual.",
-        "APO": "Roscar los pies niveladores en las tuercas soldadas de las placas base. Nivelar la mesa en su "
-               "emplazamiento (nivel de burbuja sobre encimera al final).",
-        "BAL": "Colocar la balda sobre el bastidor inferior, con las escotaduras alrededor de las patas. Fijar con "
-               "tornillos ISO 7380 M6x12 (par 8 N·m, llave Allen 4 mm).",
-        "ENC": "Colocar la encimera sobre el bastidor superior y fijarla con tornillos ISO 7380 M6x12 por las "
-               "pestañas (par 8 N·m). Apretar en cruz desde el centro.",
-    }
-    texts.update(m.structure.get("assembly_texts", {}))
-    anc = next((i for i in m.instances if i.part.role == "anclaje"), None)
-    if anc:            # anclaje al suelo: taladro y taco bajo cada pie
-        c = anc.part.data
-        texts[anc.group] = texts.get(anc.group, "") + (f" Anclar al suelo con tacos {c['thread']} (taladro "
-                                                       f"Ø{c['dims'][0]:g} × {c['embed_mm'] + 10:g} mm; par según la ETA).")
+    texts = assembly.step_texts(m, ASSEMBLY_TEXTS)
     shown: list = []
     for n, sa in enumerate(order[:4]):
         shown += [i for i in m.instances if i.group == sa.id]
@@ -722,16 +720,23 @@ def plan_assembly(d: Drawing, X: _Ctx):
         d.notes(cell[0] + 3, cell[1] + 14, [texts.get(sa.id, "")], h=2.1, width=118)
     d.c.setLineWidth(0.3)
     d.c.rect(284, 84, 124, 90)
+    d.notes(287, 170, assembly_notes(m), h=2.2, width=118)
+
+
+ASSEMBLY_TEXTS = assembly.DEFAULT_TEXTS
+
+
+def assembly_notes(m) -> list[str]:
+    """Herramientas, pares, desmontaje y seguridad: lo propio de la familia más lo que se deduce de los
+    componentes comerciales del modelo (herramienta y par de cada uno)."""
     sups = m.structure.get("supports") or []
     castor = bool(sups) and catalog.component(sups[0]["component"])["category"].startswith("ruedas")
-    support_tools = (["· Llave fija 17/19 para contratuerca de ruedas"] if castor else
-                     ["· Llave fija 17/19 para contratuerca de pies", "· Nivel de burbuja"])
-    d.notes(287, 170, m.structure.get("assembly_notes") or [
-        "HERRAMIENTAS:", "· Remachadora para tuercas M6", "· Llave Allen 4 mm (dinamométrica)", *support_tools, "",
-        "PARES DE APRIETE:", "· ISO 7380 M6 8.8 en remachable de acero: 8 N·m", "",
+    base = m.structure.get("assembly_notes") or [
+        "HERRAMIENTAS:", *([] if castor else ["· Nivel de burbuja"]), "",
         "DESMONTAJE:", "Encimera y balda desmontables (uniones atornilladas). La estructura es un",
         "subconjunto soldado no desmontable.", "",
-        "SEGURIDAD:", "Manipular la encimera entre dos personas; usar guantes", "(cantos de chapa)."], h=2.2, width=118)
+        "SEGURIDAD:", "Manipular la encimera entre dos personas; usar guantes", "(cantos de chapa)."]
+    return assembly.notes(m, base)
 
 
 def plan_bom(d: Drawing, X: _Ctx):
@@ -741,6 +746,8 @@ def plan_bom(d: Drawing, X: _Ctx):
     y = d.table(30, 268, [("Pos", 10, "c"), ("Referencia", 42, "l"), ("Descripción", 105, "l"), ("Material", 42, "l"),
                           ("Espesor", 16, "r"), ("Largo", 20, "r"), ("Ancho", 18, "r"), ("Cant.", 13, "c"),
                           ("Peso unit. kg", 22, "r"), ("Peso total kg", 22, "r")], rows, row_h=5.2, text_h=2.4)
+    for r in X.bom["rows"]:                     # control BOM ↔ planos ↔ 3D
+        d.record_dim(f"CANT_{r['ref']}", r["qty"], "despiece")
     t = X.bom["totals"]
     d.notes(30, y - 6, [f"Componentes: {t['components']} ({t['manufactured_parts']} fabricados, {t['standard_parts']} "
                         f"normalizados) · Referencias distintas: {t['distinct_parts']} · Masa total: "

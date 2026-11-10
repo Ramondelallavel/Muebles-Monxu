@@ -1,13 +1,15 @@
 {
   "_meta": {
-    "version": "2026.11-3",
+    "version": "2026.11-4",
     "note": "Perfiles huecos conformados en frío EN 10219-2:2006. Radios para cálculo y modelado según EN 10219-2 Anexo B (t <= 6 mm): radio exterior ro = 2t, radio interior ri = t. Las propiedades de sección se calculan a partir de la geometría real de la sección, no se toman de tabla. Convención de designación h x b x t: H = canto (primera cota), B = ancho.",
-    "bar_lengths_mm": [
-      6000,
-      6500,
-      12000
-    ],
-    "default_bar_length_mm": 6000
+    "bar_lengths_mm": [6000, 6500, 12000],
+    "default_bar_length_mm": 6000,
+    "cutting": {
+      "trim_start_mm": 10.0,
+      "trim_end_mm": 0.0,
+      "reusable_min_mm": 500.0,
+      "note": "Despunte inicial: refrentado del extremo de laminación de cada barra o retal (incluye el corte). Despunte final: 0 mm, el extremo de laminación queda en el retal y se refrenta al reutilizarlo. Retal reutilizable: longitud ≥ reusable_min_mm; el resto es chatarra."
+    }
   },
   "profiles": {
     "RHS 30x20x2": {
@@ -453,18 +455,8 @@
     }
   },
   "available_materials": {
-    "acero_carbono": [
-      "S235JRH",
-      "S275J0H",
-      "S355J2H"
-    ],
-    "acero_inoxidable": [
-      "1.4301",
-      "1.4404"
-    ],
-    "aluminio": [
-      "EN AW-6060 T66",
-      "EN AW-6082 T6"
-    ]
+    "acero_carbono": ["S235JRH", "S275J0H", "S355J2H"],
+    "acero_inoxidable": ["1.4301", "1.4404"],
+    "aluminio": ["EN AW-6060 T66", "EN AW-6082 T6"]
   }
 }

@@ -188,7 +188,7 @@ export function PropsPanel({ id, design, viewer }: { id: string | null; design: 
 
 // ============================================================================ alertas y validación
 const LV: Record<string, string> = { bloqueante: "bad", error: "bad", NO_CUMPLE: "bad", advertencia: "warn", ADVERTENCIA: "warn",
-  pendiente: "pend", PENDIENTE: "pend", ok: "good", CUMPLE: "good", propuesta: "info", info: "info" };
+  pendiente: "pend", PENDIENTE: "pend", PENDIENTE_VALIDACION: "pend", NO_APLICA: "info", ok: "good", CUMPLE: "good", propuesta: "info", info: "info" };
 
 /** Corrección automática comprobada para un diseño que no cumple por valores fijados (sólo se ofrece si con ella CUMPLE). */
 export function FixBox({ fix, onApply, busy }: { fix: Dict | null | undefined; onApply?: (f: Dict) => void; busy?: boolean }) {
@@ -210,9 +210,10 @@ export function AlertsPanel({ design, project, onApplyFix, busy }: { design: Dic
         <span className={`chip ${design.status.geometry_complete ? "good" : "bad"}`}>
           {design.status.geometry_complete ? "Geometría completa y coherente" : "Errores bloqueantes"}</span>
         <span className={`chip ${LV[design.status.structural]}`}>{design.status.structural_label}</span>
-        {project?.validated_by ? <span className="chip good">Validado por {project.validated_by}</span>
+        {project?.approval?.state ? <span className={`chip ${project.approval.state === "liberado_fabricacion" ? "good" : "pend"}`}>Aprobación: {project.approval.label}</span>
           : design.status.structural === "CUMPLE" && design.status.geometry_complete
-            ? <span className="chip good">Diseño verificado: listo para emitir revisión y expediente</span> : null}
+            ? <span className="chip pend">Diseño generado sin errores bloqueantes: pendiente de revisión y aprobación técnica</span> : null}
+        {design.verdict === "PENDIENTE DE VALIDACIÓN" ? <span className="chip pend">Cálculo: PENDIENTE DE VALIDACIÓN</span> : null}
       </div>
       <FixBox fix={design.fix} onApply={onApplyFix} busy={busy} />
       <p className="muted">{q.summary}</p>
@@ -220,7 +221,9 @@ export function AlertsPanel({ design, project, onApplyFix, busy }: { design: Dic
         {[...design.design_notes.filter((n: Dict) => !q.items.some((i: Dict) => i.code === n.code && i.message === n.message))   // el QA ya repite errores y advertencias
           .map((n: Dict) => ({ level: n.level, code: n.code, message: n.message })),
           ...q.items.filter((i: Dict) => i.level !== "ok"), ...q.items.filter((i: Dict) => i.level === "ok")].map((i: Dict, k: number) => (
-          <tr key={k}><td><span className={`dot ${LV[i.level]}`} />{i.level}</td><td>{i.code}</td><td>{i.message}</td></tr>))}
+          <tr key={k}><td><span className={`dot ${LV[i.level]}`} />{i.severity ?? i.level}</td><td>{i.code}</td><td>{i.message}
+            {i.expected != null || i.obtained != null ? <span className="muted"> · esperado {String(i.expected ?? "—")} · obtenido {String(i.obtained ?? "—")}</span> : null}
+            {i.action && i.level !== "ok" ? <em> → {i.action}</em> : null}</td></tr>))}
       </tbody></table></div>
     </div>
   );
@@ -265,7 +268,14 @@ export function BomPanel({ bom }: { bom: Dict }) {
       <div className="cols">
         <div><h4>Metros de perfil</h4><ul>{Object.entries(t.profile_meters).map(([k, v]) => <li key={k}>{k}: {fmt(v as number, 3)} m</li>)}</ul></div>
         <div><h4>Superficie de chapa</h4><ul>{Object.entries(t.sheet_area_m2).map(([k, v]) => <li key={k}>{k}: {fmt(v as number, 4)} m²</li>)}</ul></div>
-        <div><h4>Compras</h4><ul>{bom.purchases.map((p: Dict, i: number) => <li key={i}>{p.qty} {p.unit} · {p.description}</li>)}</ul></div>
+        <div><h4>Masas</h4><ul>
+          <li>Piezas fabricadas: {fmt(t.mass_manufactured_kg, 2)} kg</li><li>Componentes comerciales: {fmt(t.mass_commercial_kg, 2)} kg</li>
+          <li><b>Producto: {fmt(t.mass_product_kg, 2)} kg</b> (por unidad)</li>
+          <li>Material comprado: {fmt(t.mass_purchased_kg, 2)} kg{t.material_lot > 1 ? ` (lote de ${t.material_lot})` : ""}</li>
+          {t.mass_from_stock_kg ? <li>De retales del inventario: {fmt(t.mass_from_stock_kg, 2)} kg</li> : null}
+          <li>Desperdicio no recuperable: {fmt(t.mass_waste_kg, 2)} kg</li><li>Retales reutilizables: {fmt(t.mass_reusable_kg, 2)} kg</li></ul></div>
+        <div><h4>Compras{bom.lot > 1 ? ` (lote de ${bom.lot})` : ""}</h4><ul>{bom.purchases.map((p: Dict, i: number) => <li key={i}>{p.qty} {p.unit} · {p.description}
+          {p.validation === "pendiente_validacion" ? <span className="muted"> · pendiente de validación</span> : null}</li>)}</ul></div>
         <div><h4>Consumibles</h4><ul>{bom.consumables.map((p: Dict, i: number) => <li key={i}>{fmt(p.qty, 3)} {p.unit} · {p.description}</li>)}</ul></div>
       </div>
     </div>
@@ -278,7 +288,7 @@ export function CostPanel({ cost }: { cost: Dict }) {
   const eur = (v: number) => `${fmt(v, 2)} €`;
   return (
     <div>
-      <p className="muted">Tarifas orientativas {cost.rates_version} · material imputado {cost.material_basis === "consumo" ? "por consumo (el sobrante vuelve a almacén)" : "por compra de barras y chapas completas"}.
+      <p className="muted">Tarifas orientativas {cost.rates_version} · material imputado {cost.material_basis === "consumo" ? "por consumo real (lo comprado menos los retales reutilizables, que vuelven al inventario)" : "por compra real de barras y chapas según el plan de corte y el anidado del lote"}.
         {" "}{cost.note}</p>
       <div className="cols">
         <div><h4>{cost.lot > 1 ? `Lote de ${cost.lot} unidades (importes por unidad)` : "Lote de 1 unidad"}</h4><ul>{Object.entries(cost.groups).map(([k, v]) => <li key={k}>{k}: {eur(v as number)}</li>)}
@@ -290,12 +300,21 @@ export function CostPanel({ cost }: { cost: Dict }) {
             <tbody>{cost.by_lot.map((b: Dict) => <tr key={b.lot}><td>{b.lot} ud</td><td>{eur(b.direct)}</td><td>{eur(b.cost)}</td><td>{eur(b.price)}</td></tr>)}</tbody></table>
           <p className="muted">Horas: soldadura {fmt(cost.hours.soldadura, 2)} h · montaje {fmt(cost.hours.montaje, 2)} h por unidad.</p></div>
       </div>
-      <div className="scroll-x"><table className="grid"><thead><tr><th>Partida</th><th>Concepto</th><th>Cantidad</th><th>Unidad</th><th>Precio unit.</th><th>Importe</th></tr></thead>
-        <tbody>{cost.lines.map((l: Dict, i: number) => <tr key={i}><td>{l.group}</td><td>{l.concept}</td><td>{fmt(l.qty, 3)}</td><td>{l.unit}</td><td>{fmt(l.unit_eur, 2)}</td><td>{eur(l.eur)}</td></tr>)}
-          <tr className="total"><td colSpan={5}>Coste directo (lote de 1)</td><td>{eur(cost.direct)}</td></tr></tbody></table></div>
+      <div className="scroll-x"><table className="grid"><thead><tr><th>Partida</th><th>Concepto</th><th>Cantidad</th><th>Unidad</th><th>Precio unit.</th><th>Importe</th><th>Base</th></tr></thead>
+        <tbody>{cost.lines.map((l: Dict, i: number) => <tr key={i}><td>{l.group}</td><td>{l.concept}</td><td>{fmt(l.qty, 3)}</td><td>{l.unit}</td><td>{fmt(l.unit_eur, 2)}</td><td>{eur(l.eur)}</td>
+          <td className="muted">{l.basis}</td></tr>)}
+          <tr className="total"><td colSpan={5}>Coste directo por unidad (lote de {cost.lot})</td><td>{eur(cost.direct)}</td><td /></tr></tbody></table></div>
       {cost.unpriced?.length ? <p className="muted">Sin precio de catálogo (se aplica el valor por defecto): {cost.unpriced.join(", ")}</p> : null}
     </div>
   );
+}
+
+/** Rótulo de la chapa comprada (= docs.sheetLabel del motor, sin importar el motor en el modo servidor). */
+function sheetLabel(n: Dict, s: Dict) {
+  const mode = s.mode ?? (s.source === "comercial" || !s.source ? "formato" : s.source);
+  if (mode === "corte_medida") return `corte a medida ${fmt(s.length, 0)}x${fmt(s.width, 0)}`;
+  if (mode === "retal") return `retal ${s.stock_id} ${fmt(s.length, 0)}x${fmt(s.width, 0)}`;
+  return `formato ${n.format}`;
 }
 
 export function FabPanel({ plan, dfm }: { plan: Dict; dfm: Dict[] }) {
@@ -305,26 +324,32 @@ export function FabPanel({ plan, dfm }: { plan: Dict; dfm: Dict[] }) {
       {plan.cutting.map((c: Dict) => (
         <div key={c.profile + c.material} className="cut">
           <div className="muted">{c.profile} {c.material} · {c.n_bars} barras de {c.bar_length} mm (cota inferior {c.lower_bound}{c.optimal ? ", óptimo" : ""})
-            · aprovechamiento {(c.utilization * 100).toFixed(1)} % · sierra {c.kerf} mm</div>
+            {c.n_stock_used ? ` + ${c.n_stock_used} retales del inventario` : ""} · {c.n_cuts} cortes · aprovechamiento {(c.utilization * 100).toFixed(1)} % · sierra {c.kerf} mm
+            · despuntes {c.trim_start}/{c.trim_end} mm · neto {fmt(c.pieces_length / 1000, 2)} m · desperdicio {fmt(c.waste_length / 1000, 2)} m
+            · retales reutilizables {fmt(c.reusable_length / 1000, 2)} m</div>
           {c.bars.map((b: Dict) => (
-            <svg key={b.bar} viewBox={`0 0 ${c.bar_length} 120`} className="barsvg" preserveAspectRatio="none">
-              <rect x={0} y={10} width={c.bar_length} height={100} className="bar-bg" />
-              {(() => { let x = c.trim; return b.cuts.map((ct: Dict, i: number) => {
+            <div key={b.bar} className="barrow"><svg viewBox={`0 0 ${c.bar_length} 120`} className="barsvg" preserveAspectRatio="none">
+              <rect x={0} y={10} width={b.length} height={100} className="bar-bg" />
+              {(() => { let x = b.trim_start; return b.cuts.map((ct: Dict, i: number) => {
                 const el = <g key={i}><rect x={x} y={10} width={ct.length} height={100} className="bar-cut" />
                   <text x={x + ct.length / 2} y={75} className="bar-txt">{ct.ref.split("-").slice(-1)[0]} · {ct.length}</text></g>;
                 x += ct.length + c.kerf; return el; }); })()}
-            </svg>))}
+            </svg><div className="muted small">Barra {b.bar}{b.source === "retal" ? ` (retal ${b.stock_id})` : ""}: {b.n_pieces} piezas · {b.n_cuts} cortes ·
+              sierra {fmt(b.kerf_total, 1)} mm · despuntes {b.trim_start}/{b.trim_end} mm · retal {fmt(b.remnant, 1)} mm ({b.remnant_status})</div></div>))}
         </div>))}
       <h4>Anidado de chapa</h4>
       <div className="nests">
         {plan.nesting.map((n: Dict) => n.feasible ? n.sheets.map((s: Dict) => (
           <figure key={n.material + n.thickness + s.sheet}>
-            <svg viewBox={`0 0 ${n.length} ${n.width}`} className="nestsvg">
-              <rect x={0} y={0} width={n.length} height={n.width} className="sheet" />
-              {s.placements.map((p: Dict, i: number) => <g key={i}><rect x={p.x} y={n.width - p.y - p.h} width={p.w} height={p.h} className="part" />
-                <text x={p.x + p.w / 2} y={n.width - p.y - p.h / 2} className="nest-txt">{p.ref.split("-").slice(-1)[0]}</text></g>)}
+            <svg viewBox={`0 0 ${s.length} ${s.width}`} className="nestsvg">
+              <rect x={0} y={0} width={s.length} height={s.width} className="sheet" />
+              {s.placements.map((p: Dict, i: number) => <g key={i}><rect x={p.x} y={s.width - p.y - p.h} width={p.w} height={p.h} className="part" />
+                <text x={p.x + p.w / 2} y={s.width - p.y - p.h / 2} className="nest-txt">{p.ref.split("-").slice(-1)[0]}</text></g>)}
+              {s.remnant ? <rect x={s.remnant.axis === "x" ? s.remnant.at : 0} y={s.remnant.axis === "x" ? 0 : s.width - s.remnant.at - s.remnant.width}
+                width={s.remnant.length} height={s.remnant.width} className="remnant" /> : null}
             </svg>
-            <figcaption>{n.material} e={n.thickness} mm · {n.format} · hoja {s.sheet}/{n.n_sheets} · {(s.utilization * 100).toFixed(1)} %</figcaption>
+            <figcaption>{n.material} e={n.thickness} mm · {sheetLabel(n, s)} · hoja {s.sheet}/{n.sheets.length} · {(s.utilization * 100).toFixed(1)} %
+              {s.remnant ? ` · retal ${fmt(s.remnant.length)}×${fmt(s.remnant.width)} mm` : ""}</figcaption>
           </figure>)) : <p key={n.material + n.thickness} className="bad">{n.material} {n.thickness}: {n.reason}</p>)}
       </div>
       <h4>Soldadura y pintura</h4>

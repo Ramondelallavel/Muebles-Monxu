@@ -135,7 +135,10 @@ export function selectScrew(clamp, reach, name = "ISO7380_M6") {
 }
 export const consumables = () => componentsJ.consumables;
 export const criteria = () => criteriaJ;
-export function standards(family) {
+export function standards(family, materialFamilies = null, processes = null, materialStandards = null) {
   return standardsJ.standards.filter((s) => s.families.includes("*") || s.families.includes(family))
-    .filter((s) => s.markets.includes("*") || s.markets.includes("EU"));
+    .filter((s) => s.markets.includes("*") || s.markets.includes("EU"))
+    .filter((s) => !materialFamilies || !s.materials || s.materials.some((m) => materialFamilies.has(m)))
+    .filter((s) => !processes || !(s.requires ?? []).some((r) => r === "norma_material"
+      ? ![...(materialStandards ?? [])].some((ms) => ms.startsWith(s.code)) : !processes.has(r)));
 }

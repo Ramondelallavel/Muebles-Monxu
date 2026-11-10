@@ -8,7 +8,8 @@ import { f as fx, g } from "./util";
 
 // ============================================================================ DXF R12
 const LAYERS = { CORTE_EXTERIOR: [7, "CONTINUOUS"], CORTE_INTERIOR: [1, "CONTINUOUS"], PLEGADO_ABAJO: [3, "DASHDOT"],
-  PLEGADO_ARRIBA: [4, "DASHDOT"], GRABADO: [2, "CONTINUOUS"], INFO: [8, "CONTINUOUS"], FORMATO: [9, "CONTINUOUS"] };
+  PLEGADO_ARRIBA: [4, "DASHDOT"], GRABADO: [2, "CONTINUOUS"], INFO: [8, "CONTINUOUS"], FORMATO: [9, "CONTINUOUS"],
+  RETAL: [5, "DASHED"] };
 const n6 = (v) => (Math.abs(v) < 5e-7 ? "0.0" : (+v.toFixed(6)).toString());
 
 class DXF {
@@ -39,9 +40,10 @@ class DXF {
     const H = ["0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1009", "9", "$INSUNITS", "70", "4", "9", "$MEASUREMENT", "70", "1",
       "9", "$EXTMIN", "10", n6(this.lo[0]), "20", n6(this.lo[1]), "30", "0.0", "9", "$EXTMAX", "10", n6(this.hi[0]), "20", n6(this.hi[1]), "30", "0.0", "0", "ENDSEC"];
     const T = ["0", "SECTION", "2", "TABLES",
-      "0", "TABLE", "2", "LTYPE", "70", "2",
+      "0", "TABLE", "2", "LTYPE", "70", "3",
       "0", "LTYPE", "2", "CONTINUOUS", "70", "0", "3", "Solid line", "72", "65", "73", "0", "40", "0.0",
       "0", "LTYPE", "2", "DASHDOT", "70", "0", "3", "Dash dot __ . __ . __", "72", "65", "73", "4", "40", "25.4", "49", "12.7", "49", "-6.35", "49", "0.0", "49", "-6.35",
+      "0", "LTYPE", "2", "DASHED", "70", "0", "3", "Dashed __ __ __", "72", "65", "73", "2", "40", "19.05", "49", "12.7", "49", "-6.35",
       "0", "ENDTAB",
       "0", "TABLE", "2", "LAYER", "70", String(Object.keys(LAYERS).length + 1),
       "0", "LAYER", "2", "0", "70", "0", "62", "7", "6", "CONTINUOUS",
@@ -96,13 +98,27 @@ export function partDxf(part, project = null) {
   const cutW = dx.cut.hi[0] - dx.cut.lo[0], cutH = dx.cut.hi[1] - dx.cut.lo[1];
   return { text: dx.toString(), width: Math.round(cutW * 1000) / 1000, height: Math.round(cutH * 1000) / 1000 };
 }
+/** Rótulo de la chapa comprada: formato comercial, corte a medida o retal del inventario. */
+export function sheetLabel(nest, sh) {
+  const mode = sh.mode ?? (sh.source === "comercial" || !sh.source ? "formato" : sh.source);
+  const L = sh.length ?? nest.length, W = sh.width ?? nest.width;
+  if (mode === "corte_medida") return `corte a medida ${fx(L)}x${fx(W)}`;
+  if (mode === "retal") return `retal ${sh.stock_id} ${fx(L)}x${fx(W)}`;
+  return `formato ${nest.format}`;
+}
 export function nestingDxf(nest, partsByRef) {
+  const total = nest.sheets.length;
   return nest.sheets.map((sh) => {
     const dx = new DXF();
-    const L = nest.length, W = nest.width;
+    const L = sh.length ?? nest.length, W = sh.width ?? nest.width;
     dx.poly([[0, 0], [L, 0], [L, W], [0, W]], "FORMATO");
     for (const pl of sh.placements) addPart(dx, partsByRef[pl.ref], [pl.x, pl.y, pl.rot], pl.ref, false);
-    dx.text(0, -25, 10, `Chapa ${nest.material} e=${g(nest.thickness)} mm  formato ${nest.format}  hoja ${sh.sheet}/${nest.n_sheets}  aprovechamiento ${(sh.utilization * 100).toFixed(1)} %`, "INFO");
+    const rem = sh.remnant;
+    if (rem) {
+      const [x0, y0] = rem.axis === "x" ? [rem.at, 0.0] : [0.0, rem.at];
+      dx.poly([[x0, y0], [x0 + rem.length, y0], [x0 + rem.length, y0 + rem.width], [x0, y0 + rem.width]], "RETAL");
+    }
+    dx.text(0, -25, 10, `Chapa ${nest.material} e=${g(nest.thickness)} mm  ${sheetLabel(nest, sh)}  hoja ${sh.sheet}/${total}  aprovechamiento ${(sh.utilization * 100).toFixed(1)} %`, "INFO");
     return { sheet: sh.sheet, text: dx.toString() };
   });
 }
@@ -139,13 +155,19 @@ export function flatSvg(part, info) {
 }
 
 export function nestingSvg(nest, sh) {
-  const L = nest.length, Wd = nest.width, m = 20;
+  const L = sh.length ?? nest.length, Wd = sh.width ?? nest.width, m = 20;
   const out = [`<rect x="${m}" y="${m}" width="${L}" height="${Wd}" fill="#fafafa" stroke="#111" stroke-width="2"/>`];
   for (const p of sh.placements) {
     out.push(`<rect x="${m + p.x}" y="${m + Wd - p.y - p.h}" width="${p.w}" height="${p.h}" fill="#dbe7f3" stroke="#1d3557" stroke-width="1.5"/>`);
     out.push(`<text x="${m + p.x + p.w / 2}" y="${m + Wd - p.y - p.h / 2}" font-size="${Math.max(14, Math.min(40, Math.min(p.w, p.h) / 6))}" text-anchor="middle" dominant-baseline="middle">${esc(p.ref)}</text>`);
   }
-  out.push(`<text x="${m}" y="${Wd + m + 34}" font-size="24">${esc(`${nest.material} e=${g(nest.thickness)} mm · formato ${nest.format} · hoja ${sh.sheet}/${nest.n_sheets} · ${(sh.utilization * 100).toFixed(1)} %`)}</text>`);
+  const rem = sh.remnant;
+  if (rem) {
+    const [x0, y0] = rem.axis === "x" ? [rem.at, 0.0] : [0.0, rem.at];
+    out.push(`<rect x="${m + x0}" y="${m + Wd - y0 - rem.width}" width="${rem.length}" height="${rem.width}" fill="none" stroke="#2a9d8f" stroke-width="2" stroke-dasharray="16 8"/>`);
+    out.push(`<text x="${m + x0 + rem.length / 2}" y="${m + Wd - y0 - rem.width / 2}" font-size="22" text-anchor="middle" fill="#2a9d8f">${esc(`retal ${fx(rem.length)}×${fx(rem.width)}`)}</text>`);
+  }
+  out.push(`<text x="${m}" y="${Wd + m + 34}" font-size="24">${esc(`${nest.material} e=${g(nest.thickness)} mm · ${sheetLabel(nest, sh)} · hoja ${sh.sheet}/${nest.sheets.length} · ${(sh.utilization * 100).toFixed(1)} %`)}</text>`);
   return svgDoc(L + 2 * m, Wd + 2 * m + 50, out.join("\n"));
 }
 
@@ -262,7 +284,75 @@ ${e.checks.map((c) => `<tr><td>${esc(c.id)}</td><td>${esc(c.description)}</td><t
 <h2>10. Control de calidad</h2><p>${esc(q.summary)}</p><table>${row(["Nivel", "Código", "Descripción"], "th")}${q.items.map((i) => `<tr><td class="${i.level}">${esc(i.level)}</td><td>${esc(i.code)}</td><td>${esc(i.message)}</td></tr>`).join("")}</table>
 <h2>11. Lista de materiales</h2><table>${row(["Pos.", "Referencia", "Descripción", "Material", "Esp.", "Largo", "Ancho", "Cant.", "Peso unit. kg", "Peso total kg"], "th")}${b.rows.map((r) => row([r.pos, r.ref, r.description, r.material, r.thickness, r.length, r.width, r.qty, num(r.unit_mass, 3), num(r.total_mass, 3)])).join("")}
 <tr><th colspan="7">Total</th><th>${b.totals.components}</th><th></th><th>${num(b.totals.total_mass, 2)}</th></tr></table>
-<h2>12. Normas de referencia</h2><ul>${C.standards(summary.family).map((s) => `<li>${esc(s.code)}:${esc(s.version)} — ${esc(s.title)}${s.applicability ? " (" + esc(s.applicability) + ")" : ""}</li>`).join("")}</ul>
+<h2>12. Normas de referencia</h2><ul>${(summary.engineering.applicable_standards ?? C.standards(summary.family)).map((s) => `<li>${esc(s.code)}:${esc(s.version)} — ${esc(s.title)}${s.applicability ? " (" + esc(s.applicability) + ")" : ""}</li>`).join("")}</ul>
 <p><em>La identificación de normas aplicables es orientativa; el responsable técnico del fabricante la confirma al firmar el expediente.</em></p>
 </body></html>`;
+}
+
+// ============================================================================ tablas del expediente (= pipeline.py)
+export const CUT_PLAN_HEADER = ["Perfil", "Material", "Barra", "Origen", "Long. barra mm", "Despunte inicial mm", "Piezas (ref:long)", "Nº piezas", "Nº cortes",
+  "Ancho sierra mm", "Sierra total mm", "Σ piezas mm", "Despunte final mm", "Retal final mm", "Estado del retal", "Balance mm"];
+export const BALANCE_HEADER = ["Tipo", "Grupo", "Unidad", "Comprado", "De inventario", "Neto en piezas", "Desperdicio no recuperable", "Retal reutilizable", "Comprado kg",
+  "De inventario kg", "Neto kg", "Desperdicio kg", "Retal kg", "Balance"];
+/** Plan de corte barra a barra: L = despunte inicial + Σ piezas + sierra + despunte final + retal. */
+export const cutPlanRows = (plan) => plan.cutting.flatMap((c) => c.bars.map((b) => [c.profile, c.material, b.bar, b.source === "retal" ? `retal ${b.stock_id}` : "comercial",
+  b.length, b.trim_start, b.cuts.map((x) => `${x.ref}:${g(x.length)}`).join(" + "), b.n_pieces, b.n_cuts, c.kerf, b.kerf_total, b.used, b.trim_end, b.remnant,
+  b.remnant_status, b.balance_mm]));
+export function balanceRows(plan) {
+  const t = plan.balance.totals;
+  return [...plan.balance.rows.map((r) => [r.kind, r.group, r.unit, r.purchased, r.from_stock, r.net, r.waste, r.reusable, r.purchased_kg, r.from_stock_kg, r.net_kg,
+    r.waste_kg, r.reusable_kg, r.balance]), ["total", `lote de ${plan.lot ?? 1}`, "kg", "", "", "", "", "", t.purchased_kg, t.from_stock_kg, t.net_kg, t.waste_kg, t.reusable_kg, ""]];
+}
+/** Masas separadas: producto (por unidad) y material en bruto del lote; nunca se suman entre sí. */
+export function weightSummaryRows(bom) {
+  const t = bom.totals, lot = t.material_lot ?? 1;
+  return [["", "", "Masa neta de piezas fabricadas (por unidad)", "", "", "", t.mass_manufactured_kg],
+    ["", "", "Masa de componentes comerciales (por unidad)", "", "", "", t.mass_commercial_kg],
+    ["", "", "Masa total del producto (por unidad)", "", "", "", t.mass_product_kg],
+    ["", "", `Material en bruto comprado (lote de ${lot})`, "", "", "", t.mass_purchased_kg],
+    ["", "", `Material de retales del inventario (lote de ${lot})`, "", "", "", t.mass_from_stock_kg],
+    ["", "", `Desperdicio no recuperable (lote de ${lot})`, "", "", "", t.mass_waste_kg],
+    ["", "", `Retales reutilizables al inventario (lote de ${lot})`, "", "", "", t.mass_reusable_kg]];
+}
+const PK = ["profile", "material", "n_bars", "n_stock_used", "stock_used", "lower_bound", "pieces", "n_cuts", "pieces_length", "purchased_length", "stock_length", "kerf_total",
+  "trim_total", "scrap_remnant_length", "reusable_length", "waste_length", "balance_mm", "utilization", "reusable_remnants"];
+export const optimizationSummary = (plan) => ({ lote: plan.lot ?? 1, parametros_corte: plan.cutting_params ?? null,
+  perfiles: plan.cutting.map((c) => Object.fromEntries(PK.map((k) => [k, c[k]]))),
+  chapa: plan.nesting.map((n) => ({ material: n.material, thickness: n.thickness, format: n.format ?? null, n_sheets: n.n_sheets ?? null, utilization: n.utilization ?? null,
+    waste_m2: n.waste_m2 ?? null, compra: n.purchase ?? null })), balance: plan.balance });
+export const purchaseRows = (bom, lot) => [...bom.purchases.map((p) => [p.type, p.description, p.ref ?? "", p.qty, p.unit, p.mass_kg, p.basis ?? "", p.validation ?? "", lot]),
+  ...bom.consumables.map((c) => ["Consumible", c.description, "", c.qty, c.unit, "", c.basis ?? "", "", lot])];
+export const PURCHASE_HEADER = ["Tipo", "Descripción", "Referencia", "Cantidad", "Unidad", "Masa kg", "Origen", "Validación", "Lote"];
+
+// ============================================================================ verificación de archivos exportados
+/** Relee un STL binario: triángulos, volumen (teorema de la divergencia) y envolvente, para compararlos con el modelo. */
+export function verifyStl(u8) {
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const n = dv.getUint32(80, true);
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  let vol = 0, o = 84;
+  for (let t = 0; t < n; t++) {
+    const p = [];
+    for (let k = 0; k < 3; k++) { const v = [0, 1, 2].map((j) => dv.getFloat32(o + 12 + 12 * k + 4 * j, true)); p.push(v); for (let j = 0; j < 3; j++) { lo[j] = Math.min(lo[j], v[j]); hi[j] = Math.max(hi[j], v[j]); } }
+    const [a, b, c] = p;
+    vol += (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6;
+    o += 50;
+  }
+  return { triangles: n, bytes_ok: u8.length === 84 + 50 * n, volume: vol, bbox: [lo, hi] };
+}
+/** Cuenta en un DXF R12 los contornos exteriores de corte y lee el contorno del formato (capa FORMATO). */
+export function verifyNestingDxf(text) {
+  const L = text.split("\r\n");
+  let cut = 0, fmt = null;
+  for (let i = 0; i + 3 < L.length; i++) {
+    if (L[i] === "0" && L[i + 1] === "POLYLINE" && L[i + 2] === "8") {
+      if (L[i + 3] === "CORTE_EXTERIOR") cut++;
+      if (L[i + 3] === "FORMATO" && !fmt) {
+        const xs = [], ys = [];
+        for (let j = i + 4; j < L.length && L[j + 1] !== "SEQEND"; j++) if (L[j] === "VERTEX") { xs.push(+L[j + 4]); ys.push(+L[j + 6]); }
+        fmt = [Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)];
+      }
+    }
+  }
+  return { cut_contours: cut, format: fmt };
 }

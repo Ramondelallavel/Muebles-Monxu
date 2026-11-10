@@ -17,24 +17,57 @@ from ..core.model import PlatePart, ProfilePart, SheetPart
 BLOCK, WARN, OK, PEND = "bloqueante", "advertencia", "ok", "pendiente"
 
 
+SEVERITIES = ("CRÍTICO", "BLOQUEANTE", "ADVERTENCIA", "INFORMATIVO")
+#: códigos cuyo fallo invalida la coherencia entre documentos o la seguridad: severidad CRÍTICO
+CRITICAL_PREFIXES = ("XDOC-", "GEO-VALIDA", "GEO-INTERFERENCIAS", "GEO-DIMENSIONES", "BOM-", "EXP-", "PLANO-", "CALC-NO")
+DOCUMENTS = (("XDOC-", "Documentación cruzada"), ("GEO-", "Modelo 3D"), ("UNI-", "Modelo 3D"), ("BOM-", "BOM"),
+             ("CHAPA-", "Desarrollos y DXF"), ("MAT-", "Materiales"), ("CALC", "Cálculo estructural"),
+             ("COMP-", "Componentes comerciales"), ("SOL-", "Soldadura"), ("EXP-STEP", "STEP"), ("EXP-STL", "STL"),
+             ("EXP-DXF", "DXF"), ("EXP-EXCEL", "Excel BOM"), ("EXP-PDF", "Planos"), ("PLANO-", "Planos"),
+             ("DFM", "Fabricación (DFM)"), ("LAS-", "Fabricación (DFM)"), ("PLG-", "Fabricación (DFM)"),
+             ("PRF-", "Fabricación (DFM)"), ("MON-", "Montaje y tornillería"), ("GAL-", "Fabricación (DFM)"))
+RESULTS = {BLOCK: "NO CUMPLE", WARN: "ADVERTENCIA", PEND: "PENDIENTE DE VALIDACIÓN", OK: "CUMPLE"}
+
+
+def _document(code: str) -> str:
+    return next((d for p, d in DOCUMENTS if code.startswith(p)), "Modelo")
+
+
 class QA:
+    """Motor central de validaciones. Cada comprobación lleva código único, descripción, resultado, severidad,
+    documento afectado, valor esperado, valor obtenido, diferencia, criterio de aceptación y acción correctora.
+    ``level`` (bloqueante / advertencia / pendiente / ok) se conserva por compatibilidad: bloqueante impide exportar;
+    bloqueante, pendiente y lo marcado con ``release_block`` impiden liberar para fabricación."""
+
     def __init__(self):
         self.items: list[dict[str, Any]] = []
 
     def add(self, level, code, message, **data):
-        self.items.append({"level": level, "code": code, "message": message, **data})
+        sev = data.pop("severity", None) or (
+            ("CRÍTICO" if code.startswith(CRITICAL_PREFIXES) else "BLOQUEANTE") if level == BLOCK else
+            "BLOQUEANTE" if level == PEND else "ADVERTENCIA" if level == WARN else "INFORMATIVO")
+        item = {"level": level, "code": code, "message": message, "severity": sev,
+                "result": data.pop("result", None) or RESULTS[level], "description": data.pop("description", None) or message,
+                "document": data.pop("document", None) or _document(code), "expected": data.pop("expected", None),
+                "obtained": data.pop("obtained", None), "difference": data.pop("difference", None),
+                "criterion": data.pop("criterion", None), "action": data.pop("action", None),
+                "release_block": data.pop("release_block", level in (BLOCK, PEND)), **data}
+        self.items.append(item)
 
     def result(self) -> dict[str, Any]:
         lv = [i["level"] for i in self.items]
         blocking = lv.count(BLOCK)
         res = "bloqueante" if blocking else ("advertencia" if WARN in lv else "ok")
+        sev = {s: sum(1 for i in self.items if i["severity"] == s and i["level"] != OK) for s in SEVERITIES}
+        rb = [i["code"] for i in self.items if i["release_block"]]
         return {"result": res, "blocking": blocking, "warnings": lv.count(WARN), "pending": lv.count(PEND),
-                "ok": lv.count(OK), "items": self.items,
+                "ok": lv.count(OK), "items": self.items, "by_severity": sev, "release_blockers": rb,
                 "summary": f"{blocking} errores bloqueantes, {lv.count(WARN)} advertencias, {lv.count(PEND)} "
                            f"validaciones pendientes, {lv.count(OK)} comprobaciones satisfactorias."}
 
 
-def model_checks(model, interf: dict, eng: dict, dfm: list, bom: dict) -> QA:
+def model_checks(model, interf: dict, eng: dict, dfm: list, bom: dict, plan: dict | None = None,
+                 cost: dict | None = None) -> QA:
     q = QA()
     ps = model.params.values
     # geometría válida
@@ -84,7 +117,12 @@ def model_checks(model, interf: dict, eng: dict, dfm: list, bom: dict) -> QA:
                     names.append(i.part.name)
             q.add(WARN, "GEO-SALIENTE", f"Elementos sobresalen {over:.1f} mm del contorno del producto "
                                         f"({'; '.join(names[:3])}{'…' if len(names) > 3 else ''}): considerar en "
-                                        "implantación.")
+                                        "implantación.",
+                  expected=f"contorno {hi[0] - lo[0]:.1f} × {hi[1] - lo[1]:.1f} mm",
+                  obtained=f"envolvente máxima {bhi[0] - blo[0]:.1f} × {bhi[1] - blo[1]:.1f} × {bhi[2] - blo[2]:.1f} mm",
+                  difference=round(over, 2), criterion="Las cotas generales son las del contorno declarado; la envolvente "
+                  "máxima (cabezas de tornillo, pies, manetas) figura en el plano de conjunto",
+                  action="Considerar la envolvente máxima en la implantación y el embalaje")
     # holguras
     g = model.ctx.derived.get("HOLGURA_ENC")
     r = model.ctx.derived.get("RADIO_ENC")
@@ -170,13 +208,147 @@ def model_checks(model, interf: dict, eng: dict, dfm: list, bom: dict) -> QA:
     if st == "NO_CUMPLE":
         fails = [c["description"] for c in eng["checks"] if c["status"] == "NO_CUMPLE"]
         q.add(WARN, "CALC-NO-CUMPLE", "Verificación estructural NO superada (no apto para fabricación "
-                                      "hasta modificar el diseño): " + "; ".join(fails))
+                                      "hasta modificar el diseño): " + "; ".join(fails), release_block=True,
+              severity="CRÍTICO", result="NO CUMPLE", action="Modificar el diseño (perfiles, espesores o cargas)")
     elif st == "PENDIENTE":
         q.add(PEND, "CALC-PENDIENTE", "Verificación estructural incompleta: " + "; ".join(eng["pending"] or
                                                                                       ["datos pendientes"]))
     else:
-        q.add(OK, "CALC", "Verificación estructural automatizada completa: CUMPLE.")
+        q.add(OK, "CALC", "Comprobaciones estructurales calculadas: CUMPLEN." if eng.get("validation_pending") else
+              "Verificación estructural automatizada completa: CUMPLE.")
+    for v in eng.get("validation_pending", []):
+        q.add(PEND, f"CALC-VAL-{v['id']}", f"Cálculo pendiente de validación — {v['description']}: {v['reason']}.",
+              document="Cálculo estructural", criterion="Dato certificado (ficha técnica, ETA, certificado 3.1 o anejo "
+              "nacional) que sustituya la hipótesis", action="Validar con el documento correspondiente y registrar su "
+              "referencia en la validación técnica")
+    if plan is not None:
+        cross_checks(q, model, eng, dfm, bom, plan, cost)
     return q
+
+
+def cross_checks(q: QA, model, eng: dict, dfm: list, bom: dict, plan: dict, cost: dict | None) -> None:
+    """Controles cruzados entre documentos generados desde el modelo maestro (= pipeline.ts, crossChecks)."""
+    from collections import Counter
+    from ..docs import assembly
+    lot = plan.get("lot", 1)
+    inst = Counter(i.part.key for i in model.instances)
+    # BOM ↔ instancias 3D, referencia a referencia
+    bad = [f"{r['ref']}: BOM {r['qty']} / 3D {inst[p.key]}" for p in model.parts.values()
+           for r in bom["rows"] if r["ref"] == p.ref and r["qty"] != inst[p.key]]
+    q.add(BLOCK if bad else OK, "XDOC-BOM-3D", "BOM frente a instancias del modelo 3D: " +
+          ("; ".join(bad) if bad else f"{len(bom['rows'])} referencias, {sum(inst.values())} instancias coincidentes."),
+          expected=sum(inst.values()), obtained=sum(r["qty"] for r in bom["rows"]),
+          difference=sum(r["qty"] for r in bom["rows"]) - sum(inst.values()),
+          criterion="Cantidad de cada referencia del BOM = instancias del 3D", action="Regenerar el BOM desde el modelo")
+    by_ref = {p.ref: inst[p.key] * lot for p in model.parts.values()}
+    # BOM ↔ plan de corte y anidado (lote)
+    cut = Counter(x["ref"] for c in plan["cutting"] for b in c["bars"] for x in b["cuts"])
+    nest = Counter(pl["ref"] for n in plan["nesting"] if n.get("feasible") for sh in n["sheets"] for pl in sh["placements"])
+    bad = [f"{ref}: plan {cut[ref]} / BOM {by_ref[ref]}" for p in model.parts.values() if p.kind == "perfil"
+           for ref in [p.ref] if cut[ref] != by_ref[ref]]
+    bad += [f"{ref}: anidado {nest[ref]} / BOM {by_ref[ref]}" for p in model.parts.values() if p.kind in ("chapa", "pletina")
+            for ref in [p.ref] if nest[ref] != by_ref[ref] and all(n.get("feasible") for n in plan["nesting"])]
+    q.add(BLOCK if bad else OK, "XDOC-BOM-CORTE", "Piezas del plan de corte y del anidado frente al BOM: " +
+          ("; ".join(bad) if bad else f"{sum(cut.values())} piezas de perfil y {sum(nest.values())} de chapa (lote de {lot})."),
+          expected="cantidad BOM × lote", obtained="piezas cortadas y anidadas",
+          criterion="Cada pieza del BOM aparece en el plan de corte o en el anidado tantas veces como unidades × lote",
+          action="Regenerar el plan de fabricación")
+    # BOM ↔ compras (componentes comerciales)
+    std = Counter(i.part.code for i in model.instances if i.part.kind == "normalizado")
+    pur = {p["code"]: p["qty"] for p in plan["purchases"]["items"] if p["type"] == "Comercial"}
+    bad = [f"N-{c}: compras {pur.get(c)} / BOM {n * lot}" for c, n in sorted(std.items()) if pur.get(c) != n * lot]
+    bad += [f"N-{c} sobrante en compras" for c in pur if c not in std]
+    q.add(BLOCK if bad else OK, "XDOC-BOM-COMPRAS", "Componentes comerciales de la lista de compras frente al BOM: " +
+          ("; ".join(bad) if bad else f"{len(std)} referencias coincidentes (lote de {lot})."),
+          criterion="Unidades compradas = unidades del BOM × lote", action="Regenerar la lista de compras")
+    # compras ↔ optimización
+    bars = {p["group"]: p["qty"] for p in plan["purchases"]["items"] if p["type"] == "Perfil"}
+    bad = []
+    for c in plan["cutting"]:
+        grp = f"{c['profile']} {c['material']}"
+        if bars.get(grp, 0) != c["n_bars"]:
+            bad.append(f"{grp}: compras {bars.get(grp, 0)} / plan {c['n_bars']}")
+    for n in plan["nesting"]:
+        if not n.get("feasible"):
+            continue
+        g = f"{n['material']} e={n['thickness']:g} mm"
+        full = sum(p["qty"] for p in plan["purchases"]["items"] if p.get("group") == g and p["type"] == "Chapa")
+        cust = sum(p["qty"] for p in plan["purchases"]["items"] if p.get("group") == g and p["type"] == "Chapa (corte a medida)")
+        if full != n["purchase"]["n_full"] or cust != n["purchase"]["n_custom"]:
+            bad.append(f"{g}: compras {full}+{cust} / anidado {n['purchase']['n_full']}+{n['purchase']['n_custom']}")
+    q.add(BLOCK if bad else OK, "XDOC-COMPRAS-OPT", "Lista de compras frente al plan de corte y al anidado: " +
+          ("; ".join(bad) if bad else "barras y chapas compradas = las del plan de corte y del anidado."),
+          criterion="Barras y chapas de la lista de compras = las de la optimización", action="Regenerar la lista de compras")
+    # balance de material (barra a barra y por grupo)
+    bad = [f"{c['profile']} barra {b['bar']}: {b['balance_mm']:g} mm" for c in plan["cutting"] for b in c["bars"]
+           if abs(b["balance_mm"]) > 1e-6]
+    bad += [f"{r['group']}: {r['balance']}" for r in plan["balance"]["rows"] if r["balance"] is not None and abs(r["balance"]) > 1e-6]
+    q.add(BLOCK if bad else OK, "XDOC-BALANCE", "Balance de material: " + ("; ".join(bad) if bad else
+          "cada barra cumple L = despunte inicial + piezas + sierra + despunte final + retal, y lo comprado = neto + "
+          "desperdicio + retales en cada grupo."), expected=0.0, obtained=max([0.0] + [abs(b["balance_mm"]) for c in
+          plan["cutting"] for b in c["bars"]]), criterion="Balance nulo (±1e-6)", action="Revisar el optimizador")
+    # peso: BOM ↔ geometría ↔ cálculo
+    t = bom["totals"]
+    sw = eng.get("self_weight")
+    if sw:
+        d = sw["total_kg"] - t["mass_product_kg"]
+        ok = abs(d) <= 0.002 * t["mass_product_kg"] + 0.01
+        q.add(OK if ok else BLOCK, "XDOC-PESO-CALC", f"Peso propio del cálculo {sw['total_kg']:.3f} kg (aplicado "
+              f"{sw['applied_kg']:.3f} kg + {sw['below_supports_kg']:.3f} kg bajo los apoyos) frente a la masa del producto "
+              f"del BOM {t['mass_product_kg']:.3f} kg.", expected=t["mass_product_kg"], obtained=sw["total_kg"],
+              difference=round(d, 3), criterion="|diferencia| ≤ 0,2 % + 0,01 kg (definición analítica frente a sólido)",
+              action="Revisar las masas que no se aplican al modelo de cálculo")
+    q.add(OK, "XDOC-PESO-COMPRA", f"Masas separadas: producto {t['mass_product_kg']:.2f} kg/ud (fabricadas "
+          f"{t['mass_manufactured_kg']:.2f} + comerciales {t['mass_commercial_kg']:.2f}); material comprado "
+          f"{t['mass_purchased_kg']:.2f} kg, desperdicio {t['mass_waste_kg']:.2f} kg y retales {t['mass_reusable_kg']:.2f} kg "
+          f"para el lote de {lot}: no se suman entre sí.", severity="INFORMATIVO")
+    # presupuesto ↔ compras
+    if cost:
+        raw = sum(p["mass_kg"] for p in plan["purchases"]["items"] if p["type"].startswith(("Perfil", "Chapa"))
+                  and p.get("purchase", True) and p["mass_kg"] is not None)
+        if cost["material_basis"] == "compra" and cost["lot"] == lot:
+            mkg = cost["material_kg_per_unit"] * lot
+            ok = abs(mkg - raw) <= 0.01 * max(1, len(plan["purchases"]["items"]))
+            q.add(OK if ok else BLOCK, "XDOC-PRESUPUESTO-COMPRAS", f"Material del presupuesto {mkg:.3f} kg frente al "
+                  f"material comprado {raw:.3f} kg (lote de {lot}).", expected=round(raw, 3), obtained=round(mkg, 3),
+                  difference=round(mkg - raw, 3), criterion="Material presupuestado = barras y chapas compradas",
+                  action="Recalcular el presupuesto con el plan de fabricación")
+    # instrucciones de montaje ↔ BOM (referencias y designaciones de tornillería)
+    texts = list(assembly.step_texts(model).values())
+    bad = assembly.designation_issues(model, texts)
+    q.add(BLOCK if bad else OK, "XDOC-TORNILLERIA-INSTR", "Referencias de las instrucciones de montaje frente al BOM: " +
+          (", ".join(bad) + " no están en el BOM" if bad else "todas las referencias y designaciones citadas están en "
+                                                               "el BOM y en el 3D."),
+          expected="referencias del BOM", obtained=", ".join(bad) or "coincidentes",
+          criterion="Las instrucciones usan exactamente las referencias del BOM y del 3D",
+          action="Corregir el texto de montaje de la familia")
+    # soldadura ↔ cálculo (garganta)
+    joints = {j.id: j for j in model.joints}
+    bad = []
+    for c in eng["checks"]:
+        if c["id"].startswith("W.") and c["id"][2:] in joints:
+            a = (c.get("details") or {}).get("a_mm")
+            if a is not None and abs(a - joints[c["id"][2:]].weld["a"]) > 1e-9:
+                bad.append(c["id"])
+    q.add(BLOCK if bad else OK, "XDOC-SOLDADURA-CALC", "Gargantas del cálculo frente a las de las uniones del modelo: " +
+          (", ".join(bad) if bad else "coincidentes."), criterion="El cálculo usa la garganta de cada unión del modelo",
+          action="Regenerar el cálculo")
+    # componentes comerciales sin validar
+    for code in sorted(std):
+        c = catalog.component(code)
+        v = c.get("validation") or {}
+        if v.get("status") != "definido_por_norma":
+            q.add(PEND, f"COMP-{code}", f"N-{code} ({c['name']}): pendiente de validación — faltan "
+                  f"{', '.join(v.get('missing', ['datos técnicos']))}.", document="Componentes comerciales",
+                  criterion="Fabricante, modelo, ficha técnica y capacidades certificadas",
+                  action="Seleccionar el modelo comercial y registrar su ficha en la validación")
+    # WPS cualificada
+    thin = [j for j in model.joints if j.kind == "soldadura" and j.weld["a"] < 3]
+    if thin:
+        q.add(PEND, "SOL-WPS", f"{len(thin)} cordones con garganta < 3 mm en pared delgada: requieren WPS cualificada "
+              "(EN ISO 15614-1) y control de penetración antes de fabricar.", document="Soldadura",
+              criterion="WPS cualificada y soldadores cualificados (EN ISO 9606-1) para el espesor y la posición",
+              action="Cualificar la WPS y registrar su referencia en la validación técnica")
 
 
 def export_checks(q: QA, model, files: dict[str, Any], bom: dict) -> QA:
@@ -187,6 +359,28 @@ def export_checks(q: QA, model, files: dict[str, Any], bom: dict) -> QA:
             abs(st["volume"] - st["model_volume"]) / st["model_volume"] < 1e-6
         q.add(OK if ok else BLOCK, "EXP-STEP", f"STEP reimportado: {st['solids']} sólidos, volumen {st['volume']:.0f} mm³ "
                                                f"(modelo {st['model_volume']:.0f} mm³).")
+    q.add(OK, "EXP-STEP-TIPO", "STEP del servidor: B-rep analítico de OpenCascade (caras planas, cilíndricas y tóricas "
+          "exactas), no facetado.", severity="INFORMATIVO", document="STEP")
+    sl = files.get("stl")
+    if sl:
+        mb = sl["model_bbox"]
+        d_box = max(max(abs(sl["bbox"][0][j] - mb[0][j]), abs(sl["bbox"][1][j] - mb[1][j])) for j in range(3))
+        d_vol = abs(sl["volume"] - sl["model_volume"]) / sl["model_volume"]
+        ok = sl["bytes_ok"] and sl["triangles"] > 0 and d_vol < 0.01 and d_box < 0.2
+        q.add(OK if ok else BLOCK, "EXP-STL", f"STL releído: {sl['triangles']} triángulos, volumen {sl['volume'] / 1e6:.4f} dm³ "
+              f"(sólidos {sl['model_volume'] / 1e6:.4f} dm³, teselado a 0,1 mm), envolvente con desviación máxima "
+              f"{d_box:.3f} mm; unidades mm, ejes del modelo.", expected=round(sl["model_volume"], 1),
+              obtained=round(sl["volume"], 1), difference=round(d_vol, 6),
+              criterion="Volumen ±1 % (teselado) y envolvente ±0,2 mm respecto a los sólidos B-rep", action="Regenerar el STL")
+    for nd in files.get("nesting_dxf", []):
+        ok = nd["errors"] == 0 and nd["cut_contours"] == nd["expected_parts"] and nd["format"] is not None and \
+            abs(nd["format"][0] - nd["expected_format"][0]) < 0.01 and abs(nd["format"][1] - nd["expected_format"][1]) < 0.01
+        q.add(OK if ok else BLOCK, "EXP-DXF-ANIDADO", f"{nd['file']}: {nd['cut_contours']} contornos exteriores (anidado "
+              f"{nd['expected_parts']}), chapa {nd['format'][0]:.1f}×{nd['format'][1]:.1f} mm (anidado "
+              f"{nd['expected_format'][0]:g}×{nd['expected_format'][1]:g})." if nd["format"] else f"{nd['file']}: sin contorno de chapa.",
+              expected=nd["expected_parts"], obtained=nd["cut_contours"],
+              criterion="El DXF del anidado tiene las mismas piezas y la misma chapa que el anidado del plan",
+              action="Regenerar el anidado")
     for dx in files.get("dxf", []):
         ok = dx["errors"] == 0 and dx["closed_contours"] and dx["insunits"] == 4 and \
             abs(dx["width"] - dx["expected"][0]) < 0.01 and abs(dx["height"] - dx["expected"][1]) < 0.01
@@ -229,6 +423,8 @@ def drawing_consistency(model, drawings: dict) -> dict:
             expected[f"{p.ref}_ESPESOR"] = p.spec.t
         if isinstance(p, ProfilePart):
             expected[f"L_{p.ref}"] = p.length
+        # cantidades impresas en el despiece frente a las instancias del 3D
+        expected[f"CANT_{p.ref}"] = sum(1 for i in model.instances if i.part.key == p.key)
     mism, checked = [], 0
     for sh in drawings["sheets"]:
         for dm in sh["dims"]:

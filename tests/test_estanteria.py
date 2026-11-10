@@ -48,7 +48,9 @@ def test_unanchored_tips_anchored_reports_anchor_tension():
     # anclada: tracción por taco comprobada frente a la capacidad del taco elegido por cálculo
     anch = regenerate("estanteria", {**BASE, "CARGA_POR_NIVEL": 150, "ANCLAJE": "al_suelo"})
     c = next(c for c in anch.eng["checks"] if c["id"] == "E.ANCLAJE")
-    assert c["status"] == "CUMPLE" and 0 < c["value"] <= c["limit"]
+    # resistencia del taco de catálogo genérico: el cálculo cumple pero queda PENDIENTE DE VALIDACIÓN (ETA del taco)
+    assert c["status"] == "PENDIENTE_VALIDACION" and 0 < c["value"] <= c["limit"]
+    assert "catálogo genérico" in c["details"]["validacion"]
     assert anch.model.params.sources["TACO_ANCLAJE"] == "calculo"
     assert sum(1 for i in anch.model.instances if i.part.role == "anclaje") == 4
     assert anch.eng["status"] == "CUMPLE" and anch.qa.result()["blocking"] == 0 and anch.fix is None

@@ -343,11 +343,82 @@ function GeneratePanel({ project, design, stale, busy, onGenerate, reload }: { p
   );
 }
 
+/** Aprobación técnica de la última revisión: nueve estados encadenados, validaciones pendientes con su documento de referencia
+ *  y firmas de fabricabilidad, cálculo, aprobación y liberación (cada firma exige las etapas anteriores). */
+function ApprovalPanel({ project, reload }: { project: Project; reload: () => void }) {
+  const ap = project.approval;
+  const [who, setWho] = useState("");
+  const [refs, setRefs] = useState<Record<string, string>>({});
+  const [msg, setMsg] = useState("");
+  if (!ap || !ap.gates?.length) return <p className="muted">Aprobación técnica: emita una revisión para iniciar el flujo de aprobación.</p>;
+  const sign = async (stage: string) => { try { await api.signoff(project.code, stage, who); setMsg(""); reload(); } catch (e) { setMsg((e as Error).message); } };
+  const validate = async (code: string) => { try { await api.validate(project.code, code, who, refs[code] ?? ""); setMsg(""); reload(); } catch (e) { setMsg((e as Error).message); } };
+  const STAGES: [string, string, string][] = [["fabricabilidad", "Firmar revisión de fabricabilidad", "fabricabilidad_revisada"], ["calculo", "Firmar validación del cálculo", "calculo_validado"],
+    ["aprobacion", "Aprobar técnicamente", "aprobado_tecnicamente"], ["liberacion", "Liberar para fabricación", "liberado_fabricacion"]];
+  const sig = ap.records?.signoffs ?? {};
+  return (
+    <div className="approval">
+      <h4>Aprobación técnica · revisión {ap.revision}: <span className={ap.state === "liberado_fabricacion" ? "good" : "warn"}>{ap.label}</span></h4>
+      <ol className="gates">{ap.gates.map((g: Dict) => <li key={g.id} className={g.ok ? "good" : "pend"}><b>{g.ok ? "✓" : "○"} {g.label}</b>
+        {g.signoff ? <span className="muted"> · {g.signoff.by} ({g.signoff.date})</span> : null}
+        {!g.ok && g.reasons?.length ? <span className="muted"> — {g.reasons.join("; ")}</span> : null}</li>)}</ol>
+      {ap.records?.legacy && <p className="muted">Antecedente migrado: {ap.records.legacy.status} ({ap.records.legacy.validated_by ?? "—"}). {ap.records.legacy.note}</p>}
+      <div className="row"><input placeholder="Técnico que valida o firma" value={who} onChange={(e) => setWho(e.target.value)} /></div>
+      {ap.open_validations?.length ? <>
+        <p className="muted">Validaciones pendientes (cada una exige la referencia del documento que la justifica: ficha técnica, ETA, WPS, certificado, anejo nacional):</p>
+        <table className="grid"><tbody>{ap.open_validations.map((c: string) => <tr key={c}><td>{c}</td>
+          <td><input placeholder="Referencia del documento" value={refs[c] ?? ""} onChange={(e) => setRefs((x) => ({ ...x, [c]: e.target.value }))} /></td>
+          <td><button className="mini" onClick={() => validate(c)}>Registrar validación</button></td></tr>)}</tbody></table></> : null}
+      {Object.keys(ap.records?.validations ?? {}).length ? <p className="muted">Validaciones registradas: {Object.entries(ap.records.validations).map(([c, v]: [string, any]) =>
+        `${c} (${v.reference}, ${v.by})`).join(" · ")}</p> : null}
+      <div className="row">{STAGES.map(([st, label, gate]) => <button key={st} disabled={!!sig[st] || !who.trim()} onClick={() => sign(st)}
+        title={ap.gates.find((g: Dict) => g.id === gate)?.reasons?.join("; ")}>{sig[st] ? `${label} ✓` : label}</button>)}</div>
+      {ap.release_blockers?.length ? <p className="bad">Bloqueos de liberación abiertos: {ap.release_blockers.join(", ")}</p> : null}
+      {msg && <p className="bad">{msg}</p>}
+    </div>
+  );
+}
+
+/** Inventario de retales reutilizables: los compatibles se ofrecen al plan de corte y al anidado; al liberar una revisión se
+ *  consumen los usados y se dan de alta los nuevos. */
+function InventoryPanel() {
+  const [items, setItems] = useState<Dict[] | null>(null);
+  const [f, setF] = useState<Dict>({ kind: "barra", profile: "", material: "", thickness: "", length: "", width: "" });
+  const [msg, setMsg] = useState("");
+  const load = async () => { try { setItems(await api.remnants("disponible")); } catch (e) { setMsg((e as Error).message); } };
+  useEffect(() => { load(); }, []);
+  const add = async () => {
+    try {
+      await api.addRemnant({ kind: f.kind, material: f.material, length: +f.length, profile: f.kind === "barra" ? f.profile : null,
+        thickness: f.kind === "chapa" ? +f.thickness : null, width: f.kind === "chapa" ? +f.width : null });
+      setMsg(""); load();
+    } catch (e) { setMsg((e as Error).message); }
+  };
+  return (
+    <div className="inventory">
+      <h4>Inventario de retales reutilizables</h4>
+      {items && !items.length ? <p className="muted">Sin retales disponibles. Se dan de alta al liberar una revisión para fabricación o manualmente.</p> : null}
+      {items?.length ? <table className="grid"><thead><tr><th>Retal</th><th>Tipo</th><th>Perfil / espesor</th><th>Material</th><th>Dimensiones mm</th><th>Origen</th></tr></thead>
+        <tbody>{items.map((r) => <tr key={r.id}><td>{r.id}</td><td>{r.kind}</td><td>{r.kind === "barra" ? r.profile : `e=${fmt(r.thickness)} mm`}</td><td>{r.material}</td>
+          <td>{r.kind === "barra" ? fmt(r.length, 0) : `${fmt(r.length, 0)} × ${fmt(r.width, 0)}`}</td><td>{r.origin}</td></tr>)}</tbody></table> : null}
+      <div className="row">
+        <select value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}><option value="barra">barra</option><option value="chapa">chapa</option></select>
+        {f.kind === "barra" ? <input placeholder="Perfil (p. ej. RHS 40x20x2)" value={f.profile} onChange={(e) => setF({ ...f, profile: e.target.value })} />
+          : <input placeholder="Espesor mm" value={f.thickness} onChange={(e) => setF({ ...f, thickness: e.target.value })} />}
+        <input placeholder="Material (p. ej. S235JRH)" value={f.material} onChange={(e) => setF({ ...f, material: e.target.value })} />
+        <input placeholder="Longitud mm" value={f.length} onChange={(e) => setF({ ...f, length: e.target.value })} />
+        {f.kind === "chapa" ? <input placeholder="Anchura mm" value={f.width} onChange={(e) => setF({ ...f, width: e.target.value })} /> : null}
+        <button className="mini" onClick={add}>Añadir retal</button>
+      </div>
+      {msg && <p className="bad">{msg}</p>}
+    </div>
+  );
+}
+
 function DocsPanel({ project, reload, design, stale, compact }: { project: Project; reload: () => void; design: Dict | null; stale: boolean; compact?: boolean }) {
   const [job, setJob] = useState<Dict | null>(null);
   const [files, setFiles] = useState<Record<string, Dict[]>>({});
   const [msg, setMsg] = useState("");
-  const [tech, setTech] = useState("");
   const last = project.revisions.at(-1);
   async function revision() {
     try { const r = await api.revision(project.code, "Emisión desde el configurador", project.designer || "Ingeniería"); setMsg(`Revisión ${r.rev} emitida.`); reload(); }
@@ -368,13 +439,16 @@ function DocsPanel({ project, reload, design, stale, compact }: { project: Proje
   }
   async function loadFiles(rev: string) { const f = await api.files(project.code, rev); setFiles((x) => ({ ...x, [rev]: f.files })); }
   async function status(s: string) {
-    try { await api.status(project.code, s, "Ingeniería", tech || undefined); reload(); setMsg(""); } catch (e) { setMsg((e as Error).message); }
+    try { await api.status(project.code, s, "Ingeniería"); reload(); setMsg(""); } catch (e) { setMsg((e as Error).message); }
   }
   return (
     <div className="docs">
       <div className="row">
         <button disabled={!design || stale} onClick={revision} title="Congela los parámetros resueltos en una revisión inmutable">Emitir revisión</button>
         {last && !last.dossier && <button className="primary" disabled={job?.status === "running"} onClick={() => dossier(last.rev)}>GENERAR EXPEDIENTE DE FABRICACIÓN</button>}
+        {last && last.dossier && project.approval?.gates?.some((g: Dict) => g.id === "liberado_fabricacion" && g.reasons?.some((r: string) => r.includes("regenerarse")))
+          && ["aprobado_tecnicamente", "liberado_fabricacion"].includes(project.approval?.state)
+          && <button className="primary" disabled={job?.status === "running"} onClick={() => dossier(last.rev)}>Nueva edición del expediente (aprobado)</button>}
         {msg && <span className="muted">{msg}</span>}
       </div>
       {IS_LOCAL && <p className="local-note">El expediente se genera aquí y se descarga como un único ZIP: 01 STEP del conjunto y de cada pieza, STL y JSON
@@ -387,18 +461,18 @@ function DocsPanel({ project, reload, design, stale, compact }: { project: Proje
           <div className="scroll-x"><table className="grid"><thead><tr><th>Rev.</th><th>Fecha</th><th>Producto</th><th>Masa</th><th>Cálculo</th><th>Control de calidad</th><th>Expediente</th></tr></thead>
             <tbody>{project.revisions.map((r) => (
               <tr key={r.rev}><td>{r.rev}</td><td>{r.created.replace("T", " ")}</td><td>{r.product_code}</td><td>{fmt(r.mass_kg, 2)} kg</td><td>{r.structural}</td>
-                <td>{r.qa?.summary}</td><td>{r.dossier ? (IS_LOCAL ? <><button className="mini" onClick={() => dossier(r.rev)}>descargar ZIP</button> · <a onClick={() => loadFiles(r.rev)}>archivos</a></>
+                <td>{r.qa?.summary}{(r as Dict).affected_documents?.length ? <div className="muted small">Documentos afectados por los cambios: {(r as Dict).affected_documents.join(", ")}</div> : null}</td><td>{r.dossier ? (IS_LOCAL ? <><button className="mini" onClick={() => dossier(r.rev)}>descargar ZIP</button> · <a onClick={() => loadFiles(r.rev)}>archivos</a></>
                   : <><a href={api.fileUrl(project.code, r.rev, "expediente.zip") ?? undefined}>ZIP</a> · <a onClick={() => loadFiles(r.rev)}>archivos</a></>) :
                   <button className="mini" onClick={() => dossier(r.rev)}>generar</button>}</td></tr>))}</tbody></table></div>
           {Object.entries(files).map(([rev, fl]) => (
             <div key={rev} className="filelist"><h4>Expediente revisión {rev}</h4>
               {fl.map((f) => <div key={f.path}>{IS_LOCAL ? <span>{f.path}</span> : <a href={api.fileUrl(project.code, rev, f.path) ?? undefined} target="_blank">{f.path}</a>} <span className="muted">{Math.max(1, Math.round(f.bytes / 1024))} kB · sha256 {f.sha256.slice(0, 12)}…</span></div>)}
             </div>))}
+          <ApprovalPanel project={project} reload={reload} />
+          <InventoryPanel />
           <h4>Estado del proyecto</h4>
+          <p className="muted">«Aprobado técnicamente» y «Liberado para fabricación» se alcanzan con las firmas de la aprobación técnica.</p>
           <div className="row">
-            <input id="tecnico" placeholder="Técnico competente que valida" value={tech} onChange={(e) => setTech(e.target.value)} />
-            <button onClick={() => status("validado")}>Validar</button>
-            <button onClick={() => status("preparado_fabricacion")}>Preparado para fabricación</button>
             <button onClick={() => status("fabricado")}>Fabricado</button>
             <button onClick={() => status("archivado")}>Archivar</button>
           </div>

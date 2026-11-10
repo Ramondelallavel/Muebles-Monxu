@@ -242,6 +242,7 @@ class Armario(Estanteria):
                 masses.extend({"member": legs[k], "point": (model.instance(legs[k]).axis[0][0],
                                                             model.instance(legs[k]).axis[0][1], z0 + z),
                                "mass_kg": pm / len(pts), "label": name} for k in legs_k for z in zs)
+                model.structure.setdefault("attached_instances", []).append(iid)
             # fondo: X local = X, Y local = Z, espesor según -Y; cubre los cantos traseros de los laterales
             zb = d["enc_zs_back"]
             Wb = A + 2 * (gp + tp)
@@ -256,6 +257,7 @@ class Armario(Estanteria):
             masses.extend({"member": legs[k], "point": (model.instance(legs[k]).axis[0][0],
                                                         model.instance(legs[k]).axis[0][1], z0 + z),
                            "mass_kg": pm / len(pts), "label": "Fondo"} for k in ("TI", "TD") for z in zb)
+            model.structure.setdefault("attached_instances", []).append("PAN.FONDO")
         n = d["enc_n_doors"]
         if n:
             self._doors(model, ctx, d, legs, masses)
@@ -320,6 +322,9 @@ class Armario(Estanteria):
                 inst = model.instance(legs[leg_k])
                 masses.extend({"member": legs[leg_k], "point": (inst.axis[0][0], inst.axis[0][1], z),
                                "mass_kg": (pm + extra) / nh, "label": f"Puerta {side}".strip()} for z in zh)
+                model.structure.setdefault("attached_instances", []).extend(
+                    [iid] + [f"{iid}.BISAGRA.{j}" for j in range(1, len(zh) + 1)]
+                    + ([f"{iid}.MANETA"] if (n == 1 or not hinge_left) else []))
 
     # ------------------------------------------------------------------ cálculo, cotas y montaje
     def _shelf_structure(self, model, d, legs):
@@ -330,7 +335,7 @@ class Armario(Estanteria):
         st["assembly_texts"] = {
             **st.get("assembly_texts", {}),
             "PAN": "Presentar los laterales contra la cara exterior de los montantes y atornillarlos a las tuercas "
-                   "remachables M6 (8 N·m), de abajo arriba; después, el fondo, que cubre los cantos traseros de los "
+                   "remachables, de abajo arriba; después, el fondo, que cubre los cantos traseros de los "
                    "laterales. Los taladros grandes de los paneles alojan las cabezas de los tornillos de las bandejas.",
             "PUE": ("Remachar las bisagras de pernio a la puerta y al lateral, con la puerta calzada a 2 mm del suelo del "
                     "armario; comprobar el cierre y montar la maneta con cerradura en el canto libre." if n == 1 else

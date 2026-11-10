@@ -335,9 +335,9 @@ class EstanteriaBateria(Estanteria):
               "member_roles": {i.id: i.role for i in model.instances if i.structural},
               "assembly_texts": {
                   "EST": f"Recepción de la estructura soldada de {N} módulos (montantes intermedios comunes). Insertar las "
-                         "tuercas remachables M6 en los taladros Ø9,1 de largueros y travesaños de todos los niveles.",
+                         "tuercas remachables en los taladros de largueros y travesaños de todos los niveles.",
                   "APO": "Roscar los pies niveladores en las tuercas soldadas. Nivelar y, si está previsto, anclar al "
                          "suelo antes de cargar la estantería.",
                   "BAL": "Colocar las bandejas de abajo arriba y de un extremo al otro, con las escotaduras alrededor de "
-                         "los montantes, y fijarlas con tornillos ISO 7380 M6x12 (8 N·m)."}}
+                         "los montantes, y fijarlas con la tornillería indicada."}}
         return st

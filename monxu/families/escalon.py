@@ -518,7 +518,7 @@ class Escalon(MesaIndustrial):
                     "PEL": "Colocar las chapas sobre cada bastidor, enrasadas con él, y soldarlas con cordones "
                            f"discontinuos de {STITCH_L:g} mm cada {STITCH_PITCH:g} mm, alternos. Aplicar el "
                            "recubrimiento antideslizante antes del montaje."},
-                "assembly_notes": ["HERRAMIENTAS:", "· Llave fija 17/19 para contratuerca de pies", "· Nivel de burbuja",
+                "assembly_notes": ["HERRAMIENTAS:", "· Nivel de burbuja",
                                    "· Equipo de soldadura MAG (chapas)", "",
                                    "USO:", "· Carga de proyecto: personas con herramienta de mano",
                                    "· Mantener los peldaños limpios y secos", "",

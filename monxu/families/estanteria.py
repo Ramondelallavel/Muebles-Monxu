@@ -399,9 +399,9 @@ class Estanteria(MesaIndustrial):
                 "leg_ids": list(legs.values()), "product_word": "estantería",
                 "member_roles": {i.id: i.role for i in model.instances if i.structural},
                 "assembly_texts": {
-                    "EST": "Recepción de la estructura soldada y pintada. Insertar las tuercas remachables M6 en los "
-                           "taladros Ø9,1 de largueros y travesaños de todos los niveles.",
+                    "EST": "Recepción de la estructura soldada y pintada. Insertar las tuercas remachables en los "
+                           "taladros de largueros y travesaños de todos los niveles.",
                     "APO": "Roscar los pies niveladores en las tuercas soldadas. Nivelar y, si está previsto, anclar al "
                            "suelo antes de cargar la estantería.",
                     "BAL": "Colocar las bandejas de abajo arriba sobre cada bastidor, con las escotaduras alrededor de "
-                           "los montantes, y fijarlas con tornillos ISO 7380 M6x12 (8 N·m)."}}
+                           "los montantes, y fijarlas con la tornillería indicada."}}

@@ -7,10 +7,14 @@ import { viewerPayload } from "../engine/geometry";
 import { ParamError } from "../engine/model";
 import * as A from "../engine/assistant";
 import { buildDossier } from "./dossier";
+import * as AP from "../engine/approval";
+import { affectedDocuments } from "../engine/dependencies";
 
 export const STATUSES = ["en_configuracion", "en_diseno", "pendiente_validacion", "validado", "preparado_fabricacion", "fabricado", "archivado"];
-export const STATUS_LABELS = { en_configuracion: "En configuración", en_diseno: "En diseño", pendiente_validacion: "Pendiente de validación", validado: "Validado",
-  preparado_fabricacion: "Preparado para fabricación", fabricado: "Fabricado", archivado: "Archivado" };
+export const STATUS_LABELS = { en_configuracion: "En configuración", en_diseno: "En diseño", pendiente_validacion: "Pendiente de validación", validado: "Aprobado técnicamente",
+  preparado_fabricacion: "Liberado para fabricación", fabricado: "Fabricado", archivado: "Archivado" };
+/** Versión del formato de proyecto: las migraciones se aplican al leer y se guardan (= storage/db.py, SCHEMA_VERSION). */
+const SCHEMA_VERSION = 2;
 const now = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 19);
 
 // ---------------------------------------------------------------------------- almacenamiento
@@ -24,16 +28,18 @@ function getStore() {
     let uid = null;
     try { uid = user ? await user.id() : null; } catch { uid = null; }
     const memSeq = {};
+    let memInv = [];
     if (!db || !uid) return { kind: "memoria", list: async () => [...mem.values()], put: async (p) => { mem.set(p.code, p); }, del: async (code) => { mem.delete(code); },
-      seq: async (year) => memSeq[year] ?? 0, setSeq: async (year, n) => { memSeq[year] = Math.max(memSeq[year] ?? 0, n); }, label: "Memoria del navegador (se pierde al cerrar)" };
+      seq: async (year) => memSeq[year] ?? 0, setSeq: async (year, n) => { memSeq[year] = Math.max(memSeq[year] ?? 0, n); },
+      inv: async () => memInv.map((x) => ({ ...x })), setInv: async (items) => { memInv = items.map((x) => ({ ...x })); }, label: "Memoria del navegador (se pierde al cerrar)" };
     const col = db.collection("data/users/" + uid);
     const cache = new Map();
-    let loaded = false, seq = {};
+    let loaded = false, seq = {}, invItems = [];
     const load = async () => {
       if (loaded) return;
       const t = new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 10000));
       const snap = await Promise.race([col.get(), t]);
-      snap.docs.forEach((d) => { const v = d.data(); if (d.id === SEQ_DOC) seq = v?.por_anio ?? {}; else if (v?.code) cache.set(v.code, v); });
+      snap.docs.forEach((d) => { const v = d.data(); if (d.id === SEQ_DOC) seq = v?.por_anio ?? {}; else if (d.id === INV_DOC) invItems = v?.items ?? []; else if (v?.code) cache.set(v.code, v); });
       loaded = true;
     };
     return { kind: "db", label: "Base de datos privada del artefacto (sólo usted)", list: async () => { try { await load(); } catch { /* sin conexión: caché */ } return [...cache.values()]; },
@@ -41,12 +47,15 @@ function getStore() {
       del: async (code) => { await col.doc(code).delete(); cache.delete(code); },
       // claves «a2026»: nombres de campo no numéricos
       seq: async (year) => { try { await load(); } catch { /* caché */ } return Number(seq[`a${year}`]) || 0; },
-      setSeq: async (year, n) => { seq = { ...seq, [`a${year}`]: Math.max(Number(seq[`a${year}`]) || 0, n) }; await col.doc(SEQ_DOC).set({ por_anio: seq }); } };
+      setSeq: async (year, n) => { seq = { ...seq, [`a${year}`]: Math.max(Number(seq[`a${year}`]) || 0, n) }; await col.doc(SEQ_DOC).set({ por_anio: seq }); },
+      inv: async () => { try { await load(); } catch { /* caché */ } return invItems.map((x) => ({ ...x })); },
+      setInv: async (items) => { invItems = items.map((x) => ({ ...x })); await col.doc(INV_DOC).set({ items: JSON.parse(JSON.stringify(invItems)) }); } };
   })();
   return storeP;
 }
 export const storageLabel = async () => (await getStore()).label;
-const SEQ_DOC = "contador";            // último número de proyecto emitido: los códigos no se reutilizan al borrar
+const SEQ_DOC = "contador";
+const INV_DOC = "inventario_retales";   // inventario de retales reutilizables (barras y chapas)            // último número de proyecto emitido: los códigos no se reutilizan al borrar
 const CODE_RX = /^P-(\d{4})-(\d{4,})$/;
 /** Siguiente código del año: mayor que cualquiera emitido (existente o borrado). */
 async function nextCode() {
@@ -57,7 +66,45 @@ async function nextCode() {
   return `P-${year}-${String(n).padStart(4, "0")}`;
 }
 
-async function all() { return (await (await getStore()).list()).sort((a, b) => (a.code < b.code ? 1 : -1)); }
+/** v2: la validación anterior a la auditoría no cubre las comprobaciones nuevas: se conserva como antecedente en la última
+ *  revisión y el proyecto vuelve a «pendiente de validación» (salvo lo ya fabricado). */
+function migrate(p) {
+  if ((p.schema ?? 1) >= SCHEMA_VERSION) return false;
+  if (["validado", "preparado_fabricacion", "fabricado"].includes(p.status) && (p.revisions ?? []).length) {
+    const last = p.revisions.at(-1);
+    last.approval = { ...(last.approval ?? {}), legacy: { status: p.status, validated_by: p.validated_by ?? null, migrated: now(),
+      note: "Validación anterior a la auditoría de 2026-11: no incluye las nuevas comprobaciones; debe repetirse con el flujo de aprobación." } };
+    const old = p.status;
+    if (p.status !== "fabricado") p.status = "pendiente_validacion";
+    log(p, "migracion", { schema: SCHEMA_VERSION, from: old, to: p.status, validated_by: p.validated_by ?? null }, "sistema");
+  }
+  p.schema = SCHEMA_VERSION;
+  return true;
+}
+async function all() {
+  const st = await getStore();
+  const list = await st.list();
+  for (const p of list) if (migrate(p)) { try { await st.put(JSON.parse(JSON.stringify(p))); } catch { /* se guarda en la próxima escritura */ } }
+  return list.sort((a, b) => (a.code < b.code ? 1 : -1));
+}
+/** QA compacto que se guarda con la revisión: las comprobaciones no satisfactorias (código, nivel, bloqueo de liberación). */
+const compactQa = (q) => ({ result: q.result, summary: q.summary, blocking: q.blocking, release_blockers: q.release_blockers ?? [],
+  items: q.items.filter((i) => i.level !== "ok").map((i) => ({ code: i.code, level: i.level, severity: i.severity, release_block: !!i.release_block, message: i.message.slice(0, 400) })) });
+/** Estado de aprobación de una revisión (= Store._evaluate del servidor). */
+const availableStock = async () => (await (await getStore()).inv()).filter((x) => x.status === "disponible");
+/** Retales que usa el plan y retales reutilizables que produce (= release_movements del servidor). */
+function releaseMovements(plan) {
+  const used = [...plan.cutting.flatMap((c) => c.stock_used ?? []), ...plan.nesting.filter((n) => n.feasible).flatMap((n) => n.stock_used ?? [])];
+  const produced = [...plan.purchases.remnants.filter((x) => x.kind === "barra" && x.reusable).map((x) => ({ kind: "barra", profile: x.profile, material: x.material, length: x.length })),
+    ...plan.purchases.remnants.filter((x) => x.kind === "chapa").map((x) => ({ kind: "chapa", material: x.material, thickness: x.thickness, length: x.length, width: x.width }))];
+  return { used, produced };
+}
+const evaluateRev = (r) => AP.evaluate(r.qa, r.structural, r.dossier ? { qa: r.dossier.qa, state: r.dossier.state ?? null } : null, r.approval ?? {});
+const approvalOf = (p, rev = null) => {
+  const r = rev ? p.revisions.find((x) => x.rev === rev) : p.revisions.at(-1);
+  if (!r) return { state: null, label: "Sin revisión", gates: [], open_validations: [], release_blockers: [], records: {} };
+  return { ...evaluateRev(r), revision: r.rev, records: r.approval ?? {} };
+};
 async function get(code) { const p = (await all()).find((x) => x.code === code); if (!p) throw new Error(`Proyecto no encontrado: ${code}`); return JSON.parse(JSON.stringify(p)); }
 async function put(p) {
   p.updated = now();
@@ -93,17 +140,17 @@ function applyParams(p, values, sources = null, replace = false, author = "") {
 /** Mensaje del asistente tal como se guarda: texto y botones de opción. */
 const chatEntry = (r) => ({ who: "ia", text: r.reply,
   questions: (r.questions ?? []).filter((q) => q.options?.length).map((q) => ({ param: q.param, label: q.label ?? q.param, options: q.options })) });
-const projectDict = (p) => ({ ...p, status_label: STATUS_LABELS[p.status],
+const projectDict = (p) => ({ ...p, status_label: STATUS_LABELS[p.status], approval: (p.revisions ?? []).length ? approvalOf(p) : null,
   revisions: (p.revisions ?? []).map((r) => ({ rev: r.rev, created: r.created, comment: r.comment, author: r.author, product_code: r.product_code, mass_kg: r.mass_kg,
-    structural: r.structural, qa: r.qa, dossier: !!r.dossier, changes: r.changes })) });
+    structural: r.structural, qa: r.qa, dossier: !!r.dossier, changes: r.changes, affected_documents: r.approval?.affected_documents ?? [] })) });
 
 const jobs = new Map();
 const designCache = new Map();
-async function designFor(fam, values, sources, onProgress) {
-  const key = JSON.stringify([fam, values, sources]);
+async function designFor(fam, values, sources, onProgress, stock = null) {
+  const key = JSON.stringify([fam, values, sources, (stock ?? []).map((x) => x.id).sort()]);
   if (designCache.has(key)) return designCache.get(key);
   try {
-    const r = regenerate(fam, values, sources, onProgress);
+    const r = regenerate(fam, values, sources, onProgress, stock);
     if (designCache.size > 6) designCache.delete(designCache.keys().next().value);
     designCache.set(key, r);
     return r;
@@ -153,7 +200,7 @@ export const localApi = {
   },
   design: async (code, onProgress) => {
     const p = await get(code);
-    const { model, summary } = await designFor(p.family, p.working_params, p.working_sources, onProgress);
+    const { model, summary } = await designFor(p.family, p.working_params, p.working_sources, onProgress, await availableStock());
     return { design: summary, viewer: viewerPayload(model) };
   },
   /** Interpreta el mensaje, adopta lo no indicado y, con `apply`, aplica al proyecto lo que cambia en este turno. La conversación se
@@ -203,7 +250,8 @@ export const localApi = {
   assistantPrompt: async (code, message) => { const p = await get(code); const st = p.assistant_state?.family ? p.assistant_state : A.newState(p.family); return A.llmPrompt(message, st); },
   revision: async (code, comment, author) => {
     const p = await get(code);
-    const { model, summary } = await designFor(p.family, p.working_params, p.working_sources);
+    const stock = await availableStock();
+    const { model, summary } = await designFor(p.family, p.working_params, p.working_sources, null, stock);
     if (summary.qa.blocking) throw new Error("El diseño tiene errores bloqueantes: no puede emitirse revisión.");
     const prev = p.revisions.at(-1);
     const letter = prev ? String.fromCharCode(prev.rev.charCodeAt(0) + 1) : "A";
@@ -211,7 +259,7 @@ export const localApi = {
     const diff = prev ? Object.fromEntries(Object.entries(resolved).filter(([k, v]) => JSON.stringify(prev.params[k]) !== JSON.stringify(v)).map(([k, v]) => [k, [prev.params[k] ?? null, v]])) : {};
     p.revisions.push({ rev: letter, created: now(), comment, author, params: resolved, sources: { ...model.params.sources }, product_code: model.product_code,
       mass_kg: summary.bom.totals.total_mass, structural: summary.engineering.status,
-      qa: { result: summary.qa.result, summary: summary.qa.summary, blocking: summary.qa.blocking }, dossier: null, changes: diff });
+      qa: compactQa(summary.qa), dossier: null, changes: diff, approval: { affected_documents: prev ? affectedDocuments(summary.dependencies, Object.keys(diff)) : [], stock } });
     log(p, "revision", { rev: letter, comment, changes: diff }, author);
     await put(p);
     return { rev: letter, project: projectDict(p) };
@@ -225,14 +273,19 @@ export const localApi = {
     const t0 = performance.now();
     onProgress?.("regenerando la revisión congelada");
     await new Promise((res) => setTimeout(res, 0));
-    const { model, summary } = regenerate(p.family, r.params, r.sources);
-    const out = await buildDossier(p, r, model, summary, onProgress);
+    const { model, summary } = regenerate(p.family, r.params, r.sources, null, r.approval?.stock ?? []);
+    const ev = approvalOf(p, rev);
+    const out = await buildDossier({ ...p, approval_eval: ev }, r, model, summary, onProgress);
     if (out.qa.blocking) throw new Error("La verificación de los archivos exportados ha fallado: no se publica el expediente. " + out.qa.items.filter((i) => i.level === "bloqueante").map((i) => i.message).join(" "));
     const saved = await deliver(out.name + ".zip", out.zip);
-    if (!r.dossier) {
-      r.dossier = { name: out.name, created: now(), files: out.files, qa: { result: out.qa.result, summary: out.qa.summary, blocking: out.qa.blocking } };
+    // se guarda la primera vez y, como nueva edición, cuando la revisión se ha aprobado o liberado después de generarlo
+    const advanced = r.dossier && AP.STATES.indexOf(ev.state) > AP.STATES.indexOf(r.dossier.state ?? "diseno_generado")
+      && ["aprobado_tecnicamente", "liberado_fabricacion"].includes(ev.state);
+    if (!r.dossier || advanced) {
+      if (r.dossier) (r.approval ??= {}).editions = [...(r.approval.editions ?? []), { name: r.dossier.name, created: r.dossier.created, state: r.dossier.state ?? null }];
+      r.dossier = { name: out.name, created: now(), files: out.files, qa: compactQa(out.qa), state: ev.state };
       r.qa = r.dossier.qa;
-      log(p, "expediente", { rev, name: out.name, files: out.files.length });
+      log(p, "expediente", { rev, name: out.name, files: out.files.length, state: ev.state, edition: !!advanced });
       if (["en_configuracion", "en_diseno"].includes(p.status)) p.status = "pendiente_validacion";
       await put(p);
     }
@@ -248,11 +301,13 @@ export const localApi = {
     const last = p.revisions.at(-1);
     if (["validado", "preparado_fabricacion", "fabricado"].includes(status)) {
       if (!last || !last.dossier) throw new Error("Se requiere una revisión con expediente generado.");
-      if (last.structural !== "CUMPLE") throw new Error("La verificación estructural de la revisión no es CUMPLE: no puede validarse.");
-      if (last.qa?.blocking) throw new Error("La revisión tiene errores bloqueantes de control de calidad.");
+      const ev = evaluateRev(last), need = status === "validado" ? "aprobado_tecnicamente" : "liberado_fabricacion";
+      if (AP.STATES.indexOf(ev.state) < AP.STATES.indexOf(need)) {
+        const gt = ev.gates.find((x) => !x.ok);
+        throw new Error(`La revisión ${last.rev} está en «${ev.label}»: se requiere «${AP.LABELS[need]}»` + (gt ? ` (${gt.label}: ${gt.reasons.join("; ")})` : "") + ".");
+      }
     }
-    if (status === "validado") { if (!validated_by) throw new Error("La validación requiere el nombre del técnico competente."); p.validated_by = validated_by; }
-    if (["preparado_fabricacion", "fabricado"].includes(status) && !p.validated_by) throw new Error("El proyecto debe estar validado por un técnico competente.");
+    if (status === "validado" && validated_by) p.validated_by = validated_by;
     const old = p.status;
     p.status = status;
     log(p, "estado", { from: old, to: status, validated_by: validated_by ?? null }, user);
@@ -260,6 +315,69 @@ export const localApi = {
     return projectDict(p);
   },
   statuses: async () => STATUSES.map((s) => ({ id: s, label: STATUS_LABELS[s] })),
+  approval: async (code, rev = null) => approvalOf(await get(code), rev),
+  remnants: async (status = "disponible") => (await (await getStore()).inv()).filter((x) => !status || x.status === status),
+  addRemnant: async (b) => {
+    const { kind, material, length, profile = null, thickness = null, width = null } = b;
+    if (!["barra", "chapa"].includes(kind) || !(length > 0) || (kind === "chapa" && !(width && thickness)) || (kind === "barra" && !profile))
+      throw new Error("Retal no válido: barra con perfil y longitud, o chapa con espesor, largo y ancho.");
+    const st = await getStore(), items = await st.inv();
+    const n = items.reduce((m, it) => Math.max(m, +String(it.id).slice(2) || 0), 0) + 1;
+    const it = { id: `R-${String(n).padStart(5, "0")}`, kind, profile, material, thickness: thickness == null ? null : +thickness, length: +length, width: width == null ? null : +width,
+      origin: "manual", status: "disponible", created: now(), consumed_by: null };
+    await st.setInv([...items, it]);
+    return it;
+  },
+  /** Registra la validación de una comprobación PENDIENTE de la revisión con el documento que la justifica. */
+  validate: async (code, item, by, reference, comment = "", rev = null) => {
+    if (!by?.trim() || !reference?.trim()) throw new Error("La validación requiere el técnico y la referencia del documento que la justifica.");
+    const p = await get(code);
+    const r = rev ? p.revisions.find((x) => x.rev === rev) : p.revisions.at(-1);
+    if (!r) throw new Error("El proyecto no tiene revisiones.");
+    const pend = new Set([...(r.qa?.items ?? []), ...(r.dossier?.qa?.items ?? [])].filter((i) => i.level === "pendiente").map((i) => i.code));
+    if (!pend.has(item)) throw new Error(`${item} no es una validación pendiente de la revisión ${r.rev}.`);
+    r.approval ??= {};
+    (r.approval.validations ??= {})[item] = { by: by.trim(), reference: reference.trim(), comment, date: now().slice(0, 10) };
+    log(p, "validacion", { rev: r.rev, code: item, reference }, by);
+    await put(p);
+    return approvalOf(p, r.rev);
+  },
+  /** Firma de una etapa (fabricabilidad, cálculo, aprobación, liberación) si se cumplen las anteriores. */
+  signoff: async (code, stage, by, comment = "", rev = null) => {
+    if (!(stage in AP.SIGNOFFS)) throw new Error(`Etapa de firma no válida: ${stage}`);
+    if (!by?.trim()) throw new Error("La firma requiere el nombre del técnico.");
+    const p = await get(code);
+    const r = rev ? p.revisions.find((x) => x.rev === rev) : p.revisions.at(-1);
+    if (!r) throw new Error("El proyecto no tiene revisiones.");
+    const [ok, why] = AP.canSign(evaluateRev(r), stage);
+    if (!ok) throw new Error(`No puede firmarse «${AP.LABELS[AP.SIGNOFFS[stage]]}»: ${why}`);
+    let inv = null;
+    if (stage === "liberacion") {         // retales que consume y produce el plan de la revisión (instantánea de stock)
+      const { summary } = regenerate(p.family, r.params, r.sources, null, r.approval?.stock ?? []);
+      inv = releaseMovements(summary.manufacturing);
+      const avail = new Set((await availableStock()).map((x) => x.id));
+      const missing = inv.used.filter((i) => !avail.has(i));
+      if (missing.length) throw new Error(`Retales del plan ya no disponibles: ${missing.join(", ")}. Emita una revisión nueva.`);
+    }
+    r.approval ??= {};
+    (r.approval.signoffs ??= {})[stage] = { by: by.trim(), comment, date: now().slice(0, 10) };
+    const ev = evaluateRev(r), old = p.status;
+    if (stage === "aprobacion" && ["aprobado_tecnicamente", "liberado_fabricacion"].includes(ev.state)) { p.status = "validado"; p.validated_by = by.trim(); }
+    if (stage === "liberacion" && ev.state === "liberado_fabricacion") p.status = "preparado_fabricacion";
+    log(p, "firma", { rev: r.rev, stage, from: old, to: p.status, state: ev.state }, by);
+    let inventory = null;
+    if (inv && ev.state === "liberado_fabricacion") {
+      const st = await getStore(), items = await st.inv();
+      for (const it of items) if (inv.used.includes(it.id)) { it.status = "consumido"; it.consumed_by = `${p.code} Rev.${r.rev}`; }
+      let n = items.reduce((m, it) => Math.max(m, +String(it.id).slice(2) || 0), 0);
+      const added = inv.produced.map((x) => ({ id: `R-${String(++n).padStart(5, "0")}`, ...x, origin: `${p.code} Rev.${r.rev}`, status: "disponible", created: now(), consumed_by: null }));
+      await st.setInv([...items, ...added]);
+      inventory = { consumed: inv.used, added };
+      log(p, "inventario", { rev: r.rev, consumidos: inv.used, nuevos: added.map((x) => x.id) }, by);
+    }
+    await put(p);
+    return { ...approvalOf(p, r.rev), inventory };
+  },
   fileUrl: () => null,
 };
 

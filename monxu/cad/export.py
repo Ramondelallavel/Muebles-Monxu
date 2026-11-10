@@ -52,6 +52,28 @@ def export_stl(model, path: Path, tolerance: float = 0.1) -> Path:
     return path
 
 
+def verify_stl(path: Path) -> dict:
+    """Relee el STL (binario o ASCII): triángulos, volumen por el teorema de la divergencia y envolvente."""
+    import struct
+    import numpy as np
+    raw = Path(path).read_bytes()
+    tris = []
+    if raw[:5] == b"solid" and b"facet" in raw[:400]:
+        v = [list(map(float, ln.split()[1:4])) for ln in raw.decode("ascii", "ignore").splitlines()
+             if ln.strip().startswith("vertex")]
+        tris = np.array(v, float).reshape(-1, 3, 3)
+        ok = True
+    else:
+        n = struct.unpack_from("<I", raw, 80)[0]
+        ok = len(raw) == 84 + 50 * n
+        dt = np.dtype([("n", "<f4", 3), ("v", "<f4", (3, 3)), ("a", "<u2")])
+        tris = np.frombuffer(raw, dtype=dt, count=n, offset=84)["v"].astype(float)
+    a, b, c = tris[:, 0], tris[:, 1], tris[:, 2]
+    vol = float(np.einsum("ij,ij->i", a, np.cross(b, c)).sum() / 6)
+    pts = tris.reshape(-1, 3)
+    return {"triangles": len(tris), "bytes_ok": ok, "volume": vol, "bbox": [pts.min(0).tolist(), pts.max(0).tolist()]}
+
+
 def export_brep(model, path: Path) -> Path:
     model.compound().exportBrep(str(path))
     return path

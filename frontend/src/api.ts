@@ -20,7 +20,7 @@ export interface Revision {
 
 export interface Project {
   code: string; name: string; client: string; description: string; family: string; designer: string;
-  status: string; status_label: string; created: string; updated: string; validated_by: string | null;
+  status: string; status_label: string; created: string; updated: string; validated_by: string | null; approval?: Dict | null;
   working_params: Dict; working_sources: Dict; revisions: Revision[]; changes?: Dict[]; assistant_state?: Dict;
 }
 
@@ -72,6 +72,13 @@ const serverApi = {
   status: (code: string, status: string, user: string, validated_by?: string) =>
     req<Project>("POST", `/api/projects/${code}/status`, { status, user, validated_by }),
   statuses: () => req<{ id: string; label: string }[]>("GET", "/api/statuses"),
+  approval: (code: string, rev?: string | null) => req<Dict>("GET", `/api/projects/${code}/approval${rev ? `?rev=${rev}` : ""}`),
+  validate: (code: string, item: string, by: string, reference: string, comment = "", rev?: string | null) =>
+    req<Dict>("POST", `/api/projects/${code}/validations`, { code: item, by, reference, comment, rev: rev ?? null }),
+  signoff: (code: string, stage: string, by: string, comment = "", rev?: string | null) =>
+    req<Dict>("POST", `/api/projects/${code}/signoff`, { stage, by, comment, rev: rev ?? null }),
+  remnants: (status: string | null = "disponible") => req<Dict[]>("GET", `/api/remnants${status ? `?status=${status}` : "?status="}`),
+  addRemnant: (b: Dict) => req<Dict>("POST", "/api/remnants", b),
   fileUrl: (code: string, rev: string, path: string): string | null => `/api/projects/${code}/revisions/${rev}/files/${path}`,
 };
 

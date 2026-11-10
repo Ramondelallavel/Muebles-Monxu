@@ -103,7 +103,7 @@ def test_default_horizontal_hypothesis_anchors_by_rule():
     d = regenerate("mesa_industrial", {"LONGITUD": 1500, "ANCHURA": 700, "ALTURA": 900})
     assert (d.model.params.values["ANCLAJE"], d.model.params.sources["ANCLAJE"]) == ("al_suelo", "regla_diseno")
     anc = next(c for c in d.eng["checks"] if c["id"] == "E.ANCLAJE")
-    assert anc["status"] == "CUMPLE" and anc["value"] > 0
+    assert anc["status"] == "PENDIENTE_VALIDACION" and anc["value"] > 0     # taco de catálogo genérico: ETA pendiente
     assert not any(c["id"] == "E.VUELCO" for c in d.eng["checks"])
     assert any("300 N" in h for h in d.eng["hypotheses"])   # la hipótesis queda declarada
     assert d.eng["status"] == "CUMPLE"

@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .dxf import sheet_label
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -97,15 +98,18 @@ def export_excel(path: Path, info: dict[str, Any], bom: dict[str, Any], plan: di
     rows = []
     for c in plan["cutting"]:
         for b in c["bars"]:
-            rows.append([c["profile"], c["material"], b["bar"], c["bar_length"], len(b["cuts"]),
+            rows.append([c["profile"], c["material"], b["bar"], "retal " + str(b["stock_id"]) if b["source"] == "retal"
+                         else "comercial", b["length"], b["trim_start"], len(b["cuts"]), b["n_cuts"],
                          " + ".join(f"{x['ref'].split('-')[-1]}:{x['length']:g}" for x in b["cuts"]), b["used"],
-                         b["kerf_loss"], b["remnant"], "Sí" if b["remnant_reusable"] else "No"])
-    _, last = _table(wc, r0, ["Perfil", "Material", "Barra", "Long. barra (mm)", "Nº cortes", "Cortes (pos:long)",
-                              "Útil (mm)", "Pérdida sierra+refrentado (mm)", "Retal (mm)", "Retal aprovechable"],
-                     rows, "PlanCorte", [14, 12, 8, 14, 10, 70, 12, 16, 12, 14])
+                         b["kerf_total"], b["trim_end"], b["remnant"], b["remnant_status"]])
+    rws = [r + [f"=E{k2}-F{k2}-J{k2}-K{k2}-L{k2}-M{k2}"] for k2, r in enumerate(rows, start=r0 + 1)]
+    _, last = _table(wc, r0, ["Perfil", "Material", "Barra", "Origen", "Long. barra (mm)", "Despunte inicial (mm)",
+                              "Nº piezas", "Nº cortes", "Piezas (pos:long)", "Σ piezas (mm)", "Sierra (mm)",
+                              "Despunte final (mm)", "Retal final (mm)", "Estado del retal", "Balance (mm)"],
+                     rws, "PlanCorte", [14, 12, 7, 12, 12, 12, 9, 9, 60, 12, 10, 12, 12, 14, 11])
     k = last + 2
     wc.cell(k, 6, "Aprovechamiento global").font = Font(bold=True)
-    wc.cell(k, 7, f"=SUM(G{r0 + 1}:G{last})/SUM(D{r0 + 1}:D{last})").number_format = "0.0%"
+    wc.cell(k, 7, f"=SUM(J{r0 + 1}:J{last})/SUM(E{r0 + 1}:E{last})").number_format = "0.0%"
     # ------------------------------------------------------------------ chapa
     wn = wb.create_sheet("Anidado chapa")
     r0 = _header(wn, info, "ANIDADO DE CHAPA")
@@ -115,13 +119,13 @@ def export_excel(path: Path, info: dict[str, Any], bom: dict[str, Any], plan: di
             rows.append([n["material"], n["thickness"], "—", 0, None, None, None, n.get("reason")])
             continue
         for s in n["sheets"]:
-            rows.append([n["material"], n["thickness"], n["format"], s["sheet"], len(s["placements"]),
-                         round(s["parts_area_mm2"] / 1e6, 4), round(n["length"] * n["width"] / 1e6, 4),
+            rows.append([n["material"], n["thickness"], sheet_label(n, s), s["sheet"], len(s["placements"]),
+                         round(s["parts_area_mm2"] / 1e6, 4), round(s["length"] * s["width"] / 1e6, 4),
                          ", ".join(p["ref"].split("-")[-1] + ("(R)" if p["rot"] else "") for p in s["placements"])])
     rws = []
     for k2, r in enumerate(rows, start=r0 + 1):
         rws.append(r[:7] + [f"=IFERROR(F{k2}/G{k2},0)", r[7]])
-    _table(wn, r0, ["Material", "Espesor (mm)", "Formato", "Chapa nº", "Piezas", "Superficie piezas (m²)",
+    _table(wn, r0, ["Material", "Espesor (mm)", "Chapa comprada", "Chapa nº", "Piezas", "Superficie piezas (m²)",
                     "Superficie chapa (m²)", "Aprovechamiento", "Piezas (R = girada)"], rws, "Anidado",
            [12, 12, 12, 9, 8, 18, 18, 15, 50], {6: "0.0000", 7: "0.0000", 8: "0.0%"})
     # ------------------------------------------------------------------ compras
