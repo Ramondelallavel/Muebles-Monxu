@@ -198,7 +198,9 @@ export function stlBinary(model) {
 
 // ============================================================================ CSV
 export const csv = (header, rows) => "﻿" + [header, ...rows].map((r) => r.map((c) => {
-  const s = c === null || c === undefined ? "" : typeof c === "number" ? String(c).replace(".", ",") : String(c);
+  // número: notación fija (nunca «1e-6») y sin ruido de coma flotante, como pipeline.csv_cell (hasta 9 decimales)
+  const num = (x) => { if (Number.isInteger(x)) return String(x); const t = x.toFixed(9).replace(/0+$/, "").replace(/\.$/, ""); return (t === "-0" || t === "" ? "0" : t).replace(".", ","); };
+  const s = c === null || c === undefined ? "" : typeof c === "number" ? num(c) : String(c);
   return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }).join(";")).join("\r\n") + "\r\n";
 

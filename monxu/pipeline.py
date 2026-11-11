@@ -380,7 +380,11 @@ def csv_cell(c: Any) -> str:
     if isinstance(c, bool) or not isinstance(c, numbers.Real):
         return str(c)
     f = float(c)
-    return (str(int(f)) if f.is_integer() else repr(f)).replace(".", ",")
+    if f.is_integer():
+        return str(int(f))
+    # notación fija (nunca «1e-06») y sin ruido de coma flotante: hasta 9 decimales, sin ceros finales
+    txt = f"{f:.9f}".rstrip("0").rstrip(".")
+    return ("0" if txt in ("-0", "") else txt).replace(".", ",")
 
 
 def csv_text(header: list[str], rows: list[list[Any]]) -> str:

@@ -409,8 +409,8 @@ def test_csv_del_expediente_con_coma_decimal_y_las_mismas_celdas_que_el_navegado
     """CSV de «;»: números con coma decimal y enteros sin «.0» (con punto, una hoja de cálculo en español leería
     110.702 kg como 110 702); filas de totales y de lotes con todas sus celdas."""
     from monxu import pipeline as PL
-    assert [PL.csv_cell(v) for v in (6000.0, 110.702, 0, None, "RHS 40x20x2", -2.5)] == [
-        "6000", "110,702", "0", "", "RHS 40x20x2", "-2,5"]
+    assert [PL.csv_cell(v) for v in (6000.0, 110.702, 0, None, "RHS 40x20x2", -2.5, -1e-06, 1e-12, 0.1 + 0.2)] == [
+        "6000", "110,702", "0", "", "RHS 40x20x2", "-2,5", "-0,000001", "0", "0,3"]
     txt = PL.csv_text(PL.QUOTE_HEADER, PL.quote_rows(ref.cost))
     assert txt.startswith("\ufeffPartida;Concepto;") and txt.endswith("\r\n")
     rows = [ln.split(";") for ln in txt.splitlines()]
