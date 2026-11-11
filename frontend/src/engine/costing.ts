@@ -50,7 +50,7 @@ export function estimate(model, plan, lot = 1, R = C.costRates()) {
     const eurKg = materialRate(R, c.material, "tubo");
     const k = c.kg_per_m / 1000;
     let kg, what;
-    if (basis === "compra") { kg = c.n_bars * c.mass_per_bar_kg; what = `${c.n_bars} barras de ${g(c.bar_length)} mm compradas`; }
+    if (basis === "compra") { kg = c.purchased_length * k; what = `${c.n_bars} barras de ${g(c.bar_length)} mm compradas`; }
     else { kg = (c.purchased_length + c.stock_length - c.reusable_length) * k; what = `consumo ${fx((c.purchased_length + c.stock_length - c.reusable_length) / 1000, 2)} m`; }
     const txt = `Perfil ${c.profile} ${c.material}: ${what} por lote de ${lot} (neto ${fx(c.pieces_length / 1000, 2)} m, desperdicio ${fx(c.waste_length / 1000, 2)} m, `
       + `retal reutilizable ${fx(c.reusable_length / 1000, 2)} m)`;

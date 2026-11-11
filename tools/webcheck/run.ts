@@ -28,7 +28,9 @@ for (const c of cases) {
       purchases: summary.manufacturing.purchases.items.map((p) => [p.type, p.description, p.qty, p.mass_kg]),
       welding: summary.manufacturing.welding, painting: summary.manufacturing.painting,
       dfm: summary.dfm.map((d) => [d.level, d.code, d.element]), bom_totals: summary.bom.totals,
-      fix: summary.fix ? summary.fix.params : null });
+      weld_faces: summary.dfm.filter((d) => d.code === "SOL-ENRASE" || d.code === "SOL-RADIO-ESQUINA").map((d) => d.message),
+      verdict: e.verdict, val_pending: e.validation_pending.map((v) => [v.id, v.reason]), hypotheses: e.hypotheses,
+      fix: summary.fix ? { params: summary.fix.params, reasons: summary.fix.reasons, verdict: summary.fix.verdict, validation_pending: summary.fix.validation_pending } : null });
   } catch (err) { out.push({ id: c.id, ok: false, error: String(err && err.stack || err) }); }
 }
 process.stdout.write(JSON.stringify(out));

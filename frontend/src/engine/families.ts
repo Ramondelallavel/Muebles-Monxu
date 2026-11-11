@@ -1027,6 +1027,7 @@ class PuestoTrabajo extends MesaIndustrial {
         area_mm2: (V.LONGITUD - 2 * d.c) * d.est_D - 2 * notch * notch, count_param: "NUMERO_TRAVESANOS_ESTANTE" });
     }
     st.attached_masses = model.structure.attached_masses ?? [];
+    st.attached_instances = model.structure.attached_instances ?? [];
     st.product_word = "puesto";
     st.assembly_texts = {
       ALT: "Colocar el estante superior sobre su bastidor, con las escotaduras traseras alrededor de los montantes, y fijarlo con la tornillería indicada.",
@@ -1325,6 +1326,7 @@ class Armario extends Estanteria {
   _shelfStructure(model, d, legs) {
     const st = super._shelfStructure(model, d, legs);
     st.attached_masses = model.structure.attached_masses ?? [];
+    st.attached_instances = model.structure.attached_instances ?? [];
     st.product_word = "armario";
     const n = d.enc_n_doors;
     st.assembly_texts = { ...(st.assembly_texts ?? {}),

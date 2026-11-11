@@ -285,19 +285,41 @@ export function imperfectionCases(model, sm, casesV = ["G", "Q"]) {
   return { phi, alpha_h, h, V };
 }
 /** α_cr por el método de Horne (EN 1993-1-1 §5.2.1(4)B) en X y en Y (= analysis.alpha_cr). */
-export function alphaCr(res, imp, fac) {
+export function alphaCr(res, imp, fac, nodes = null) {
   const out = {};
-  const nn = res.frame.nodes.length;
+  const ns = nodes?.length ? nodes : res.frame.nodes.map((_, n) => n);     // desplome en los nudos de las columnas
   for (const [d, comp] of [["X", 0], ["Y", 1]]) {
     const f = {};
     for (const c of Object.keys(imp.V)) if (c in fac) f[`I${d}${c}`] = fac[c];
     if (!Object.keys(f).length) continue;
     const u = res.combine(f);
     let delta = 0;
-    for (let n = 0; n < nn; n++) delta = Math.max(delta, Math.abs(u[6 * n + comp]));
+    for (const n of ns) delta = Math.max(delta, Math.abs(u[6 * n + comp]));
     out[d] = { alpha_cr: delta > 1e-12 ? (imp.phi * imp.h) / delta : Infinity, delta_mm: delta };
   }
   return out;
+}
+/** α_cr (Horne) con todos los apoyos coaccionados en X e Y: en una estructura anclada cada taco impide el
+ *  deslizamiento de su pie; el modelo general es isostático en planta y lleva toda la acción horizontal a un apoyo.
+ *  Devuelve además el mayor cortante de las fuerzas equivalentes en un apoyo (= analysis.anchored_alpha_cr). */
+export function anchoredAlphaCr(model, sm, imp, fac, nodes = null) {
+  const fr = sm.frame;
+  const saved = new Map(fr.fixed);
+  const sups = model.structure.supports ?? [];
+  try {
+    for (const sup of sups) fr.support(sup.node, [true, true, true, false, false, false]);
+    const res = fr.solve(Object.keys(fr.loads).filter((c) => c.startsWith("IX") || c.startsWith("IY")).sort());
+    const out = alphaCr(res, imp, fac, nodes);
+    for (const d of Object.keys(out)) {
+      const f = {};
+      for (const c of Object.keys(imp.V)) if (c in fac) f[`I${d}${c}`] = fac[c];
+      const reac = res.reactions(res.combine(f), res.combineLoads(f));
+      let sh = 0;
+      for (const sup of sups) { const r = reac.get(sup.node); sh = Math.max(sh, Math.hypot(r[0], r[1])); }
+      out[d].shear_N = sh;
+    }
+    return out;
+  } finally { fr.fixed = saved; }
 }
 /** Normas que aplican al proyecto: por familia, material empleado, procesos presentes y normas de producto. */
 export function applicableStandards(model) {
@@ -356,7 +378,7 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   const limitations = [
     "Análisis elástico lineal de primer orden con imperfecciones globales equivalentes (EN 1993-1-1 §5.3.2) y sensibilidad a segundo orden por α_cr con el método de Horne (§5.2.1(4)B), válido para pórticos con poca compresión en las vigas; sin análisis de segundo orden explícito (con α_cr < 3 la verificación no se da por superada). Las imperfecciones de barra quedan incluidas en las curvas de pandeo.",
     "Uniones soldadas consideradas rígidas; excentricidades de unión entre ejes no modeladas.",
-    "Chapas de encimera y balda verificadas como placas simplemente apoyadas en el emparrillado (Navier); no se considera su contribución a la rigidez del bastidor.",
+    "Chapas de las superficies de carga verificadas como placas simplemente apoyadas en el emparrillado (Navier); no se considera su contribución a la rigidez del bastidor.",
     "Comprobaciones de barras por el método simplificado lineal de EN 1993-1-1 §6.2.1(7) y §6.3.3 con coeficientes de interacción unitarios (conservador).",
     "No se analizan concentraciones de tensiones locales, fatiga ni comportamiento dinámico.",
   ];
@@ -490,8 +512,11 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     if (push?.length) for (const pp of push) topNodes.push(nearest(sm.chains[pp.member], pp.z));
     else for (const lid of st.leg_ids) topNodes.push(nearest(sm.chains[lid], top.z - model.instance(top.long[0]).part.profile.H / 2));
     for (const n of topNodes) { fr.addNodalLoad("HX", n, [H_N / topNodes.length, 0, 0]); fr.addNodalLoad("HY", n, [0, H_N / topNodes.length, 0]); }
-    cases.push({ id: "HX/HY", label: st.push_label ?? "Empuje horizontal en el plano de la encimera (direcciones X e Y)", value: `${g(H_N)} N`, total_N: H_N });
-    if (model.params.sources.CARGA_HORIZONTAL === "defecto") hyp.push(`Empuje horizontal de ${g(H_N)} N: ${st.push_note ?? crit.horizontal_service_load_note}`);
+    // textos por defecto según el producto: «encimera» solo si la tiene
+    const worktop = (st.surfaces ?? []).some((sf) => sf.id === "encimera");
+    cases.push({ id: "HX/HY", label: st.push_label ?? (worktop ? "Empuje horizontal en el plano de la encimera (direcciones X e Y)" : "Empuje horizontal en el nivel superior (direcciones X e Y)"),
+      value: `${g(H_N)} N`, total_N: H_N });
+    if (model.params.sources.CARGA_HORIZONTAL === "defecto") hyp.push(`Empuje horizontal de ${g(H_N)} N: ${st.push_note || (worktop ? crit.horizontal_service_load_note : crit.horizontal_service_load_note_generic)}`);
   }
   // ---------------------------------------------------------------- imperfecciones globales (EN 1993-1-1 §5.3.2)
   const imp = imperfectionCases(model, sm);
@@ -516,7 +541,18 @@ export function analyze(model, includeStability = true, includeWelds = true) {
   if ("HX" in fr.loads) { sls["ELS-3"] = { HX: 1.0 }; sls["ELS-4"] = { HY: 1.0 }; }
   const res = fr.solve();
   // sensibilidad a segundo orden y amplificación de las acciones horizontales (EN 1993-1-1 §5.2.1, §5.2.2(5)B)
-  const acr = alphaCr(res, imp, { G: gG, Q: gQ });
+  const colNodes = [...new Set((st.leg_ids ?? []).filter((l) => sm.chains[l]).flatMap((l) => sm.chains[l].map((c) => c[1])))].sort((a, b) => a - b);
+  const acr = alphaCr(res, imp, { G: gG, Q: gQ }, colNodes);
+  // Estructura anclada con α_cr < 3 en el modelo isostático: se calcula también con los apoyos anclados coaccionados
+  // en planta. Si con ellos α_cr ≥ 3, la comprobación no se da por buena: queda PENDIENTE DE VALIDACIÓN.
+  // (anclada = parámetro ANCLAJE: durante el dimensionado el taco todavía no está elegido ni en el modelo)
+  if (ps.ANCLAJE === "al_suelo" && Object.values(acr).some((v) => v.alpha_cr < 3.0)) {
+    const anc = anchoredAlphaCr(model, sm, imp, { G: gG, Q: gQ }, colNodes);
+    for (const [d, v] of Object.entries(acr)) {
+      const w = anc[d];
+      if (v.alpha_cr < 3.0 && w && w.alpha_cr > v.alpha_cr) acr[d] = { ...w, anchored: true, alpha_cr_iso: v.alpha_cr, delta_iso_mm: v.delta_mm };
+    }
+  }
   const kAmp = Object.fromEntries(Object.entries(acr).map(([d, v]) => [d, v.alpha_cr >= 3.0 && v.alpha_cr < 10.0 ? 1 / (1 - 1 / v.alpha_cr) : 1.0]));
   if (useImp) {            // fuerzas equivalentes en las combinaciones de ELU, con los factores de G y Q de cada una
     const nu = {};
@@ -544,13 +580,25 @@ export function analyze(model, includeStability = true, includeWelds = true) {
     { h_mm: imp.h, alpha_h: imp.alpha_h, alpha_m: 1.0, H_Ed_N: H_Ed, V_Ed_N: V_Ed, incluidas: useImp }));
   if (useImp) hyp.push(`Imperfección global: fuerzas horizontales equivalentes φ·N (φ = ${fx(phiImp, 5)}, αm = 1 del lado de la seguridad) en X y en Y con las cargas verticales G y Q de cada combinación de ELU.`);
   else hyp.push(`Imperfección global omitida: H_Ed = ${fx(H_Ed)} N ≥ 0,15·V_Ed = ${fx(0.15 * V_Ed)} N (EN 1993-1-1 §5.3.2(4)B).`);
+  const nSup = (st.supports ?? []).length;
   for (const [d, v] of Object.entries(acr)) {
     const a = v.alpha_cr, fin = Number.isFinite(a);
-    const note = a >= 10 ? "análisis de primer orden suficiente (α_cr ≥ 10)" : a >= 3 ? `efectos de segundo orden por amplificación 1/(1 − 1/α_cr) = ${fx(kAmp[d], 3)} de las acciones horizontales`
+    let note = a >= 10 ? "análisis de primer orden suficiente (α_cr ≥ 10)" : a >= 3 ? `efectos de segundo orden por amplificación 1/(1 − 1/α_cr) = ${fx(kAmp[d], 3)} de las acciones horizontales`
       : "α_cr < 3: requiere análisis de segundo orden, no disponible en este método";
+    const det = { delta_mm: v.delta_mm, h_mm: imp.h, k_amplificacion: kAmp[d] };
+    let stAcr = fin ? status(3.0 / a) : OK;
+    if (v.anchored) {      // valor con los apoyos anclados: se declara junto al del modelo isostático y no se da por verificado
+      note += `; α_cr con los ${nSup} apoyos anclados coaccionados en planta (${fx(v.alpha_cr_iso, 2)} con el apoyo isostático, sin contar los tacos)`;
+      Object.assign(det, { modelo_apoyos: "anclado", alpha_cr_isostatico: pyRound(v.alpha_cr_iso, 2), delta_isostatico_mm: v.delta_iso_mm,
+        cortante_taco_imperfeccion_N: pyRound(v.shear_N, 1) });
+      if (stAcr === OK) {
+        stAcr = VAL;
+        det.validacion = `α_cr,${d} = ${fx(v.alpha_cr_iso, 2)} < 3 sin contar los tacos; α_cr,${d} = ${fx(a, 2)} sólo si los tacos impiden el deslizamiento de todos los pies: validar el cortante de tacos y vástagos de los pies o hacer un análisis de segundo orden`;
+        hyp.push(`Estabilidad global en ${d}: α_cr = ${fx(v.alpha_cr_iso, 2)} con el modelo de apoyos isostático (toda la acción horizontal en un apoyo) y α_cr = ${fx(a, 2)} con los ${nSup} apoyos anclados coaccionados en planta. Se adopta este último, PENDIENTE DE VALIDACIÓN del cortante de los tacos y de los vástagos de los pies.`);
+      }
+    }
     checks.push(check(`S.ALFA-CR-${d}`, "estabilidad", "Estructura", `Sensibilidad a efectos de segundo orden en ${d} (método de Horne): ${note}`,
-      "EN 1993-1-1 §5.2.1(3) y (4)B, §5.2.2(5)B", fin ? pyRound(a, 2) : null, 3.0, "-", fin ? pyRound(3.0 / a, 4) : 0.0, fin ? status(3.0 / a) : OK, "ELU",
-      { delta_mm: v.delta_mm, h_mm: imp.h, k_amplificacion: kAmp[d] }));
+      "EN 1993-1-1 §5.2.1(3) y (4)B, §5.2.2(5)B", fin ? pyRound(a, 2) : null, 3.0, "-", fin ? pyRound(3.0 / a, 4) : 0.0, stAcr, "ELU", det));
   }
 
   // ---------------------------------------------------------------- barras

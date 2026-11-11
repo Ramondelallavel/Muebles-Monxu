@@ -687,7 +687,10 @@ def test_cantilever_geometry_and_double_sided_load_pattern():
     assert qa["total_N"] == pytest.approx(len(arms) / 2 * 200 * 9.81, rel=1e-6)
     r = regenerate("cantilever", vals)
     assert r.interferences["interferences"] == [] and r.qa.result()["blocking"] == 0
-    assert not any(i["code"] in ("SOL-TUERCA", "SOL-ENRASE") for i in r.dfm)
+    assert not any(i["code"] == "SOL-TUERCA" for i in r.dfm)
+    # el enrase ya no es un texto genérico: solo aparece si la geometría tiene caras enrasadas, con su número
+    from monxu.manufacturing.plan import weld_face_conditions
+    assert any(i["code"] == "SOL-ENRASE" for i in r.dfm) == (weld_face_conditions(r.model)["flush"] > 0)
 
 
 def test_cantilever_base_follows_the_column_and_fixed_weak_arm_fails():

@@ -8,7 +8,7 @@ import { project, projectPoint } from "./hlr";
 import { mmul, translation } from "./model";
 import { PDF, textWidth } from "./pdf";
 import { Occupancy, auditPage, boxesOverlap, segHitsBox, segsCross, summarize, textBox } from "./layout";
-import { g, pyRound } from "./util";
+import { f as fx, g, pyRound } from "./util";
 
 const FRAME = [20, 10, 410, 287];
 const TB_W = 180, TB_H = 58;
@@ -18,6 +18,10 @@ const RED = [0.78, 0.1, 0.1], GREY = [0.45, 0.45, 0.45], BLACK = [0, 0, 0];
 const TB_RESERVED = [226, 6, 412, 80];
 
 export const fmt = (v, dec = 1) => (Math.abs(v - Math.round(v)) < 0.05 ? String(Math.round(v)) : v.toFixed(dec).replace(".", ","));
+/** Valor numérico del BOM tal como figura en la lista de materiales: hasta 4 decimales, sin ceros finales y con coma
+ *  decimal (= drawing_kit.bom_num). El formato de cotas daba «0» para un tornillo de 3,8 g y «158» para 157,95 kg. */
+export const bomNum = (v) => (v === null || v === undefined || v === "" ? "" : typeof v !== "number" ? String(v)
+  : fx(v, 4).replace(/0+$/, "").replace(/\.$/, "").replace(".", ","));
 const scaleLabel = (s) => (s ? `${s[0]}:${s[1]}` : "S/E");
 function fitText(s, width, h) {
   s = String(s);
@@ -25,6 +29,21 @@ function fitText(s, width, h) {
   while (s && textWidth(s + "…", h) > width) s = s.slice(0, -1);
   return s + "…";
 }
+
+/** Parte un texto en líneas del ancho dado, por los espacios (= drawing_kit.wrap_text). */
+function wrapText(s, width, h) {
+  if (textWidth(s, h) <= width) return [s];
+  const out = [];
+  let cur = "";
+  for (const word of s.split(" ")) {
+    const cand = cur ? cur + " " + word : word;
+    if (cur && textWidth(cand, h) > width) { out.push(cur); cur = word; } else cur = cand;
+  }
+  out.push(cur);
+  return out;
+}
+/** Texto de una celda de tabla (los decimales sueltos, con el formato de cotas). */
+const cellText = (v) => (v === null || v === undefined ? "" : typeof v === "number" && !Number.isInteger(v) ? fmt(v, 2) : String(v));
 
 // ============================================================================ kit de dibujo
 const TB_BOX = [228, 8, 412, 80];               // cuadro de rotulación + sello de estado
@@ -314,23 +333,34 @@ export class Drawing {
       this.text(ex + 3.5 * side, by - 1.0, process + (tag ? `  ${tag}` : ""), 2.4, side > 0 ? "l" : "r");
     });
   }
+  /** Tabla con cabecera. Ningún texto se corta sin aviso: el que no cabe en su columna se parte en varias líneas (la fila
+   *  crece); una palabra más ancha que la columna se reduce hasta el 70 % y, si aun así no cabe, se corta con «…» y se
+   *  registra en la hoja para que el control de planos lo bloquee (= drawing_kit.Drawing.table). */
   table(x, yTop, cols, rows, rowH = 5.0, headH = 6.0, textH = 2.4) {
     return this.group("table", () => {
-      const W = cols.reduce((s, c) => s + c[1], 0), H = headH + rowH * rows.length;
+      const step = 1.5 * textH;            // interlínea mayor que el cuerpo de la letra (altura / 0,72)
+      const cells = rows.map((row) => cols.map(([, w, al], k) => (al === "l" ? wrapText(cellText(row[k]), w - 2.4, textH) : [cellText(row[k])])));
+      const heights = cells.map((rc) => rowH + step * (Math.max(...rc.map((ln) => ln.length)) - 1));
+      const W = cols.reduce((t, c) => t + c[1], 0), H = headH + heights.reduce((t, h) => t + h, 0);
       this.pdf.lw(0.35).rect(x, yTop - H, W, H);
       this.line([x, yTop - headH], [x + W, yTop - headH]);
       let xx = x;
       cols.forEach(([t, w], k) => { if (k) this.line([xx, yTop], [xx, yTop - H]); this.text(xx + w / 2, yTop - headH + 1.8, fitText(t, w - 1.2, 2.4), 2.4, "c", 0, true); xx += w; });
-      rows.forEach((row, ri) => {
-        const yy = yTop - headH - rowH * (ri + 1);
-        if (ri) this.line([x, yy + rowH], [x + W, yy + rowH], 0.1);
+      let yy = yTop - headH;
+      cells.forEach((rc, ri) => {
+        const rh = heights[ri];
+        yy -= rh;
+        if (ri) this.line([x, yy + rh], [x + W, yy + rh], 0.1);
         let x2 = x;
         cols.forEach(([, w, al], k) => {
-          const v = row[k];
-          let s = v === null || v === undefined ? "" : typeof v === "number" && !Number.isInteger(v) ? fmt(v, 2) : String(v);
-          s = fitText(s, w - 2.4, textH);
-          const ty = yy + (rowH - textH) / 2 + 0.15;
-          if (al === "c") this.text(x2 + w / 2, ty, s, textH, "c"); else if (al === "r") this.text(x2 + w - 1.2, ty, s, textH, "r"); else this.text(x2 + 1.2, ty, s, textH, "l");
+          rc[k].forEach((full, n) => {
+            const tw = textWidth(full, textH);
+            const h = tw <= w - 2.4 ? textH : Math.max(0.7 * textH, (textH * (w - 2.4)) / tw * 0.999);
+            const s = fitText(full, w - 2.4, h);
+            if (s !== full) (this.page.truncated ??= []).push(full);       // ni reducido cabe: control de planos
+            const ty = yy + rh - rowH + (rowH - textH) / 2 + 0.15 - step * n;
+            if (al === "c") this.text(x2 + w / 2, ty, s, h, "c"); else if (al === "r") this.text(x2 + w - 1.2, ty, s, h, "r"); else this.text(x2 + 1.2, ty, s, h, "l");
+          });
           x2 += w;
         });
       });
@@ -682,7 +712,7 @@ function planStructure(d, X) {
   }
   d.flushLabels();
   const nl = m.dims.structure_notes ?? ["Estructura soldada (subconjunto EST).", `Clase de ejecución ${m.params.values.CLASE_EJECUCION} según EN 1090-2.`,
-    "Cotas a caras exteriores de perfil.", "Planitud del plano de apoyo de encimera: EN ISO 13920 clase F.", "Detalle de uniones soldadas: plano 05.",
+    "Cotas a caras exteriores de perfil.", "Planitud de los planos de apoyo de las chapas: EN ISO 13920 clase F.", "Detalle de uniones soldadas: plano 05.",
     "Longitudes de corte y mecanizados: plano 02B."];
   const nc = [];
   for (let k = 0; k < 30; k++) nc.push([305, 268 - k * 3, 100]);
@@ -693,56 +723,152 @@ function planStructure(d, X) {
   balloons(d, a, [...reps.values()].map((i) => [String(i.part.pos), instanceCentroid(i)]), { sides: ["top", "left", "right", "bottom"] });
 }
 
-function planProfiles(d, X) {
-  const m = X.m;
-  const profs = Object.values(m.parts).filter((p) => p.kind === "perfil").sort((a, b) => a.pos - b.pos);
-  const counts = {};
-  for (const i of m.instances) counts[i.part.key] = (counts[i.part.key] ?? 0) + 1;
-  d.newSheet("02B", "Perfiles: longitudes de corte, mecanizados y plan de corte", "Sin escala", m.params.values.MATERIAL_ESTRUCTURAL);
-  let y = 262;
-  const maxL = Math.max(...profs.map((p) => p.length));
-  for (const p of profs) {
-    const w = (150 * p.length) / maxL + 20, x0 = 40, hg = 7;
-    d.text(x0 - 6, y + 2, String(p.pos), 3.2, "r", 0, true);
-    d.polyline([[x0, y], [x0 + w, y], [x0 + w, y + hg], [x0, y + hg]], LW_THICK, null, BLACK, true);
-    d.line([x0 - 3, y + hg / 2], [x0 + w + 3, y + hg / 2], LW_THIN, [6, 1, 1, 1], GREY);
-    for (const [, z] of p.holes) d.circle(x0 + (w * z) / p.length, y + hg / 2, 1.2);
-    d.dimH(x0, x0 + w, y + hg, y + hg, y + hg + 4, p.length, `L_${p.ref}`, "geometria_pieza");
-    let desc = `${p.ref}  ${p.profile.code}  ${p.material}  L=${fmt(p.length)}  90°/90°  ×${counts[p.key]}`;
-    if (p.holes.length) desc += `  Taladros Ø${String(p.holes[0][3]).replace(".", ",")} en cara exterior a: ` + p.holes.map((h) => fmt(h[1])).join(", ");
-    d.text(x0 + w + 6, y + 2, fitText(desc, 400 - x0 - w - 6, 2.4), 2.4, "l");
-    y -= 17;
-    if (y < 95) break;
+// Hoja 02B: cota del primer elemento, límite inferior de los perfiles y de las barras, y altura del cajetín.
+const PROFILE_Y0 = 262, PROFILE_Y_MIN = 105, CUT_Y_MIN = 22, TB_TOP = 86;
+const HOLE_LINE_STEP = 3.8;      // interlínea de los textos de mecanizado (altura 2,4): mayor que el cuerpo de la letra
+/** Espacio adicional bajo un perfil con n líneas de taladros para que la última quede por encima de la cota del siguiente. */
+const profileExtraDepth = (n) => Math.max(0, HOLE_LINE_STEP * (n - 1) - 2.2);
+
+/** Mecanizados de un perfil, completos y partidos en líneas del ancho disponible (un grupo por cara y diámetro).
+ *  Nunca se truncan: una posición cortada («890» → «89») es un error de fabricación (= plans.profile_hole_lines). */
+export function profileHoleLines(p, avail) {
+  const groups = new Map();
+  for (const [face, z, , dia] of p.holes) {
+    const k = `${face}|${dia}`;
+    if (!groups.has(k)) groups.set(k, { face, dia, zs: [] });
+    groups.get(k).zs.push(z);
   }
-  y -= 2;
-  d.text(32, y, "PLAN DE CORTE DE BARRAS", 3.2, "l", 0, true);
-  y -= 7;
-  for (const c of X.plan.cutting) {
-    const head = `${c.profile} ${c.material} — barras de ${fmt(c.bar_length)} mm: ${c.n_bars} (cota inferior ${c.lower_bound}, aprovechamiento ${(c.utilization * 100).toFixed(1)} %, sierra ${fmt(c.kerf)} mm`;
-    const extra = `, despuntes ${fmt(c.trim_start)}/${fmt(c.trim_end)} mm, ${c.n_cuts} cortes)`;
-    if (textWidth(head + extra, 2.6) <= (y - 5 < 86 ? 224 : 400) - 32) d.text(32, y, head + extra, 2.6);
-    else {            // sin sitio (junto al cajetín): los despuntes y cortes en una segunda línea
-      d.text(32, y, head + ")", 2.6);
-      y -= 4.5;
-      d.text(32, y, `Despuntes ${fmt(c.trim_start)}/${fmt(c.trim_end)} mm · ${c.n_cuts} cortes`, 2.6);
+  const lines = [];
+  for (const { face, dia, zs } of groups.values()) {
+    const where = groups.size === 1 ? "cara exterior" : `cara ${face}`;
+    let cur = `Taladros Ø${g(dia).replace(".", ",")} en ${where} a: `, n = 0;
+    for (const z of [...zs].sort((a, b) => a - b)) {
+      const cand = cur + (n ? "; " : "") + fmt(z);
+      if (n && textWidth(cand, 2.4) > avail) { lines.push(cur + ";"); cur = fmt(z); } else cur = cand;
+      n++;
     }
-    y -= 5;
-    for (const b of c.bars) {
-      const x = 40, W0 = y < 86 ? 110 : 180, k = W0 / c.bar_length, W = b.length * k;   // un retal del inventario, a su longitud
-      d.polyline([[x, y], [x + W, y], [x + W, y + 3.5], [x, y + 3.5]], LW_THIN, null, BLACK, true);
-      let xx = x + b.trim_start * k;
-      for (const cut of b.cuts) {
-        const ww = cut.length * k;
-        d.rect(xx, y, ww, 3.5, LW_THIN, [0.82, 0.86, 0.9]);
-        if (ww > 9) d.text(xx + ww / 2, y + 0.9, cut.ref.split("-").at(-1), 2.0, "c");
-        xx += ww + c.kerf * k;
-      }
-      const src = b.source === "retal" ? ` (retal ${b.stock_id})` : "";
-      d.text(x + W0 + 3, y + 0.6, fitText(`Barra ${b.bar}${src}: ${b.n_cuts} cortes · retal ${fmt(b.remnant)} mm (${b.remnant_status})`, (y < 86 ? 224 : 400) - x - W0 - 3, 2.2), 2.2);
+    lines.push(cur);
+  }
+  return lines;
+}
+/** Número de posiciones de taladro que figuran en las líneas impresas (control plano ↔ modelo). Se separan con «;»: la
+ *  coma es el separador decimal y «60, 462,5, 890» sería ambiguo. */
+export const holePositionsIn = (lines) => lines.reduce((t, ln) => t + ln.split(": ").at(-1).split(";").filter((x) => x.trim()).length, 0);
+
+/** Barras consecutivas con el mismo patrón de corte: una sola fila del plano; los retales del inventario no se agrupan. */
+export function barGroups(c) {
+  const out = [];
+  let prev = null;
+  for (const b of c.bars) {
+    const key = JSON.stringify([b.source, b.length, b.trim_start, b.cuts.map((k) => [k.ref, k.length]), b.remnant, b.remnant_status]);
+    if (out.length && key === prev && b.source !== "retal") out.at(-1).push(b); else out.push([b]);
+    prev = key;
+  }
+  return out;
+}
+export function barLabel(grp) {
+  const b = grp[0];
+  if (grp.length === 1) return `Barra ${b.bar}${b.source === "retal" ? ` (retal ${b.stock_id})` : ""}: ${b.n_cuts} cortes · retal ${fmt(b.remnant)} mm (${b.remnant_status})`;
+  return `Barras ${b.bar} a ${grp.at(-1).bar} (${grp.length} iguales): ${b.n_cuts} cortes y retal de ${fmt(b.remnant)} mm en cada una (${b.remnant_status})`;
+}
+function cutHeader(c) {
+  return [`${c.profile} ${c.material} — barras de ${fmt(c.bar_length)} mm: ${c.n_bars} (cota inferior ${c.lower_bound}, aprovechamiento ${(c.utilization * 100).toFixed(1)} %, sierra ${fmt(c.kerf)} mm`,
+    `, despuntes ${fmt(c.trim_start)}/${fmt(c.trim_end)} mm, ${c.n_cuts} cortes)`];
+}
+const cutHeaderTwoLines = (c, y) => { const [head, extra] = cutHeader(c); return textWidth(head + extra, 2.6) > (y - 5 < TB_TOP ? 222 : 400) - 32; };
+
+/** Maquetación de la hoja 02B en una o varias hojas: [[tipo, y, datos…]] por hoja. Todos los perfiles, todos sus taladros
+ *  y todas las barras del plan de corte figuran; lo que no cabe pasa a una hoja de continuación (= plans.profile_flow). */
+export function profileFlow(m, plan) {
+  const profs = Object.values(m.parts).filter((p) => p.kind === "perfil").sort((a, b) => a.pos - b.pos);
+  const maxL = profs.reduce((mx, p) => Math.max(mx, p.length), 0) || 1;
+  const pages = [[]];
+  let y = PROFILE_Y0;
+  for (const p of profs) {
+    const w = (150 * p.length) / maxL + 20;
+    const lines = p.holes.length ? profileHoleLines(p, 400 - (40 + w + 6)) : [];
+    const depth = profileExtraDepth(lines.length);                // líneas de taladros por debajo de la barra
+    if (y - depth < PROFILE_Y_MIN) { pages.push([]); y = PROFILE_Y0; }
+    pages.at(-1).push(["perfil", y, p, w, lines]);
+    y -= 17 + depth;
+  }
+  if (!plan.cutting.length) return pages;
+  if (y - 2 - 7 - 4.5 - 5 < CUT_Y_MIN) { pages.push([]); y = PROFILE_Y0; }      // título, cabecera y una barra como mínimo
+  y -= 2;
+  pages.at(-1).push(["titulo", y]);
+  y -= 7;
+  for (const c of plan.cutting) {
+    if (y - (cutHeaderTwoLines(c, y) ? 4.5 : 0) - 5 < CUT_Y_MIN) { pages.push([]); y = PROFILE_Y0; }
+    pages.at(-1).push(["cabecera", y, c, false]);
+    y -= (cutHeaderTwoLines(c, y) ? 4.5 : 0) + 5;
+    for (const grp of barGroups(c)) {
+      if (y < CUT_Y_MIN) { pages.push([]); y = PROFILE_Y0; pages.at(-1).push(["cabecera", y, c, true]); y -= 5; }
+      pages.at(-1).push(["barra", y, c, grp]);
       y -= 5.5;
-      if (y < 22) return;
     }
     y -= 2;
+  }
+  return pages;
+}
+
+function planProfiles(d, X) {
+  const m = X.m;
+  const counts = {};
+  for (const i of m.instances) counts[i.part.key] = (counts[i.part.key] ?? 0) + 1;
+  const pages = profileFlow(m, X.plan);
+  const index = new Map(X.plan.cutting.map((c, k) => [c, k + 1]));
+  const drawnBars = {}, drawnCuts = {};
+  pages.forEach((ops, n) => {
+    d.newSheet(n ? `02B.${n + 1}` : "02B", "Perfiles: longitudes de corte, mecanizados y plan de corte" + (pages.length > 1 ? ` (${n + 1}/${pages.length})` : ""),
+      "Sin escala", m.params.values.MATERIAL_ESTRUCTURAL);
+    for (const op of ops) {
+      const [kind, y] = op;
+      if (kind === "perfil") {
+        const [, , p, w, lines] = op;
+        const x0 = 40, hg = 7;
+        d.text(x0 - 6, y + 2, String(p.pos), 3.2, "r", 0, true);
+        d.polyline([[x0, y], [x0 + w, y], [x0 + w, y + hg], [x0, y + hg]], LW_THICK, null, BLACK, true);
+        d.line([x0 - 3, y + hg / 2], [x0 + w + 3, y + hg / 2], LW_THIN, [6, 1, 1, 1], GREY);
+        for (const [, z] of p.holes) d.circle(x0 + (w * z) / p.length, y + hg / 2, 1.2);
+        d.dimH(x0, x0 + w, y + hg, y + hg, y + hg + 4, p.length, `L_${p.ref}`, "geometria_pieza");
+        d.text(x0 + w + 6, y + (lines.length ? 5.0 : 2), `${p.ref}  ${p.profile.code}  ${p.material}  L=${fmt(p.length)}  90°/90°  ×${counts[p.key]}`, 2.4, "l");
+        lines.forEach((ln, k) => d.text(x0 + w + 6, y + 1.2 - HOLE_LINE_STEP * k, ln, 2.4, "l"));
+        if (p.holes.length) d.recordDim(`TAL_${p.ref}`, holePositionsIn(lines), "mecanizado");      // control plano ↔ modelo
+      } else if (kind === "titulo") d.text(32, y, "PLAN DE CORTE DE BARRAS", 3.2, "l", 0, true);
+      else if (kind === "cabecera") {
+        const [, , c, cont] = op;
+        const [head, extra] = cutHeader(c);
+        if (cont) d.text(32, y, `${c.profile} ${c.material} (continuación)`, 2.6);
+        else if (!cutHeaderTwoLines(c, y)) d.text(32, y, head + extra, 2.6);
+        else {            // sin sitio (junto al cajetín): los despuntes y cortes en una segunda línea
+          d.text(32, y, head + ")", 2.6);
+          d.text(32, y - 4.5, `Despuntes ${fmt(c.trim_start)}/${fmt(c.trim_end)} mm · ${c.n_cuts} cortes`, 2.6);
+        }
+      } else {
+        const [, , c, grp] = op;
+        const b = grp[0], x = 40, lbl = barLabel(grp);
+        // a la altura del cajetín la barra se acorta para que su rótulo, completo, termine antes de él
+        const [xr, w0] = y < TB_TOP ? [222, 110] : [400, 180];
+        const W0 = Math.max(40, Math.min(w0, xr - x - 3 - textWidth(lbl, 2.2)));
+        const k = W0 / c.bar_length, W = b.length * k;   // un retal del inventario, a su longitud
+        d.polyline([[x, y], [x + W, y], [x + W, y + 3.5], [x, y + 3.5]], LW_THIN, null, BLACK, true);
+        let xx = x + b.trim_start * k;
+        for (const cut of b.cuts) {
+          const ww = cut.length * k;
+          d.rect(xx, y, ww, 3.5, LW_THIN, [0.82, 0.86, 0.9]);
+          if (ww > 9) d.text(xx + ww / 2, y + 0.9, cut.ref.split("-").at(-1), 2.0, "c");
+          xx += ww + c.kerf * k;
+        }
+        d.text(x + W0 + 3, y + 0.6, lbl, 2.2);
+        const ci = index.get(c);
+        drawnBars[ci] = (drawnBars[ci] ?? 0) + grp.length;
+        drawnCuts[ci] = (drawnCuts[ci] ?? 0) + grp.length * b.cuts.length;
+      }
+    }
+  });
+  for (const ci of index.values()) {                 // control plano ↔ plan de corte: barras y piezas representadas
+    d.recordDim(`BARRAS_${ci}`, drawnBars[ci] ?? 0, "plan de corte");
+    d.recordDim(`PIEZAS_CORTE_${ci}`, drawnCuts[ci] ?? 0, "plan de corte");
   }
 }
 
@@ -1055,9 +1181,8 @@ function planWelds(d, X) {
   d.notes(300, 134, ["NOTAS DE SOLDADURA", "Representación simbólica EN ISO 2553. Proceso 135 (MAG, hilo macizo G3Si1).",
     `Cordón total ${fmt(w.total_length_mm / 1000, 2)} m · depositado ${fmt(w.deposit_kg, 3)} kg · hilo ${fmt(w.wire_kg, 3)} kg · gas ${fmt(w.gas_l, 0)} l.`,
     `Calidad EN ISO 5817-C · ${m.params.values.CLASE_EJECUCION} (EN 1090-2).`,
-    m.structure.weld_sequence ?? ("Secuencia: 1) puntear bastidor superior en mesa plana con escuadras; 2) puntear patas y verificar diagonales; "
-      + "3) bastidores inferiores; 4) soldar alternando esquinas opuestas; 5) placas base y tuercas; 6) enderezar, amolar caras enrasadas y verificar planitud."),
-    "Pared delgada: cordones cortos alternos para limitar la distorsión.",
+    m.structure.weld_sequence ?? defaultWeldSequence(m),
+    thinWallNote(m),
     m.joints.some((j) => j.kind === "soldadura" && j.weld.a < 3) ? "Garganta a < 3 mm: requiere WPS cualificada (EN ISO 15614-1)." : ""], 2.2, 104, true);
 }
 
@@ -1113,6 +1238,17 @@ function planExploded(d, X) {
   balloons(d, v, partTargets(X, m.instances, true), { region: [24, 12, 296, 285] });
 }
 
+/** Secuencia de soldeo por defecto según el producto: por niveles y montantes, o bastidores y patas (= plans.default_weld_sequence). */
+export const defaultWeldSequence = (m) => m.instances.some((i) => i.structural && i.role === "montante")
+  ? "Secuencia: 1) puntear los bastidores de cada nivel en mesa plana con escuadras; 2) puntear los montantes y verificar diagonales y plomo; 3) soldar alternando lados y niveles; "
+    + "4) placas base y tuercas; 5) enderezar, amolar las caras enrasadas y verificar planitud."
+  : "Secuencia: 1) puntear bastidor superior en mesa plana con escuadras; 2) puntear patas y verificar diagonales; 3) bastidores inferiores; 4) soldar alternando esquinas opuestas; "
+    + "5) placas base y tuercas; 6) enderezar, amolar caras enrasadas y verificar planitud.";
+/** Aviso de pared delgada con el espesor real de los perfiles (sin valores fijos). */
+export function thinWallNote(m) {
+  const ts = m.instances.filter((i) => i.part.kind === "perfil").map((i) => i.part.profile.t);
+  return ts.length && Math.min(...ts) <= 3 ? `Pared de ${g(Math.min(...ts))} mm: cordones cortos alternos para limitar la distorsión.` : "";
+}
 export const ASSEMBLY_TEXTS = {
   EST: "Recepción de la estructura soldada y pintada. Insertar las tuercas remachables en los taladros de largueros y travesaños.",
   APO: "Roscar los pies niveladores en las tuercas soldadas de las placas base. Nivelar la mesa en su emplazamiento (nivel de burbuja sobre encimera al final).",
@@ -1191,6 +1327,11 @@ export function assemblyNotes(m) {
 const TOOLS_TAIL = [
   "DESMONTAJE:", "Chapas desmontables (uniones atornilladas). La estructura es un subconjunto soldado no desmontable.", "",
   "SEGURIDAD:", "Manipular las chapas entre dos personas; usar guantes (cantos de chapa)."];
+/** Palabras de otro tipo de producto en los textos generados: «encimera» en un producto que no la tiene (= assembly.foreign_words). */
+export function foreignWords(m, texts) {
+  if ((m.structure.surfaces ?? []).some((sf) => sf.id === "encimera")) return [];
+  return [...new Set(texts.filter((t) => t.toLowerCase().includes("encimera")).map((t) => t.slice(0, 80)))].sort();
+}
 /** Referencias o designaciones de tornillería citadas en las instrucciones que no están en el BOM (= assembly.designation_issues). */
 export function designationIssues(m, texts) {
   const codes = new Set(m.instances.filter((i) => i.part.kind === "normalizado").map((i) => i.part.code));
@@ -1225,16 +1366,51 @@ function planAssembly(d, X) {
   d.notes(287, 170, assemblyNotes(m), 2.2, 118);
 }
 
+const BOM_ROWS_PER_SHEET = 28;      // filas del despiece por hoja: la tabla ocupa todo el ancho y no baja hasta el cajetín
+
+/** Columnas del despiece: referencia y material al ancho de su contenido (se leen completos: son los que citan las
+ *  instrucciones y el estado de validación) y la descripción con el resto, hasta 370 mm de tabla (= plans.bom_columns). */
+function bomColumns(rows) {
+  const need = (k, lo) => rows.reduce((mx, r) => Math.max(mx, textWidth(String(r[k]), 2.4) + 3.4), lo);
+  const ref = need(1, 42), mat = need(3, 42);
+  const desc = Math.min(need(2, 80), 370 - 121 - ref - mat);
+  return [["Pos", 10, "c"], ["Referencia", ref, "l"], ["Descripción", desc, "l"], ["Material", mat, "l"], ["Espesor", 16, "r"], ["Largo", 20, "r"], ["Ancho", 18, "r"],
+    ["Cant.", 13, "c"], ["Peso unit. kg", 22, "r"], ["Peso total kg", 22, "r"]];
+}
+
 function planBom(d, X) {
-  const rows = X.bom.rows.map((r) => [r.pos, r.ref, r.description, r.material ?? "", r.thickness, r.length, r.width, r.qty, r.unit_mass, r.total_mass]);
-  d.newSheet("08", "Despiece y lista de materiales", "—", "Ver lista");
-  const y = d.table(30, 268, [["Pos", 10, "c"], ["Referencia", 42, "l"], ["Descripción", 105, "l"], ["Material", 42, "l"], ["Espesor", 16, "r"], ["Largo", 20, "r"], ["Ancho", 18, "r"],
-    ["Cant.", 13, "c"], ["Peso unit. kg", 22, "r"], ["Peso total kg", 22, "r"]], rows, 5.2, 6, 2.4);
-  for (const r of X.bom.rows) d.recordDim(`CANT_${r.ref}`, r.qty, "despiece");       // control BOM ↔ planos ↔ 3D
+  // dimensiones y pesos con las mismas cifras que el BOM (Excel y CSV), no con el formato de cotas
+  const rows = X.bom.rows.map((r) => [r.pos, r.ref, r.description, r.material ?? "", bomNum(r.thickness), bomNum(r.length), bomNum(r.width), r.qty,
+    bomNum(r.unit_mass), bomNum(r.total_mass)]);
+  const cols = bomColumns(rows);
+  const nPages = Math.max(1, Math.ceil(rows.length / BOM_ROWS_PER_SHEET));
+  let y = 268;
+  for (let n = 0; n < nPages; n++) {
+    d.newSheet(n ? `08.${n + 1}` : "08", "Despiece y lista de materiales" + (nPages > 1 ? ` (${n + 1}/${nPages})` : ""), "—", "Ver lista");
+    const part = rows.slice(n * BOM_ROWS_PER_SHEET, (n + 1) * BOM_ROWS_PER_SHEET);
+    y = d.table(30, 268, cols, part, 5.2, 6, 2.4);
+    part.forEach((row, k) => {       // control BOM ↔ planos ↔ 3D: cantidad y peso tal como se imprimen
+      const r = X.bom.rows[n * BOM_ROWS_PER_SHEET + k];
+      d.recordDim(`CANT_${r.ref}`, r.qty, "despiece");
+      d.recordDim(`PESO_G_${r.ref}`, parseFloat(row[8].replace(",", ".")) * 1000, "despiece");
+    });
+  }
   const t = X.bom.totals;
   d.notes(30, y - 6, [`Componentes: ${t.components} (${t.manufactured_parts} fabricados, ${t.standard_parts} normalizados) · Referencias distintas: ${t.distinct_parts} · Masa total: ${t.total_mass.toFixed(2)} kg (calculada desde los sólidos).`,
     "Metros de perfil: " + Object.entries(t.profile_meters).map(([k, v]) => `${k}: ${v.toFixed(3)} m`).join("; "),
     "Superficie de chapa: " + Object.entries(t.sheet_area_m2).map(([k, v]) => `${k}: ${v.toFixed(4)} m²`).join("; ")], 2.6, 360);
+}
+
+/** Lo que debe figurar en los planos según el modelo y el plan de corte (no según lo dibujado): taladros de cada perfil
+ *  y barras y piezas de cada grupo del plan (= plans.drawing_expected). drawingConsistency lo compara con lo impreso. */
+export function drawingExpected(model, plan) {
+  const exp = {};
+  for (const p of Object.values(model.parts)) if (p.kind === "perfil" && p.holes.length) exp[`TAL_${p.ref}`] = p.holes.length;
+  plan.cutting.forEach((c, k) => {
+    exp[`BARRAS_${k + 1}`] = c.bars.length;
+    exp[`PIEZAS_CORTE_${k + 1}`] = c.bars.reduce((t, b) => t + b.cuts.length, 0);
+  });
+  return exp;
 }
 
 /** Auditoría de legibilidad de todas las hojas (después de terminar el documento). Libera el registro de ocupación. */
@@ -1252,7 +1428,8 @@ export async function drawingSet(model, summary, info, onProgress = null) {
   const sheets = Object.values(model.parts).filter((p) => p.kind === "chapa").sort((a, b) => a.pos - b.pos);
   const plates = Object.values(model.parts).filter((p) => p.kind === "pletina" && !isPerforatedPlate(p));
   const perf = Object.values(model.parts).filter(isPerforatedPlate).sort((a, b) => a.pos - b.pos);
-  const total = 3 + sheets.length * 2 + (plates.length ? 1 : 0) + perf.length + 4;
+  const nBom = Math.max(1, Math.ceil(summary.bom.rows.length / BOM_ROWS_PER_SHEET));
+  const total = 2 + profileFlow(model, summary.manufacturing).length + sheets.length * 2 + (plates.length ? 1 : 0) + perf.length + 3 + nBom;
   const d = new Drawing({ ...info, total_sheets: total, title: `Planos ${model.product_code}`, assembly_ref: model.product_code });
   planGeneral(d, X);
   planStructure(d, X);
@@ -1268,7 +1445,7 @@ export async function drawingSet(model, summary, info, onProgress = null) {
   onProgress?.("Planos: compresión del PDF");
   const pdf = await d.finish();
   const layout = layoutReport(d);
-  return { pdf, sheets: d.pages, total: d.pages.length, ctx: X, layout };
+  return { pdf, sheets: d.pages, total: d.pages.length, announced: total, expected: drawingExpected(model, summary.manufacturing), ctx: X, layout };
 }
 
 /** Instrucciones de montaje (documento independiente): portada + una hoja por paso con vista explosionada del paso. */
@@ -1308,7 +1485,10 @@ export async function assemblyInstructions(model, summary, info, X = null, onPro
     const rows = [...cnt.entries()].map(([k, q]) => { const p = m.parts[k]; return [p.pos, p.ref, p.name, q]; }).sort((a, b) => a[0] - b[0]);
     d.text(30, 80, `PASO ${n + 1}: ${sa.name.toUpperCase()}`, 3.6, "l", 0, true);
     d.notes(30, 72, [texts[sa.id] ?? ""], 2.8, 190);
-    d.table(284, 268, [["Pos", 10, "c"], ["Ref", 34, "l"], ["Pieza", 66, "l"], ["Uds", 12, "c"]], rows.slice(0, 30), 5.2, 6, 2.3);
+    // la referencia completa (es la que citan las instrucciones): su columna al ancho del contenido; ninguna fila se omite
+    const refW = Math.min(64, rows.reduce((mx, r) => Math.max(mx, textWidth(String(r[1]), 2.3) + 3.4), 34));
+    const yT = d.table(284, 268, [["Pos", 10, "c"], ["Ref", refW, "l"], ["Pieza", 100 - refW, "l"], ["Uds", 12, "c"]], rows, 5.2, 6, 2.3);
+    if (yT < 84) (d.page.truncated ??= []).push(`tabla de piezas del paso ${n + 1}: no cabe en la hoja`);
     shown.push(...now);
   });
   const pdf = await d.finish();
@@ -1316,7 +1496,13 @@ export async function assemblyInstructions(model, summary, info, X = null, onPro
 }
 
 /** Coherencia de las cotas registradas al dibujar frente a parámetros y geometría (port de qa.drawing_consistency). */
-export function drawingConsistency(model, sheets) {
+// Registros que deben figurar siempre en los planos (longitud y taladros de cada perfil, cantidad y peso de cada pieza del
+// despiece, barras y piezas de cada grupo del plan de corte).
+const REQUIRED_IN_DRAWINGS = ["L_", "CANT_", "PESO_G_", "TAL_", "BARRAS_", "PIEZAS_CORTE_"];
+
+/** Compara lo registrado al dibujar con el modelo. ``dr`` es el resultado de drawingSet (o sólo sus hojas). */
+export function drawingConsistency(model, dr) {
+  const sheets = Array.isArray(dr) ? dr : dr.sheets;
   const env = model.dims.envelope ?? {};
   const names = env.names ?? ["LONGITUD", "ANCHURA"];
   const exp = {};
@@ -1331,14 +1517,24 @@ export function drawingConsistency(model, sheets) {
       exp[`${p.ref}_LX`] = p.spec.Lx; exp[`${p.ref}_LY`] = p.spec.Ly; exp[`${p.ref}_ESPESOR`] = p.spec.t;
     }
     if (p.kind === "perfil") exp[`L_${p.ref}`] = p.length;
-    // cantidades impresas en el despiece frente a las instancias del 3D
+    // cantidades impresas en el despiece frente a las instancias del 3D, y peso unitario impreso (en gramos) frente
+    // al de la pieza con el redondeo del BOM
     exp[`CANT_${p.ref}`] = model.instances.filter((i) => i.part.key === p.key).length;
+    exp[`PESO_G_${p.ref}`] = pyRound(p.mass, 4) * 1000;
   }
-  const mism = [];
+  if (!Array.isArray(dr)) Object.assign(exp, dr.expected ?? {});
+  const mism = [], drawn = new Set();
   let checked = 0;
   for (const sh of sheets) for (const dm of sh.dims) if (dm.name in exp) {
     checked++;
+    drawn.add(dm.name);
     if (Math.abs(dm.value - exp[dm.name]) > 0.05) mism.push({ sheet: sh.number, dim: dm.name, drawn: dm.value, expected: Math.round(exp[dm.name] * 1000) / 1000 });
   }
+  // lo que debe figurar y no figura: un perfil sin su longitud o sus taladros, una pieza sin fila en el despiece, barras o
+  // piezas del plan de corte sin representar (una hoja llena no puede omitir nada sin aviso)
+  for (const name of Object.keys(exp).filter((n) => REQUIRED_IN_DRAWINGS.some((p) => n.startsWith(p)) && !drawn.has(n)).sort())
+    mism.push({ sheet: "—", dim: name, drawn: null, expected: Math.round(exp[name] * 1000) / 1000 });
+  for (const sh of sheets) for (const txt of sh.truncated ?? []) mism.push({ sheet: sh.number, dim: "TEXTO_TRUNCADO", drawn: null, expected: txt });   // un texto de tabla cortado no identifica nada
+  if (!Array.isArray(dr) && dr.announced != null && dr.announced !== sheets.length) mism.push({ sheet: "—", dim: "HOJAS", drawn: sheets.length, expected: dr.announced });
   return { checked_dims: checked, mismatches: mism };
 }

@@ -466,20 +466,25 @@ página y avisa si el proyecto está validado o tiene expedientes.
 Cada diseño lleva un presupuesto unitario calculado desde el modelo y el plan de fabricación con
 las tarifas orientativas de `monxu/catalog/data/costs.json`, editables:
 
-- material (con merma de perfil y aprovechamiento de chapa, o barras y chapas completas por lote);
+- material: las barras y chapas que hay que comprar para el lote según el plan de corte y el anidado reales
+  (`imputacion_material: "compra"`), o lo comprado menos los retales reutilizables (`"consumo"`); no se usan
+  porcentajes genéricos de merma ni de aprovechamiento;
 - normalizados;
 - consumibles de soldadura;
 - operaciones:
-  - corte y taladrado de perfiles;
+  - cortes de sierra del plan de corte (refrentado de cada barra y uno por pieza) y taladrado de perfiles;
   - láser por metro y por perforación, según espesor y material;
   - plegado por pliegue;
   - soldadura por horas de arco y factor de marcha;
 - acabado por m² o por kg;
 - montaje por elemento;
+- control de calidad (tiempo por unidad y por unión soldada);
 - preparación de máquinas y útil repartida entre las unidades del lote;
 - gastos generales y margen.
 
-Se incluye una tabla de coste unitario para lotes de 1, 5, 10, 25 y 50 unidades.
+Se incluye una tabla de coste unitario para lotes de 1, 5, 10, 25 y 50 unidades; cada lote se reoptimiza
+(corte y anidado propios), así que el material por unidad puede subir o bajar de un lote a otro al comprarse
+barras y chapas enteras. Cada partida indica el documento del que sale su cantidad (columna «Base»).
 
 Aparece en la pestaña «Presupuesto», en la hoja «Presupuesto» del Excel (con fórmulas) y en
 `04_LISTA_MATERIALES/presupuesto_estimado.csv/.json` del expediente. Los dos motores dan el mismo
@@ -761,6 +766,82 @@ familias salen CUMPLE. Lo que antes dejaba la verificación incompleta se calcul
 | Expediente del navegador con tacos | Verificado con las herramientas del servidor (STEP, DXF, STL), 0 errores. |
 | Flujos de interfaz | Diseño recuperado al abrir, asistente que aplica y regenera, conversación y borrador conservados, corrección aplicada con un botón: 14/14 sin errores de consola. |
 | Recorrido de las 63 plantillas en la interfaz | Sin errores de consola y 0 bloqueantes. |
+
+## Auditoría integral: coherencia entre documentos
+
+Todo se genera desde el modelo paramétrico maestro; ningún documento guarda valores propios. La auditoría de
+noviembre de 2026 (proyecto de referencia P-2026-0039, `tests/data/ref_P-2026-0039.json`) cerró estas
+incoherencias y dejó controles automáticos que impiden que vuelvan:
+
+- **Plan de corte.** Cada barra cumple `L = despunte inicial + Σ piezas + sierra + despunte final + retal`
+  (despuntes en `profiles.json › _meta.cutting`). Se listan piezas, cortes, sierra, despuntes, retal y su
+  estado (reutilizable o chatarra). Los retales del inventario se usan antes de comprar barras nuevas.
+- **Anidado y compra de chapa.** Se compran chapas enteras del formato, salvo la última si aprovecha menos del
+  10 %: esa se pide cortada a medida, reanidada en el rectángulo mínimo. La franja libre de un solo corte se
+  registra como retal reutilizable. DXF, SVG y PDF del anidado dibujan la chapa comprada.
+- **Lote.** Plan de corte, anidado y lista de compras se calculan para `LOTE_FABRICACION`; el BOM es por unidad.
+- **Masas separadas.** Piezas fabricadas, componentes comerciales, producto, material comprado, desperdicio y
+  retales; el producto nunca se mezcla con el material comprado.
+- **Componentes comerciales** (`components.json`): fabricante, modelo, norma de producto (solo si existe),
+  material, clase, acabado, ficha, condiciones de uso, herramienta, par y estado de validación. Sin fabricante,
+  modelo y ficha quedan «pendiente de validación».
+- **Instrucciones de montaje** generadas desde las uniones y componentes del modelo, con las referencias
+  `N-<código>` del BOM, sus cantidades, pares y herramientas (`monxu/docs/assembly.py`).
+- **Cálculo.** Peso propio con la masa real de cada pieza (la del BOM); imperfecciones globales equivalentes
+  (EN 1993-1-1 §5.3.2); sensibilidad a segundo orden por α_cr (método de Horne, §5.2.1(4)B) con
+  amplificación entre 3 y 10 y «no cumple» por debajo de 3 (en una estructura anclada se calcula además con
+  los apoyos anclados coaccionados en planta: si así α_cr ≥ 3 queda «pendiente de validación», nunca
+  «cumple»); resultado de cada comprobación en CUMPLE / NO CUMPLE / PENDIENTE DE VALIDACIÓN / NO APLICABLE;
+  normas filtradas por material y proceso.
+- **QA central** (`monxu/validation/qa.py`, `frontend/src/engine/pipeline.ts`): cada comprobación con código,
+  severidad (CRÍTICO, BLOQUEANTE, ADVERTENCIA, INFORMATIVO), documento, valor esperado y obtenido, diferencia,
+  criterio y acción. Controles cruzados `XDOC-*`: BOM ↔ 3D, BOM ↔ corte y anidado, BOM ↔ compras, compras ↔
+  optimización, balance de material, peso ↔ cálculo, presupuesto ↔ compras, instrucciones ↔ BOM, soldadura ↔
+  cálculo; y `EXP-*` del expediente: STEP, STL releído, DXF de pieza y de anidado, Excel y planos.
+- **Aprobación técnica** (`monxu/validation/approval.py`): nueve estados encadenados —diseño generado,
+  geometría validada, BOM validado, fabricabilidad revisada, cálculo estructural validado, documentación
+  generada, revisión técnica pendiente, aprobado técnicamente y liberado para fabricación—. Cada validación
+  pendiente se cierra con el documento que la justifica y cada etapa con su firma; el sello de los documentos
+  sale del estado y nunca dice «verificado» o «aprobado» con las firmas vacías. Liberar exige un expediente
+  generado después de aprobar.
+- **Inventario de retales** y **mapa de dependencias** (qué documentos cambian con cada parámetro).
+- **Planos sin omisiones.** La hoja 02B lista todos los perfiles con sus mecanizados completos (posiciones
+  separadas por «;», en las líneas que hagan falta) y pasa a hojas de continuación (`02B.2`…) cuando no caben;
+  el plan de corte representa todas las barras, agrupando las consecutivas con el mismo patrón («Barras 1 a 5
+  (5 iguales)»). El despiece imprime dimensiones y pesos con las cifras del BOM, con las columnas de referencia
+  y material al ancho de su contenido, y continúa en `08.2`… a partir de 28 filas. Las tablas parten el texto
+  en líneas en lugar de cortarlo. El control `PLANO-GEOMETRIA` bloquea el expediente si falta un perfil, un
+  taladro, una fila del despiece, una barra o una pieza del plan de corte, si un peso impreso no es el del BOM,
+  si un texto de tabla queda cortado o si el número de hojas no es el anunciado en los cajetines;
+  `PLANO-MONTAJE` hace lo mismo con las tablas de las instrucciones.
+- **CSV del expediente** con las mismas celdas en los dos motores: separador «;», coma decimal y enteros sin
+  «.0» (`pipeline.csv_cell`). `tools/webcheck/verify_dossier.py` compara los CSV del navegador con los del
+  servidor: plan de corte y balance, idénticos byte a byte; compras, presupuesto y pesos, iguales dentro de la
+  tolerancia entre el sólido B-rep y la definición analítica.
+- **Corrección automática**: la propuesta lleva el veredicto del diseño corregido y cuántas comprobaciones
+  quedan por validar; ya no anuncia «cumple todas las verificaciones».
+- **Validación cruzada de motores** (`tools/webcheck/compare.py`): además de parámetros, piezas, masas,
+  comprobaciones, corte, anidado, compras y presupuesto, compara el veredicto, los motivos de las validaciones
+  pendientes, el texto de las hipótesis de cálculo y la corrección automática propuesta.
+
+Pruebas: `tests/test_auditoria.py` (regresión de los 15 puntos del proyecto de referencia, propagación de
+parámetros, pruebas negativas —incluidas las de planos: perfil, taladro o barra ausentes, peso impreso
+distinto, texto cortado— y flujo de aprobación).
+
+### Cuestiones de ingeniería abiertas
+
+Requieren decisión de un técnico; la aplicación las informa y no las da por buenas:
+
+- **Estabilidad longitudinal de las cantilever ancladas.** El modelo de apoyos es isostático en planta (un pie
+  fijo y otro deslizante) y lleva toda la acción horizontal a un solo apoyo; en tres plantillas
+  (`CV-3-2000-600`, `CV-3-2500-800-DOBLE`, `CV-4-2200-1000-TABLEROS`) da α_cr,X entre 1,1 y 2,3. Con los apoyos
+  anclados coaccionados en planta α_cr,X sube a 9–40. La comprobación `S.ALFA-CR-X` muestra los dos valores y
+  queda PENDIENTE DE VALIDACIÓN: el técnico debe validar el cortante de los tacos y de los vástagos de los
+  pies (se da el cortante de las fuerzas equivalentes por apoyo) o hacer un análisis de segundo orden. Sin
+  anclar, α_cr < 3 es NO CUMPLE y la corrección propuesta es anclar al suelo.
+- El anejo nacional aplicable (coeficientes parciales) y las capacidades certificadas de pies, ruedas y tacos.
+- La WPS cualificada de los cordones con garganta menor de 3 mm.
+- El despunte final de barra (0 mm por defecto) y el umbral de corte a medida de chapa (10 %).
 
 ## Datos que quedan como hipótesis o pendientes
 

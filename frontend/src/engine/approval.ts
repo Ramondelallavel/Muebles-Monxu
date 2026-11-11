@@ -20,8 +20,11 @@ export function evaluate(designQa, structural, dossier, record) {
   const gates = [];
   const gate = (state, ok, reasons, signer = null) => gates.push({ id: state, label: LABELS[state], ok: !!ok, reasons: reasons.filter(Boolean), signoff: signer ?? null });
   gate("diseno_generado", true, []);
+  // una revisión anterior a la auditoría no tiene los controles cruzados ni las validaciones pendientes en su QA
+  const legacy = !(designQa && "release_blockers" in designQa);
   let b = blocking(items, GEO);
-  gate("geometria_validada", !b.length, [b.length ? `errores de geometría: ${b.join(", ")}` : ""]);
+  gate("geometria_validada", !b.length && !legacy, [b.length ? `errores de geometría: ${b.join(", ")}` : "",
+    legacy ? "revisión anterior a la auditoría (QA sin controles cruzados): emita una revisión nueva" : ""]);
   b = blocking(items, BOM); let o = open(items, BOM, val);
   gate("bom_validado", !b.length && !o.length, [b.length ? `errores: ${b.join(", ")}` : "", o.length ? `validaciones sin registrar: ${o.join(", ")}` : ""]);
   b = blocking(items, DFM); o = open(items, DFM, val); let s = sig.fabricabilidad;
@@ -54,7 +57,7 @@ export function stamp(state, structural, sig) {
   if (state === "liberado_fabricacion") return { text: `LIBERADO PARA FABRICACIÓN — ${who("liberacion")}`, level: "info" };
   if (state === "aprobado_tecnicamente") return { text: `APROBADO TÉCNICAMENTE — ${who("aprobacion")} · NO LIBERADO PARA FABRICACIÓN`, level: "info" };
   if (structural === "PENDIENTE") return { text: "PRELIMINAR — verificación estructural pendiente de datos · NO APTO PARA FABRICACIÓN", level: "warn" };
-  return { text: `${LABELS[state].toUpperCase()} — PENDIENTE DE REVISIÓN Y APROBACIÓN TÉCNICA · NO APTO PARA FABRICACIÓN`, level: "warn" };
+  return { text: `${LABELS[state].toUpperCase()} — SIN APROBACIÓN TÉCNICA · NO APTO PARA FABRICACIÓN`, level: "warn" };
 }
 
 /** Una firma solo puede registrarse si los estados anteriores al suyo se cumplen. */

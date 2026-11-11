@@ -3,6 +3,7 @@ cálculo, fabricación, BOM, planos y archivos. El expediente se genera de forma
 cualquier verificación bloqueante falla no se publica ningún archivo."""
 from __future__ import annotations
 
+import numbers
 import hashlib
 import json
 import shutil
@@ -231,31 +232,13 @@ def generate_dossier(design: Design, project: dict[str, Any], dest_root: Path,
                                 design.eng, design.qa.result(), design.cost)
         files["excel"] = excel.verify_excel(xl, design.bom)
         lot = design.plan.get("lot", 1)
-        _csv(dirs["04_LISTA_MATERIALES"] / "lista_compras.csv",
-             ["Tipo", "Descripción", "Referencia", "Cantidad", "Unidad", "Masa kg", "Origen", "Validación", "Lote"],
-             [[p["type"], p["description"], p.get("ref", ""), p["qty"], p["unit"], p["mass_kg"], p.get("basis", ""),
-               p.get("validation", ""), lot] for p in design.bom["purchases"]]
-             + [["Consumible", cdat["description"], "", cdat["qty"], cdat["unit"], "", cdat.get("basis", ""), "", lot]
-                for cdat in design.bom["consumables"]])
+        _csv(dirs["04_LISTA_MATERIALES"] / "lista_compras.csv", PURCHASE_HEADER, purchase_rows(design.bom, lot))
         c = design.cost
         if c:
-            _csv(dirs["04_LISTA_MATERIALES"] / "presupuesto_estimado.csv",
-                 ["Partida", "Concepto", "Cantidad", "Unidad", "Precio unitario EUR", "Importe EUR", "Base"],
-                 [[ln["group"], ln["concept"], ln["qty"], ln["unit"], ln["unit_eur"], ln["eur"], ln.get("basis", "")]
-                  for ln in c["lines"]]
-                 + [["", "Coste directo", "", "", "", c["direct"], ""],
-                    ["", f"Gastos generales {c['overhead_rate'] * 100:g} %", "", "", "", c["overheads"], ""],
-                    ["", "Coste total", "", "", "", c["cost"], ""],
-                    ["", f"Margen {c['margin_rate'] * 100:g} %", "", "", "", c["margin"], ""],
-                    ["", "Precio de venta estimado", "", "", "", c["price"], f"material: {c['material_basis']}"]]
-                 + [["Lote", f"{x['lot']} ud", "", "", "coste/precio por unidad", f"{x['cost']} / {x['price']}", ""]
-                    for x in c["by_lot"]])
+            _csv(dirs["04_LISTA_MATERIALES"] / "presupuesto_estimado.csv", QUOTE_HEADER, quote_rows(c))
             (dirs["04_LISTA_MATERIALES"] / "presupuesto_estimado.json").write_text(
                 json.dumps(c, indent=2, ensure_ascii=False), encoding="utf-8")
-        _csv(dirs["04_LISTA_MATERIALES"] / "pesos_materiales.csv",
-             ["Pos", "Referencia", "Descripción", "Material", "Cantidad", "Peso unit kg", "Peso total kg"],
-             [[r["pos"], r["ref"], r["description"], r["material"], r["qty"], r["unit_mass"], r["total_mass"]]
-              for r in design.bom["rows"]] + weight_summary_rows(design.bom))
+        _csv(dirs["04_LISTA_MATERIALES"] / "pesos_materiales.csv", WEIGHT_HEADER, weight_rows(design.bom))
         # ---- 05 optimización
         report.optimization_pdf(dirs["05_OPTIMIZACION"] / "anidado_chapa.pdf", info, m, design.plan)
         _csv(dirs["05_OPTIMIZACION"] / "plan_corte_perfiles.csv", CUT_PLAN_HEADER, cut_plan_rows(design.plan))
@@ -315,6 +298,37 @@ BALANCE_HEADER = ["Tipo", "Grupo", "Unidad", "Comprado", "De inventario", "Neto 
                   "Balance"]
 
 
+PURCHASE_HEADER = ["Tipo", "Descripción", "Referencia", "Cantidad", "Unidad", "Masa kg", "Origen", "Validación", "Lote"]
+QUOTE_HEADER = ["Partida", "Concepto", "Cantidad", "Unidad", "Precio unitario EUR", "Importe EUR", "Base"]
+WEIGHT_HEADER = ["Pos", "Referencia", "Descripción", "Material", "Cantidad", "Peso unit kg", "Peso total kg"]
+
+
+def purchase_rows(bom: dict[str, Any], lot: int) -> list[list[Any]]:
+    """Lista de compras del lote: material, componentes comerciales y consumibles (= docs.purchaseRows)."""
+    return ([[p["type"], p["description"], p.get("ref", ""), p["qty"], p["unit"], p["mass_kg"], p.get("basis", ""),
+              p.get("validation", ""), lot] for p in bom["purchases"]]
+            + [["Consumible", c["description"], "", c["qty"], c["unit"], "", c.get("basis", ""), "", lot]
+               for c in bom["consumables"]])
+
+
+def quote_rows(c: dict[str, Any]) -> list[list[Any]]:
+    """Presupuesto estimado: partidas, totales y coste por lote (mismas celdas que el motor del navegador)."""
+    return ([[ln["group"], ln["concept"], ln["qty"], ln["unit"], ln["unit_eur"], ln["eur"], ln.get("basis", "")]
+             for ln in c["lines"]]
+            + [["", "Coste directo", "", "", "", c["direct"], ""],
+               ["", f"Gastos generales {c['overhead_rate'] * 100:g} %", "", "", "", c["overheads"], ""],
+               ["", "Coste total", "", "", "", c["cost"], ""],
+               ["", f"Margen {c['margin_rate'] * 100:g} %", "", "", "", c["margin"], ""],
+               ["", "Precio de venta estimado", "", "", "", c["price"], f"material: {c['material_basis']}"]]
+            + [["Lote", f"{x['lot']} ud", "", "", "coste/precio por unidad",
+                f"{csv_cell(x['cost'])} / {csv_cell(x['price'])}", ""] for x in c["by_lot"]])
+
+
+def weight_rows(bom: dict[str, Any]) -> list[list[Any]]:
+    return [[r["pos"], r["ref"], r["description"], r["material"], r["qty"], r["unit_mass"], r["total_mass"]]
+            for r in bom["rows"]] + weight_summary_rows(bom)
+
+
 def cut_plan_rows(plan: dict[str, Any]) -> list[list[Any]]:
     """Plan de corte barra a barra: L = despunte inicial + Σ piezas + sierra + despunte final + retal."""
     return [[c["profile"], c["material"], b["bar"], f"retal {b['stock_id']}" if b["source"] == "retal" else "comercial",
@@ -358,9 +372,28 @@ def optimization_summary(plan: dict[str, Any]) -> dict[str, Any]:
         "balance": plan["balance"]}
 
 
-def _csv(path: Path, header: list[str], rows: list[list[Any]]) -> None:
+def csv_cell(c: Any) -> str:
+    """Celda de los CSV del expediente, igual en los dos motores: separador «;», de modo que los números van con coma
+    decimal y los enteros sin «.0» (con punto, una hoja de cálculo en español leería 110.702 kg como 110 702)."""
+    if c is None:
+        return ""
+    if isinstance(c, bool) or not isinstance(c, numbers.Real):
+        return str(c)
+    f = float(c)
+    return (str(int(f)) if f.is_integer() else repr(f)).replace(".", ",")
+
+
+def csv_text(header: list[str], rows: list[list[Any]]) -> str:
+    """Texto de un CSV del expediente (BOM de UTF-8, separador «;», fin de línea CRLF), igual en los dos motores."""
     import csv
-    with open(path, "w", newline="", encoding="utf-8-sig") as fh:
-        w = csv.writer(fh, delimiter=";")
-        w.writerow(header)
-        w.writerows(rows)
+    import io
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(header)
+    w.writerows([[csv_cell(c) for c in r] for r in rows])
+    return "\ufeff" + buf.getvalue()
+
+
+def _csv(path: Path, header: list[str], rows: list[list[Any]]) -> None:
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        fh.write(csv_text(header, rows))

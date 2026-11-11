@@ -51,6 +51,9 @@ def test_planos_sin_solapes_en_una_plantilla_por_familia(tmp_path):
     assert len(res) == len(cases)
     for r in res:
         assert r["planos"]["total"] == 0 and r["montaje"]["total"] == 0, (r["id"], r["planos"]["sheets"], r["montaje"]["sheets"])
+        # nada ausente ni cortado: perfiles y taladros, filas del despiece, barras del plan de corte, textos de las tablas
+        assert r["consistency"]["mismatches"] == [] and r["montaje_truncated"] == [], (r["id"], r["consistency"]["mismatches"][:4])
+        assert r["announced"] == len(r["sheets"]), (r["id"], r["sheets"])
 
 
 @pytest.mark.slow

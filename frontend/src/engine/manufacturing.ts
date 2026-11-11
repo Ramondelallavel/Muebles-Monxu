@@ -377,7 +377,7 @@ export function purchases(model, mp, welding, painting) {
   const out = [];
   for (const c of mp.cutting) {
     if (c.n_bars) out.push({ type: "Perfil", description: `Barra ${c.profile} ${c.material} L=${fx(c.bar_length)} mm`, qty: c.n_bars, unit: "barra",
-      mass_kg: pyRound(c.n_bars * c.mass_per_bar_kg, 2), basis: "plan de corte", group: `${c.profile} ${c.material}` });
+      mass_kg: pyRound((c.purchased_length * c.kg_per_m) / 1000, 2), basis: "plan de corte", group: `${c.profile} ${c.material}` });
     if (c.n_stock_used) out.push({ type: "Perfil (retal de inventario)", description: `Retales ${c.profile} ${c.material}: ` + c.stock_used.map(String).join(", "),
       qty: c.n_stock_used, unit: "retal", mass_kg: pyRound((c.stock_length * c.kg_per_m) / 1000, 2), basis: "inventario de retales",
       group: `${c.profile} ${c.material}`, purchase: false });
@@ -452,20 +452,29 @@ export function manufacturingPlan(model, stock = null) {
 }
 
 // ============================================================================ DFM
-/** Uniones soldadas de un perfil con una pata en las que ambos comparten una cara exterior vertical (enrase). */
-export function flushWeldJoints(model, tol = 0.05) {
-  const legs = new Set(model.structure.leg_ids ?? []);
-  let n = 0;
+/** Posición de las caras laterales de cada barra soldada a tope sobre otra, desde la geometría (= plan.weld_face_conditions):
+ *  flush = una cara enrasada con la de la barra de apoyo; corner = una cara a menos del radio de esquina, sin enrasar. */
+export function weldFaceConditions(model, tol = 0.05) {
+  let flush = 0, corner = 0, dmin = null, rmin = null;
+  const axisOf = (i) => { let m = 0; for (let k = 1; k < 3; k++) if (Math.abs(i.axis[1][k] - i.axis[0][k]) > Math.abs(i.axis[1][m] - i.axis[0][m])) m = k; return m; };
   for (const j of model.joints) {
-    if (j.kind !== "soldadura" || j.members.length < 2) continue;
-    const ms = j.members.slice(0, 2).map((i) => model.instance(i));
-    if (!ms.every((x) => x.part.kind === "perfil")) continue;
-    const [a, b] = ms;
-    if (legs.has(a.id) === legs.has(b.id)) continue;
+    const fem = j.kind === "soldadura" ? j.weld?.fem : null;
+    if (!fem) continue;
+    const a = model.instance(fem.member), b = model.instance(fem.onto);
+    if (a.part.kind !== "perfil" || b.part.kind !== "perfil") continue;
     const [alo, ahi] = instanceBBox(a), [blo, bhi] = instanceBBox(b);
-    if ([0, 1].some((k) => Math.abs(alo[k] - blo[k]) <= tol || Math.abs(ahi[k] - bhi[k]) <= tol)) n++;
+    const r = b.part.profile.r_out, axA = axisOf(a), axB = axisOf(b);
+    let state = null, dC = null;
+    for (let k = 0; k < 3; k++) {
+      if (k === axA || k === axB || !(alo[k] >= blo[k] - tol && ahi[k] <= bhi[k] + tol)) continue;
+      const d = Math.min(alo[k] - blo[k], bhi[k] - ahi[k]);
+      if (d <= tol) state = "flush";
+      else if (d < r - tol && state !== "flush") { state = "corner"; dC = dC === null ? d : Math.min(dC, d); }
+    }
+    if (state === "flush") flush++;
+    else if (state === "corner") { corner++; if (dmin === null || dC < dmin) { dmin = dC; rmin = r; } }
   }
-  return n;
+  return { flush, corner, corner_min: dmin === null ? null : pyRound(dmin, 2), corner_r: rmin === null ? null : pyRound(rmin, 2) };
 }
 export function dfmCheck(model, plan = null) {
   const sd = C.sheetData();
@@ -581,15 +590,16 @@ export function dfmCheck(model, plan = null) {
     + `carbono e inoxidable (p. ej. ${dissimilar[0]}): soldadura disimilar con aporte austenítico (tipo 309L) y riesgo de corrosión en ambiente húmedo.`,
     "Usar el mismo material en las piezas soldadas.");
   // advertencias de soldeo propias de la familia o, por defecto, las de los bastidores con encimera
-  let weldNotes = model.structure.dfm_weld_notes;           // advertencias de soldeo propias de la familia
-  if (!weldNotes) {
-    weldNotes = [];
-    const nFlush = flushWeldJoints(model);
-    if (nFlush) weldNotes.push(["SOL-ENRASE", "Bastidores", `${nFlush} uniones de largueros o travesaños enrasados con la cara exterior de las patas: en la `
-      + "cara enrasada el cordón es en ángulo exterior/borde y debe amolarse antes de pintar."]);
-    weldNotes.push(["SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: puntear en mesa plana con escuadras, soldar "
-      + "en secuencia simétrica alterna y verificar la planitud de las superficies de apoyo de las chapas (EN ISO 13920 clase F)."]);
-  }
+  // caras enrasadas o dentro del radio de esquina de la barra de apoyo: siempre desde la geometría (no supuesto)
+  const wf = weldFaceConditions(model);
+  if (wf.flush) add("advertencia", "SOL-ENRASE", "Uniones soldadas", `${wf.flush} uniones con una cara enrasada con la de la barra a la que se sueldan `
+    + "(misma cara exterior o mismo canto): en esa cara el cordón cae sobre el radio de esquina (ángulo exterior o borde).",
+  "Amolar esos cordones donde apoye una chapa y antes de pintar.");
+  if (wf.corner) add("advertencia", "SOL-RADIO-ESQUINA", "Uniones soldadas", `${wf.corner} uniones con una cara lateral a ${g(wf.corner_min)} mm de la cara de la barra de apoyo, `
+    + `dentro de su radio de esquina (${g(wf.corner_r)} mm): en ese lado el cordón es en bisel abocinado sobre el radio, con garganta efectiva reducida.`,
+  "Recogerlo en la WPS o separar la barra de la cara al menos el radio de esquina.");
+  const weldNotes = model.structure.dfm_weld_notes ?? [["SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: puntear en mesa plana "
+    + "con escuadras, soldar en secuencia simétrica alterna y verificar la planitud de las superficies de apoyo de las chapas (EN ISO 13920 clase F)."]];
   for (const [code, elem, msg] of weldNotes) add("advertencia", code, elem, msg);
   // galvanizado en caliente: los tubos cerrados por soldadura necesitan venteo y drenaje (no modelados)
   const galv = [...new Set(model.instances.filter((i) => i.part.kind === "perfil" && i.part.finish === "GALVANIZADO").map((i) => i.part.ref))].sort();

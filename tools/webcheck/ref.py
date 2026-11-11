@@ -4,6 +4,7 @@ import sys
 
 from monxu.manufacturing.costing import quotation
 from monxu.engineering.analysis import analyze
+from monxu.engineering.autofix import propose_fix
 from monxu.families import family
 from monxu.manufacturing.plan import dfm_check, manufacturing_plan
 from monxu.docs.bom import build_bom
@@ -41,7 +42,19 @@ def run(c):
             "balance": plan["balance"]["totals"],
             "purchases": [[p["type"], p["description"], p["qty"], p["mass_kg"]] for p in plan["purchases"]["items"]],
             "welding": plan["welding"], "painting": plan["painting"],
-            "dfm": [[d["level"], d["code"], d["element"]] for d in dfm], "bom_totals": bom["totals"]}
+            "dfm": [[d["level"], d["code"], d["element"]] for d in dfm], "bom_totals": bom["totals"],
+            "weld_faces": [d["message"] for d in dfm if d["code"] in ("SOL-ENRASE", "SOL-RADIO-ESQUINA")],
+            "verdict": eng["verdict"], "val_pending": [[v["id"], v["reason"]] for v in eng["validation_pending"]],
+            "hypotheses": eng["hypotheses"], "fix": _fix(c, m, eng)}
+
+
+def _fix(c, m, eng):
+    """Corrección automática propuesta, como en ``pipeline.regenerate``."""
+    if not (eng["status"] == "NO_CUMPLE" or m.rule_fixes):
+        return None
+    f = propose_fix(c["family"], c["values"], None, eng, m)
+    return f and {"params": f["params"], "reasons": f["reasons"], "verdict": f["verdict"],
+                  "validation_pending": f["validation_pending"]}
 
 
 out = []

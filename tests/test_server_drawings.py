@@ -6,6 +6,7 @@ from monxu.docs import plans
 from monxu.docs.drawing_kit import text_width, weld_triangle_offset
 from monxu.families import REGISTRY
 from monxu.pipeline import regenerate
+from monxu.validation import approval as AP
 
 
 def test_weld_throat_text_clears_all_around_circle():
@@ -39,7 +40,8 @@ def test_server_drawings_without_text_overlaps(tmp_path, fid, tid):
     d = regenerate(fid, t["values"])
     info = {"product_name": f"{d.model.family_name} {d.model.product_code}", "project_code": "P-T", "revision": "A",
             "date": "2026-11-07", "designer": "QA", "company": "MUEBLES MONXU",
-            "status_stamp": "CÁLCULO VERIFICADO — CUMPLE (EN 1990 / EN 1993)"}
+            # sello real del estado más largo antes de la aprobación (nunca «verificado» sin firmas)
+            "status_stamp": AP.stamp("calculo_validado", d.eng["status"], {})["text"]}
     path = tmp_path / "planos.pdf"
     plans.generate(d.model, d.plan, d.bom, d.eng, info, path)
     assert _overlaps(path) == []

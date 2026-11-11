@@ -11,7 +11,7 @@ import { quotation } from "./costing";
 import { build } from "./sizing";
 import { checkInterferences } from "./interference";
 import { f as fx, g, pyRound } from "./util";
-import { designationIssues, stepTexts } from "./drawings";
+import { assemblyNotes, designationIssues, foreignWords, stepTexts } from "./drawings";
 import { dependencyMap } from "./dependencies";
 
 const BLOCK = "bloqueante", WARN = "advertencia", OKL = "ok", PEND = "pendiente";
@@ -196,6 +196,11 @@ export function crossChecks(q, model, eng, dfm, bom, plan, cost) {
   bad.push(...Object.keys(pur).filter((c) => !(c in std)).map((c) => `N-${c} sobrante en compras`));
   q.add(bad.length ? BLOCK : OKL, "XDOC-BOM-COMPRAS", "Componentes comerciales de la lista de compras frente al BOM: " + (bad.length ? bad.join("; ")
     : `${Object.keys(std).length} referencias coincidentes (lote de ${lot}).`), { criterion: "Unidades compradas = unidades del BOM × lote", action: "Regenerar la lista de compras" });
+  // componentes comerciales del BOM: referencia N-<código> del catálogo y masa de catálogo positiva
+  bad = bom.rows.filter((r) => r.kind === "normalizado" && (!r.code || r.ref !== `N-${r.code}` || !(r.unit_mass > 0))).map((r) => r.ref);
+  q.add(bad.length ? BLOCK : OKL, "BOM-COMERCIALES", "Componentes comerciales del BOM: " + (bad.length ? "sin referencia de catálogo o sin masa: " + bad.join(", ")
+    : `${Object.keys(std).length} referencias N-<código> con masa de catálogo.`), { criterion: "Cada componente comercial tiene referencia de catálogo y masa positiva",
+    action: "Completar el componente en la base de componentes comerciales" });
   const bars = Object.fromEntries(plan.purchases.items.filter((p) => p.type === "Perfil").map((p) => [p.group, p.qty]));
   bad = [];
   for (const c of plan.cutting) { const grp = `${c.profile} ${c.material}`; if ((bars[grp] ?? 0) !== c.n_bars) bad.push(`${grp}: compras ${bars[grp] ?? 0} / plan ${c.n_bars}`); }
@@ -237,6 +242,13 @@ export function crossChecks(q, model, eng, dfm, bom, plan, cost) {
   q.add(bad.length ? BLOCK : OKL, "XDOC-TORNILLERIA-INSTR", "Referencias de las instrucciones de montaje frente al BOM: " + (bad.length ? bad.join(", ") + " no están en el BOM"
     : "todas las referencias y designaciones citadas están en el BOM y en el 3D."), { expected: "referencias del BOM", obtained: bad.join(", ") || "coincidentes",
     criterion: "Las instrucciones usan exactamente las referencias del BOM y del 3D", action: "Corregir el texto de montaje de la familia" });
+  // textos generados ↔ producto: nada de vocabulario de otra familia (p. ej. «encimera» en una estantería)
+  bad = foreignWords(model, [...texts, ...assemblyNotes(model), ...dfm.map((f) => f.message), ...(eng.hypotheses ?? []), ...(eng.limitations ?? []),
+    ...(eng.load_cases ?? []).map((c) => c.label)]);
+  q.add(bad.length ? BLOCK : OKL, "XDOC-TEXTOS-PRODUCTO", "Textos de montaje, fabricación y cálculo frente al producto: " + (bad.length
+    ? "mencionan una encimera que el producto no tiene: " + bad.join(" | ") : "sin vocabulario de otro tipo de producto."),
+  { expected: "textos propios del producto", obtained: bad.length ? `${bad.length} textos ajenos` : "coherentes",
+    criterion: "Los textos generados solo nombran elementos que existen en el modelo", action: "Corregir el texto por defecto o el de la familia" });
   const joints = Object.fromEntries(model.joints.map((j) => [j.id, j]));
   bad = eng.checks.filter((c) => c.id.startsWith("W.") && joints[c.id.slice(2)] && c.details?.a_mm != null && Math.abs(c.details.a_mm - joints[c.id.slice(2)].weld.a) > 1e-9).map((c) => c.id);
   q.add(bad.length ? BLOCK : OKL, "XDOC-SOLDADURA-CALC", "Gargantas del cálculo frente a las de las uniones del modelo: " + (bad.length ? bad.join(", ") : "coincidentes."),

@@ -126,6 +126,25 @@ def notes(model, base: list[str]) -> list[str]:
     return ["HERRAMIENTAS:", *[f"· {t}" for t in tools], ""] + block + [""] + base
 
 
+def default_notes(model) -> list[str]:
+    """Cuadro de herramientas, desmontaje y seguridad por defecto (las familias pueden dar el suyo)."""
+    sups = model.structure.get("supports") or []
+    castor = bool(sups) and catalog.component(sups[0]["component"])["category"].startswith("ruedas")
+    return model.structure.get("assembly_notes") or [
+        "HERRAMIENTAS:", *([] if castor else ["· Nivel de burbuja"]), "",
+        "DESMONTAJE:", "Chapas desmontables (uniones atornilladas). La estructura es un subconjunto soldado no "
+        "desmontable.", "",
+        "SEGURIDAD:", "Manipular las chapas entre dos personas; usar guantes (cantos de chapa)."]
+
+
+def foreign_words(model, texts: list[str]) -> list[str]:
+    """Palabras de otro tipo de producto en los textos generados: «encimera» en un producto que no la tiene."""
+    worktop = any(sf["id"] == "encimera" for sf in model.structure.get("surfaces", []))
+    if worktop:
+        return []
+    return sorted({t[:80] for t in texts if "encimera" in t.lower()})
+
+
 def designation_issues(model, texts: list[str]) -> list[str]:
     """Referencias o designaciones de tornillería citadas en las instrucciones que no están en el BOM."""
     bom_codes = {i.part.code for i in model.instances if i.part.kind == "normalizado"}

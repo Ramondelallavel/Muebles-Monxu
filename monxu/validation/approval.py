@@ -71,8 +71,13 @@ def evaluate(design_qa: dict[str, Any] | None, structural: str, dossier: dict[st
                       "signoff": signer})
 
     gate("diseno_generado", True, [])
+    # una revisión anterior a la auditoría no tiene los controles cruzados ni las validaciones pendientes en su QA:
+    # no puede aprobarse sin emitir una revisión nueva
+    legacy = "release_blockers" not in (design_qa or {})
     b = _blocking(items, GEO)
-    gate("geometria_validada", not b, [f"errores de geometría: {', '.join(b)}" if b else ""])
+    gate("geometria_validada", not b and not legacy,
+         [f"errores de geometría: {', '.join(b)}" if b else "",
+          "revisión anterior a la auditoría (QA sin controles cruzados): emita una revisión nueva" if legacy else ""])
     b, o = _blocking(items, BOM), _open(items, BOM, val)
     gate("bom_validado", not b and not o, [f"errores: {', '.join(b)}" if b else "",
                                            f"validaciones sin registrar: {', '.join(o)}" if o else ""])
@@ -126,8 +131,7 @@ def stamp(state: str, structural: str, sig: dict[str, Any]) -> dict[str, str]:
     if structural == "PENDIENTE":
         return {"text": "PRELIMINAR — verificación estructural pendiente de datos · NO APTO PARA FABRICACIÓN",
                 "level": "warn"}
-    return {"text": f"{LABELS[state].upper()} — PENDIENTE DE REVISIÓN Y APROBACIÓN TÉCNICA · NO APTO PARA "
-                    "FABRICACIÓN", "level": "warn"}
+    return {"text": f"{LABELS[state].upper()} — SIN APROBACIÓN TÉCNICA · NO APTO PARA FABRICACIÓN", "level": "warn"}
 
 
 def can_sign(evaluation: dict[str, Any], stage: str) -> tuple[bool, str]:

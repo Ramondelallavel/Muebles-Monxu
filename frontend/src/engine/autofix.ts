@@ -1,7 +1,8 @@
 // @ts-nocheck
 // Corrección automática de un diseño que NO CUMPLE por valores fijados (port de monxu/engineering/autofix.py): se
 // devuelven a 'auto' los valores que impiden cumplir, se ancla al suelo o, en un carro, se limita la fuerza de maniobra
-// a la admisible; la corrección sólo se ofrece si, regenerado y verificado, el diseño CUMPLE.
+// a la admisible; la corrección sólo se ofrece si, regenerado y verificado, no queda ninguna comprobación en NO CUMPLE.
+// La propuesta lleva el veredicto del diseño corregido (puede seguir PENDIENTE DE VALIDACIÓN).
 import { analyze } from "./analysis";
 import { AUTO } from "./model";
 import { build } from "./sizing";
@@ -57,6 +58,14 @@ function candidates(fam, values, eng) {
       }
     }
   }
+  // estabilidad global insuficiente (α_cr < 3) sin anclar: anclaje al suelo. Con los apoyos anclados la comprobación
+  // no se da por buena: queda PENDIENTE DE VALIDACIÓN (cortante de los tacos), y así se indica en la propuesta
+  const anc = specs.ANCLAJE;
+  if (fails.some((c) => c.id.startsWith("S.ALFA-CR")) && anc && (anc.choices ?? []).includes("al_suelo") && values.ANCLAJE !== "al_suelo" && !("ANCLAJE" in fix)) {
+    const fix3 = { ...fix, ANCLAJE: "al_suelo" };
+    if (specs.TACO_ANCLAJE) fix3.TACO_ANCLAJE = AUTO;
+    out.push([fix3, [...why, "Estabilidad global insuficiente sin anclar (α_cr < 3): anclaje al suelo; la coacción horizontal de los tacos queda pendiente de validación"]]);
+  }
   return out;
 }
 
@@ -109,7 +118,9 @@ export function proposeFix(fam, values, sources, eng, model = null) {
     }
     return [fix, why, r];
   };
-  const result = (fix, why, r) => ({ params: fix, reasons: why, status: r.status, governing: r.governing?.description ?? null });
+  // el veredicto del diseño corregido acompaña a la propuesta: «sin NO CUMPLE» no equivale a verificado
+  const result = (fix, why, r) => ({ params: fix, reasons: why, status: r.status, verdict: r.verdict ?? null,
+    validation_pending: (r.validation_pending ?? []).length, governing: r.governing?.description ?? null });
   for (const [fix0, why0] of cands) {
     const [fix, why, r] = attempt(fix0, why0);
     if (ok(r)) return result(fix, why, r);

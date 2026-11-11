@@ -82,6 +82,26 @@ for J, P in zip(js, py):
                 b = [[x[0], x[1], round(x[2], 3), x[3], round(x[4], 1), round(x[5], 1)] for x in b]
             if a != b:
                 d.append(f"{k}: JS={a} PY={b}")
+        if J.get("weld_faces") != P.get("weld_faces"):
+            d.append(f"caras de soldeo: JS={J.get('weld_faces')} PY={P.get('weld_faces')}")
+        # veredicto, validaciones pendientes (con su motivo), hipótesis del cálculo y corrección automática propuesta
+        if J.get("verdict") != P.get("verdict"):
+            d.append(f"veredicto: JS={J.get('verdict')} PY={P.get('verdict')}")
+        if J.get("val_pending") != P.get("val_pending"):
+            d.append(f"validaciones pendientes: JS={J.get('val_pending')} PY={P.get('val_pending')}")
+        jh, ph = J.get("hypotheses") or [], P.get("hypotheses") or []
+        if jh != ph:
+            k = next((i for i, (a, b) in enumerate(zip(jh, ph)) if a != b), min(len(jh), len(ph)))
+            d.append(f"hipótesis {k} ({len(jh)}/{len(ph)}): JS={jh[k] if k < len(jh) else None!r} PY={ph[k] if k < len(ph) else None!r}")
+        jf, pf_ = J.get("fix"), P.get("fix")
+        if (jf is None) != (pf_ is None):
+            d.append(f"corrección automática: JS={jf} PY={pf_}")
+        elif jf is not None:
+            if set(jf["params"]) != set(pf_["params"]) or any(not num_eq(jf["params"][k], pf_["params"][k], 1e-9, 1e-9) for k in pf_["params"]):
+                d.append(f"corrección automática (parámetros): JS={jf['params']} PY={pf_['params']}")
+            for k in ("reasons", "verdict", "validation_pending"):
+                if jf.get(k) != pf_.get(k):
+                    d.append(f"corrección automática ({k}): JS={jf.get(k)} PY={pf_.get(k)}")
         if J["fem"] != P["fem"]:
             d.append(f"fem: JS={J['fem']} PY={P['fem']}")
         for ref, pp in P["parts"].items():

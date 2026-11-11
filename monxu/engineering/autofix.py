@@ -3,7 +3,8 @@
 El dimensionado sólo cambia lo que está en 'auto'; si una comprobación falla es porque un valor fijado lo impide (un
 perfil, un espesor, el material de la chapa, «sin anclaje», el taco...). Aquí se propone la corrección mínima —devolver
 esos valores a 'auto', anclar al suelo o, en un carro, limitar la fuerza de maniobra a la admisible— y se comprueba
-regenerando y verificando el diseño corregido: sólo se ofrece si con ella el diseño CUMPLE.
+regenerando y verificando el diseño corregido: sólo se ofrece si con ella no queda ninguna comprobación en NO CUMPLE.
+La propuesta lleva el veredicto del diseño corregido (puede seguir PENDIENTE DE VALIDACIÓN).
 """
 from __future__ import annotations
 
@@ -76,6 +77,16 @@ def _candidates(fam, values: dict[str, Any], eng: dict) -> list[tuple[dict[str, 
                             fix2[k] = AUTO
                 out.append((fix2, why + [f"{sp.label}: {STRUCTURAL_SHEET} (límite elástico garantizado) con espesor "
                                          "por cálculo"]))
+    # estabilidad global insuficiente (α_cr < 3) sin anclar: anclaje al suelo. Con los apoyos anclados la comprobación
+    # no se da por buena: queda PENDIENTE DE VALIDACIÓN (cortante de los tacos), y así se indica en la propuesta
+    anc = specs.get("ANCLAJE")
+    if (any(c["id"].startswith("S.ALFA-CR") for c in fails) and anc is not None and "al_suelo" in (anc.choices or [])
+            and values.get("ANCLAJE") != "al_suelo" and "ANCLAJE" not in fix):
+        fix3 = {**fix, "ANCLAJE": "al_suelo"}
+        if "TACO_ANCLAJE" in specs:
+            fix3["TACO_ANCLAJE"] = AUTO
+        out.append((fix3, why + ["Estabilidad global insuficiente sin anclar (α_cr < 3): anclaje al suelo; la "
+                                 "coacción horizontal de los tacos queda pendiente de validación"]))
     return out
 
 
@@ -145,16 +156,20 @@ def propose_fix(family_id: str, values: dict[str, Any], sources: dict[str, str] 
             r = _verify(fam, values, sources, fix)
         return fix, why, r
 
+    def result(fix, why, r):
+        # el veredicto del diseño corregido acompaña a la propuesta: «sin NO CUMPLE» no equivale a verificado
+        return {"params": fix, "reasons": why, "status": r["status"], "verdict": r.get("verdict"),
+                "validation_pending": len(r.get("validation_pending") or []),
+                "governing": (r.get("governing") or {}).get("description")}
+
     for fix, why in cands:
         fix, why, r = attempt(fix, why)
         if _ok(r):
-            return {"params": fix, "reasons": why, "status": r["status"],
-                    "governing": (r.get("governing") or {}).get("description")}
+            return result(fix, why, r)
         # corregida la geometría, el cálculo puede no cumplir aún: se añade la corrección de cálculo sobre ella
         if geo and r is not None and r["status"] == "NO_CUMPLE" and not r["_errors"]:
             for f2, w2 in _candidates(fam, {**values, **fix}, r):
                 fix2, why2, r2 = attempt({**fix, **f2}, why + w2)
                 if _ok(r2):
-                    return {"params": fix2, "reasons": why2, "status": r2["status"],
-                            "governing": (r2.get("governing") or {}).get("description")}
+                    return result(fix2, why2, r2)
     return None

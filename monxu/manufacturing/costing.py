@@ -111,7 +111,7 @@ def estimate(model, plan: dict[str, Any], lot: int = 1, R: dict[str, Any] | None
         eur_kg = _material_rate(R, c["material"], "tubo")
         k = c["kg_per_m"] / 1000
         if basis == "compra":
-            kg = c["n_bars"] * c["mass_per_bar_kg"]
+            kg = c["purchased_length"] * k
             what = f"{c['n_bars']} barras de {c['bar_length']:g} mm compradas"
         else:
             kg = (c["purchased_length"] + c["stock_length"] - c["reusable_length"]) * k

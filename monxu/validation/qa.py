@@ -261,6 +261,14 @@ def cross_checks(q: QA, model, eng: dict, dfm: list, bom: dict, plan: dict, cost
     q.add(BLOCK if bad else OK, "XDOC-BOM-COMPRAS", "Componentes comerciales de la lista de compras frente al BOM: " +
           ("; ".join(bad) if bad else f"{len(std)} referencias coincidentes (lote de {lot})."),
           criterion="Unidades compradas = unidades del BOM × lote", action="Regenerar la lista de compras")
+    # componentes comerciales del BOM: referencia N-<código> del catálogo y masa de catálogo positiva
+    bad = [r["ref"] for r in bom["rows"] if r["kind"] == "normalizado" and
+           (not r["code"] or r["ref"] != f"N-{r['code']}" or not (r["unit_mass"] and r["unit_mass"] > 0))]
+    q.add(BLOCK if bad else OK, "BOM-COMERCIALES", "Componentes comerciales del BOM: " +
+          ("sin referencia de catálogo o sin masa: " + ", ".join(bad) if bad else
+           f"{len(std)} referencias N-<código> con masa de catálogo."),
+          criterion="Cada componente comercial tiene referencia de catálogo y masa positiva",
+          action="Completar el componente en la base de componentes comerciales")
     # compras ↔ optimización
     bars = {p["group"]: p["qty"] for p in plan["purchases"]["items"] if p["type"] == "Perfil"}
     bad = []
@@ -322,6 +330,16 @@ def cross_checks(q: QA, model, eng: dict, dfm: list, bom: dict, plan: dict, cost
           expected="referencias del BOM", obtained=", ".join(bad) or "coincidentes",
           criterion="Las instrucciones usan exactamente las referencias del BOM y del 3D",
           action="Corregir el texto de montaje de la familia")
+    # textos generados ↔ producto: nada de vocabulario de otra familia (p. ej. «encimera» en una estantería)
+    texts += assembly.notes(model, assembly.default_notes(model)) + [f["message"] for f in dfm] + \
+        list(eng.get("hypotheses", [])) + list(eng.get("limitations", [])) + [c["label"] for c in eng.get("load_cases", [])]
+    bad = assembly.foreign_words(model, texts)
+    q.add(BLOCK if bad else OK, "XDOC-TEXTOS-PRODUCTO", "Textos de montaje, fabricación y cálculo frente al producto: " +
+          ("mencionan una encimera que el producto no tiene: " + " | ".join(bad) if bad else
+           "sin vocabulario de otro tipo de producto."), expected="textos propios del producto",
+          obtained=f"{len(bad)} textos ajenos" if bad else "coherentes",
+          criterion="Los textos generados solo nombran elementos que existen en el modelo",
+          action="Corregir el texto por defecto o el de la familia")
     # soldadura ↔ cálculo (garganta)
     joints = {j.id: j for j in model.joints}
     bad = []
@@ -397,8 +415,10 @@ def export_checks(q: QA, model, files: dict[str, Any], bom: dict) -> QA:
         q.add(OK if dr["pages"] == dr["expected_pages"] else BLOCK, "EXP-PDF",
               f"Planos PDF: {dr['pages']} hojas (esperadas {dr['expected_pages']}).")
         mism = dr.get("mismatches", [])
-        q.add(BLOCK if mism else OK, "PLANO-GEOMETRIA", f"Cotas de plano no coincidentes con la geometría: {mism}" if mism
-              else f"{dr['checked_dims']} cotas de plano verificadas frente a la geometría y los parámetros.")
+        q.add(BLOCK if mism else OK, "PLANO-GEOMETRIA", f"Planos no coincidentes con el modelo (cotas, cantidades, pesos, "
+              f"taladros, barras del plan de corte o textos cortados): {mism}" if mism
+              else f"{dr['checked_dims']} cotas y registros de plano verificados frente a la geometría, los parámetros, "
+                   "el despiece y el plan de corte; ninguno ausente ni truncado.")
     return q
 
 
@@ -423,14 +443,32 @@ def drawing_consistency(model, drawings: dict) -> dict:
             expected[f"{p.ref}_ESPESOR"] = p.spec.t
         if isinstance(p, ProfilePart):
             expected[f"L_{p.ref}"] = p.length
-        # cantidades impresas en el despiece frente a las instancias del 3D
+        # cantidades impresas en el despiece frente a las instancias del 3D, y peso unitario impreso (en gramos)
+        # frente al de la pieza con el redondeo del BOM
         expected[f"CANT_{p.ref}"] = sum(1 for i in model.instances if i.part.key == p.key)
-    mism, checked = [], 0
+        expected[f"PESO_G_{p.ref}"] = round(p.mass, 4) * 1000
+    expected.update(drawings.get("expected") or {})
+    mism, checked, drawn = [], 0, set()
     for sh in drawings["sheets"]:
         for dm in sh["dims"]:
             if dm["name"] in expected:
                 checked += 1
+                drawn.add(dm["name"])
                 if abs(dm["value"] - expected[dm["name"]]) > 0.05:
                     mism.append({"sheet": sh["number"], "dim": dm["name"], "drawn": dm["value"],
                                  "expected": round(expected[dm["name"]], 3)})
+    # lo que debe figurar y no figura: un perfil sin su longitud o sus taladros, una pieza sin fila en el despiece,
+    # barras o piezas del plan de corte sin representar (una hoja llena no puede omitir nada sin aviso)
+    for name in sorted(n for n in expected if n.startswith(REQUIRED_IN_DRAWINGS) and n not in drawn):
+        mism.append({"sheet": "—", "dim": name, "drawn": None, "expected": round(expected[name], 3)})
+    for sh in drawings["sheets"]:                   # un texto de tabla cortado («N-TORNILLO_ISO7380…») no identifica nada
+        for txt in sh.get("truncated", []):
+            mism.append({"sheet": sh["number"], "dim": "TEXTO_TRUNCADO", "drawn": None, "expected": txt})
+    if drawings.get("announced") is not None and drawings["announced"] != len(drawings["sheets"]):
+        mism.append({"sheet": "—", "dim": "HOJAS", "drawn": len(drawings["sheets"]), "expected": drawings["announced"]})
     return {"checked_dims": checked, "mismatches": mism}
+
+
+#: registros que deben figurar siempre en los planos (longitud y taladros de cada perfil, cantidad y peso de cada
+#: pieza del despiece, barras y piezas de cada grupo del plan de corte)
+REQUIRED_IN_DRAWINGS = ("L_", "CANT_", "PESO_G_", "TAL_", "BARRAS_", "PIEZAS_CORTE_")

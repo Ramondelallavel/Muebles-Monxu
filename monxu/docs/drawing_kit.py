@@ -43,10 +43,42 @@ def fit_text(s: str, width: float, h: float) -> str:
     return s + "…"
 
 
+def wrap_text(s: str, width: float, h: float) -> list[str]:
+    """Parte un texto en líneas del ancho dado, por los espacios (una palabra más ancha queda sola en su línea)."""
+    if text_width(s, h) <= width:
+        return [s]
+    out, cur = [], ""
+    for word in s.split(" "):
+        cand = word if not cur else cur + " " + word
+        if cur and text_width(cand, h) > width:
+            out.append(cur)
+            cur = word
+        else:
+            cur = cand
+    out.append(cur)
+    return out
+
+
+def cell_text(v: Any) -> str:
+    """Texto de una celda de tabla (los decimales sueltos, con el formato de cotas)."""
+    return "" if v is None else (fmt(v, 2) if isinstance(v, float) else str(v))
+
+
 def fmt(v: float, dec: int = 1) -> str:
     if abs(v - round(v)) < 0.05:
         return f"{round(v):d}"
     return f"{v:.{dec}f}".replace(".", ",")
+
+
+def bom_num(v: Any) -> str:
+    """Valor numérico del BOM tal como figura en la lista de materiales: hasta 4 decimales, sin ceros finales y con
+    coma decimal. No vale el formato de cotas ``fmt``, que da el entero cuando dista menos de 0,05: como peso, un
+    tornillo de 3,8 g salía «0» y 157,95 kg salían «158»."""
+    if v is None or v == "":
+        return ""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return str(v)
+    return f"{v:.4f}".rstrip("0").rstrip(".").replace(".", ",")
 
 
 def scale_label(s: tuple[int, int]) -> str:
@@ -329,11 +361,19 @@ class Drawing:
 
     def table(self, x, y_top, cols: list[tuple[str, float, str]], rows: list[list[Any]], row_h=5.0, head_h=6.0,
               text_h=2.4, max_rows: int | None = None) -> float:
-        """Tabla con cabecera; cols = [(título, ancho, alineación)]. Devuelve la cota inferior."""
+        """Tabla con cabecera; cols = [(título, ancho, alineación)]. Devuelve la cota inferior.
+
+        Ningún texto se corta sin aviso: el que no cabe en su columna se parte en varias líneas (la fila crece); una
+        palabra más ancha que la columna se reduce hasta el 70 % y, si aun así no cabe, se corta con «…» y se
+        registra en la hoja para que el control de planos lo bloquee."""
         c = self.c
         W = sum(w for _, w, _ in cols)
         rows = rows if max_rows is None else rows[:max_rows]
-        H = head_h + row_h * len(rows)
+        step = 1.5 * text_h            # interlínea mayor que el cuerpo de la letra (altura / 0,72)
+        cells = [[wrap_text(cell_text(v), w - 2.4, text_h) if al == "l" else [cell_text(v)]
+                  for (_t, w, al), v in zip(cols, row)] for row in rows]
+        heights = [row_h + step * (max(len(ln) for ln in rc) - 1) for rc in cells]
+        H = head_h + sum(heights)
         c.setLineWidth(0.35)
         c.rect(x, y_top - H, W, H)
         c.setLineWidth(LW_THIN)
@@ -344,27 +384,36 @@ class Drawing:
                 c.line(xx, y_top, xx, y_top - H)
             self.text(xx + w / 2, y_top - head_h + 1.8, t, 2.4, "c", bold=True)
             xx += w
-        for r_i, row in enumerate(rows):
-            yy = y_top - head_h - row_h * (r_i + 1)
+        yy = y_top - head_h
+        for r_i, (rc, rh) in enumerate(zip(cells, heights)):
+            yy -= rh
             if r_i:
                 c.setLineWidth(0.1)
-                c.line(x, yy + row_h, x + W, yy + row_h)
+                c.line(x, yy + rh, x + W, yy + rh)
             xx = x
-            for (t, w, al), v in zip(cols, row):
-                s = "" if v is None else (fmt(v, 2) if isinstance(v, float) else str(v))
-                s = fit_text(s, w - 2.4, text_h)
-                if al == "c":
-                    self.text(xx + w / 2, yy + 1.4, s, text_h, "c")
-                elif al == "r":
-                    self.text(xx + w - 1.2, yy + 1.4, s, text_h, "r")
-                else:
-                    self.text(xx + 1.2, yy + 1.4, s, text_h, "l")
+            for (t, w, al), lines in zip(cols, rc):
+                for k, full in enumerate(lines):
+                    tw = text_width(full, text_h)
+                    h = text_h if tw <= w - 2.4 else max(0.7 * text_h, text_h * (w - 2.4) / tw * 0.999)
+                    s = fit_text(full, w - 2.4, h)
+                    if s != full:       # ni reducido cabe: se registra para el control de planos
+                        self.page.setdefault("truncated", []).append(full)
+                    ty = yy + rh - row_h + 1.4 - step * k
+                    if al == "c":
+                        self.text(xx + w / 2, ty, s, h, "c")
+                    elif al == "r":
+                        self.text(xx + w - 1.2, ty, s, h, "r")
+                    else:
+                        self.text(xx + 1.2, ty, s, h, "l")
                 xx += w
         return y_top - H
 
-    def notes(self, x, y_top, lines: list[str], h=2.6, width_chars=95, width: float | None = None, bold_first=False):
-        """Texto en párrafos ajustado a un ancho en mm (``width``) o en caracteres."""
+    def notes(self, x, y_top, lines: list[str], h=2.6, width_chars=95, width: float | None = None, bold_first=False,
+              dry: bool = False):
+        """Texto en párrafos ajustado a un ancho en mm (``width``) o en caracteres. Con ``dry`` no dibuja: sólo
+        devuelve la cota final y deja en ``notes_width`` el ancho ocupado (para elegir dónde colocarlo)."""
         y = y_top
+        self.notes_width = 0.0
         for n, ln in enumerate(lines):
             if not ln:
                 y -= h * 0.8
@@ -381,7 +430,9 @@ class Drawing:
                     part = ln[:width_chars]
                     if len(ln) > width_chars and " " in part:
                         part = part[:part.rfind(" ")]
-                self.text(x, y, part, h, "l", bold=bold_first and n == 0)
+                self.notes_width = max(self.notes_width, text_width(part, h, bold_first and n == 0))
+                if not dry:
+                    self.text(x, y, part, h, "l", bold=bold_first and n == 0)
                 ln = ln[len(part):].lstrip()
                 y -= h * 1.55
         return y

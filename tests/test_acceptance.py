@@ -131,9 +131,28 @@ def test_acceptance_2000_then_2400(client):
     assert plano["level"] == "ok"
     with zipfile.ZipFile(j2["result"]["zip"]) as z:
         assert any(n.endswith("manifest.json") for n in z.namelist())
-    # validación técnica obligatoria antes de fabricación
+    # aprobación técnica obligatoria antes de fabricación: nueve estados con validaciones y firmas
     assert client.post(f"/api/projects/{code}/status", json={"status": "preparado_fabricacion"}).status_code == 409
-    ok = client.post(f"/api/projects/{code}/status", json={"status": "validado", "user": "x",
-                                                           "validated_by": "Ing. Responsable"})
-    assert ok.status_code == 200 and ok.json()["status"] == "validado"
+    assert client.post(f"/api/projects/{code}/status", json={"status": "validado", "user": "x",
+                                                             "validated_by": "Ing. Responsable"}).status_code == 409
+    ap = client.get(f"/api/projects/{code}/approval").json()
+    assert ap["state"] not in ("aprobado_tecnicamente", "liberado_fabricacion") and ap["open_validations"]
+    assert client.post(f"/api/projects/{code}/signoff", json={"stage": "aprobacion", "by": "Ing. Jefe"}).status_code == 409
+    for c in ap["open_validations"]:          # cada pendiente se cierra con su documento de referencia
+        r = client.post(f"/api/projects/{code}/validations", json={"code": c, "by": "Ing. Calidad", "reference": f"DOC-{c}"})
+        assert r.status_code == 200, r.json()
+    for stage in ("fabricabilidad", "calculo", "aprobacion"):
+        r = client.post(f"/api/projects/{code}/signoff", json={"stage": stage, "by": "Ing. Responsable"})
+        assert r.status_code == 200, r.json()
+    assert r.json()["state"] == "aprobado_tecnicamente"
+    assert client.get(f"/api/projects/{code}").json()["status"] == "validado"
+    # liberar exige un expediente generado después de aprobar (sus documentos llevan el sello de aprobación)
+    assert client.post(f"/api/projects/{code}/signoff", json={"stage": "liberacion", "by": "Jefe de taller"}).status_code == 409
+    j3 = _dossier(client, code, "B")
+    assert j3["status"] == "ok", j3
+    man = json.loads((Path(j3["result"]["path"]) / "manifest.json").read_text(encoding="utf-8"))
+    assert man["approval_state"] == "aprobado_tecnicamente" and man["status"].startswith("APROBADO TÉCNICAMENTE")
+    r = client.post(f"/api/projects/{code}/signoff", json={"stage": "liberacion", "by": "Jefe de taller"})
+    assert r.status_code == 200 and r.json()["state"] == "liberado_fabricacion", r.json()
+    assert client.get(f"/api/projects/{code}").json()["status"] == "preparado_fabricacion"
     assert m2["structural"] == "CUMPLE"

@@ -21,8 +21,8 @@ from ..cad import geometry as G
 from ..core.model import PlatePart, ProfilePart, SheetPart, StandardPart
 from . import hlr
 from . import assembly
-from .drawing_kit import (FRAME, GREY, LW_DIM, LW_THICK, LW_THIN, SCALES, Drawing, choose_scale, fmt, place_view,
-                          scale_label, text_width)
+from .drawing_kit import (FRAME, GREY, LW_DIM, LW_THICK, LW_THIN, SCALES, Drawing, bom_num, choose_scale, fmt,
+                          place_view, scale_label, text_width)
 
 TB_RESERVED = (226.0, 6.0, 412.0, 80.0)
 
@@ -235,10 +235,27 @@ def plan_general(d: Drawing, X: _Ctx):
              f"Cálculo: {eng.get('verdict') or eng['status_label']}",
              _support_line(m),
              f"Acabado: {catalog.finish(ps['ACABADO'])['name']}"]
-    if pl.oy - 30 > 52:
-        d.notes(32, pl.oy - 30, lines, width=190)
-    else:
-        d.notes(pl.ox + pl.w + 24, min(pl.oy + pl.h, 140), lines, width=max(60.0, 222 - pl.ox - pl.w - 24))
+    # en el primer hueco libre: bajo la planta, a su derecha en columna o, si no caben, a su derecha en un bloque ancho
+    # por encima del cajetín. Nunca sobre una vista ni sobre el cajetín y su sello de estado.
+    busy = [(TB_RESERVED[0] - 3, 0.0, 420.0, TB_RESERVED[3] + 6)]
+    for v in (a, p, pl) + ((best[1],) if best else ()):
+        busy.append((v.ox - 20, v.oy - v.label_offset - 5, v.ox + v.w + 20, v.oy + v.h + 14))
+
+    def free(x, y_top, width):
+        bottom = d.notes(x, y_top, lines, width=width, dry=True) + 2.6 * 1.55 - 1.0
+        box = (x - 1, bottom, x + d.notes_width + 1, y_top + 3.2)
+        return bottom >= 13 and box[2] <= 406 and not any(box[0] < b[2] and b[0] < box[2] and box[1] < b[3]
+                                                        and b[1] < box[3] for b in busy)
+    x2 = pl.ox + pl.w + 24
+    cands = [(32.0, pl.oy - 30, 190.0)]
+    if 222 - x2 >= 60:
+        cands.append((x2, min(pl.oy + pl.h, 140.0), 222 - x2))
+    cands += [(x2, float(y), 403 - x2) for y in range(140, 88, -4)]
+    cands += [(32.0, float(y), 190.0) for y in range(int(pl.oy) - 30, 20, -4)]
+    spot = next((c for c in cands if free(*c)), None)
+    if spot is None:        # sin hueco limpio: la posición anterior (el control de solapes de las pruebas lo señala)
+        spot = (32.0, pl.oy - 30, 190.0) if pl.oy - 30 > 52 else (x2, min(pl.oy + pl.h, 140.0), max(60.0, 222 - x2))
+    d.notes(spot[0], spot[1], lines, width=spot[2])
 
 
 def plan_structure(d: Drawing, X: _Ctx):
@@ -306,81 +323,198 @@ def plan_structure(d: Drawing, X: _Ctx):
         "Estructura soldada (subconjunto EST).",
         f"Clase de ejecución {m.params.values['CLASE_EJECUCION']} según EN 1090-2.",
         "Cotas a caras exteriores de perfil.",
-        "Planitud del plano de apoyo de encimera: EN ISO 13920 clase F.",
+        "Planitud de los planos de apoyo de las chapas: EN ISO 13920 clase F.",
         "Detalle de uniones soldadas: plano 05.",
         "Longitudes de corte y mecanizados: plano 02B."], width_chars=40)
 
 
+PROFILE_Y0, PROFILE_Y_MIN, CUT_Y_MIN, TB_TOP = 262.0, 105.0, 22.0, 86.0
+"""Hoja 02B: cota del primer elemento, límite inferior de los perfiles y de las barras, y altura del cajetín."""
+HOLE_LINE_STEP = 3.8
+"""Interlínea de los textos de mecanizado (altura 2,4): mayor que el cuerpo de la letra, para que no se toquen."""
+
+
+def profile_extra_depth(n_lines: int) -> float:
+    """Espacio adicional bajo un perfil con ``n_lines`` líneas de taladros para que la última quede por encima de
+    la cota del perfil siguiente."""
+    return max(0.0, HOLE_LINE_STEP * (n_lines - 1) - 2.2)
+
+
+def profile_hole_lines(p, avail: float) -> list[str]:
+    """Mecanizados de un perfil, completos y partidos en líneas del ancho disponible (un grupo por cara y
+    diámetro). Nunca se truncan: una posición cortada («890» → «89») es un error de fabricación."""
+    groups: dict[tuple, list[float]] = {}
+    for face, z, _off, dia in p.holes:
+        groups.setdefault((face, dia), []).append(z)
+    lines: list[str] = []
+    for (face, dia), zs in groups.items():
+        where = "cara exterior" if len(groups) == 1 else f"cara {face}"
+        cur, n = f"Taladros Ø{f'{dia:g}'.replace('.', ',')} en {where} a: ", 0
+        for z in sorted(zs):
+            cand = cur + ("; " if n else "") + fmt(z)
+            if n and text_width(cand, 2.4) > avail:
+                lines.append(cur + ";")
+                cur = fmt(z)
+            else:
+                cur = cand
+            n += 1
+        lines.append(cur)
+    return lines
+
+
+def hole_positions_in(lines: list[str]) -> int:
+    """Número de posiciones de taladro que figuran en las líneas impresas (control plano ↔ modelo). Se separan con
+    «;»: la coma es el separador decimal y «60, 462,5, 890» sería ambiguo."""
+    return sum(len([t for t in ln.split(": ")[-1].split(";") if t.strip()]) for ln in lines)
+
+
+def bar_groups(c: dict) -> list[list[dict]]:
+    """Barras consecutivas con el mismo patrón de corte (longitud, despunte, piezas y retal): una sola fila del
+    plano. Los retales del inventario no se agrupan: cada uno es una pieza identificada."""
+    out: list[list[dict]] = []
+    prev = None
+    for b in c["bars"]:
+        key = (b["source"], b["length"], b["trim_start"], tuple((k["ref"], k["length"]) for k in b["cuts"]),
+               b["remnant"], b["remnant_status"])
+        if out and key == prev and b["source"] != "retal":
+            out[-1].append(b)
+        else:
+            out.append([b])
+        prev = key
+    return out
+
+
+def bar_label(g: list[dict]) -> str:
+    b = g[0]
+    if len(g) == 1:
+        src = f" (retal {b['stock_id']})" if b["source"] == "retal" else ""
+        return f"Barra {b['bar']}{src}: {b['n_cuts']} cortes · retal {fmt(b['remnant'])} mm ({b['remnant_status']})"
+    return (f"Barras {b['bar']} a {g[-1]['bar']} ({len(g)} iguales): {b['n_cuts']} cortes y retal de "
+            f"{fmt(b['remnant'])} mm en cada una ({b['remnant_status']})")
+
+
+def cut_header(c: dict) -> tuple[str, str]:
+    head = (f"{c['profile']} {c['material']} — barras de {fmt(c['bar_length'])} mm: {c['n_bars']} "
+            f"(cota inferior {c['lower_bound']}, aprovechamiento {c['utilization'] * 100:.1f} %, sierra "
+            f"{fmt(c['kerf'])} mm")
+    return head, f", despuntes {fmt(c['trim_start'])}/{fmt(c['trim_end'])} mm, {c['n_cuts']} cortes)"
+
+
+def _cut_header_two_lines(c: dict, y: float) -> bool:
+    head, extra = cut_header(c)
+    return text_width(head + extra, 2.6) > (222.0 if y - 5 < TB_TOP else 400.0) - 32
+
+
+def profile_flow(m, plan) -> list[list[tuple]]:
+    """Maquetación de la hoja 02B en una o varias hojas: [(tipo, y, datos…)] por hoja. Todos los perfiles, todos sus
+    taladros y todas las barras del plan de corte figuran; lo que no cabe pasa a una hoja de continuación."""
+    profs = sorted([p for p in m.parts.values() if isinstance(p, ProfilePart)], key=lambda p: p.pos)
+    maxL = max((p.length for p in profs), default=1.0)
+    pages: list[list[tuple]] = [[]]
+    y = PROFILE_Y0
+    for p in profs:
+        w = 150.0 * p.length / maxL + 20
+        lines = profile_hole_lines(p, 400.0 - (40.0 + w + 6)) if p.holes else []
+        depth = profile_extra_depth(len(lines))         # líneas de taladros por debajo de la barra
+        if y - depth < PROFILE_Y_MIN:
+            pages.append([])
+            y = PROFILE_Y0
+        pages[-1].append(("perfil", y, p, w, lines))
+        y -= 17 + depth
+    if not plan["cutting"]:
+        return pages
+    if y - 2 - 7 - 4.5 - 5 < CUT_Y_MIN:                 # título, cabecera y una barra como mínimo en la misma hoja
+        pages.append([])
+        y = PROFILE_Y0
+    y -= 2
+    pages[-1].append(("titulo", y))
+    y -= 7
+    for c in plan["cutting"]:
+        if y - (4.5 if _cut_header_two_lines(c, y) else 0) - 5 < CUT_Y_MIN:
+            pages.append([])
+            y = PROFILE_Y0
+        pages[-1].append(("cabecera", y, c, False))
+        y -= (4.5 if _cut_header_two_lines(c, y) else 0) + 5
+        for g in bar_groups(c):
+            if y < CUT_Y_MIN:
+                pages.append([])
+                y = PROFILE_Y0
+                pages[-1].append(("cabecera", y, c, True))
+                y -= 5
+            pages[-1].append(("barra", y, c, g))
+            y -= 5.5
+        y -= 2
+    return pages
+
+
 def plan_profiles(d: Drawing, X: _Ctx):
     m = X.m
-    profs = sorted([p for p in m.parts.values() if isinstance(p, ProfilePart)], key=lambda p: p.pos)
     counts = defaultdict(int)
     for i in m.instances:
         counts[i.part.key] += 1
-    d.new_sheet("02B", "Perfiles: longitudes de corte, mecanizados y plan de corte", "Sin escala",
-                m.params.values["MATERIAL_ESTRUCTURAL"])
-    y = 262.0
-    maxL = max(p.length for p in profs)
-    for p in profs:
-        w = 150.0 * p.length / maxL + 20
-        x0 = 40.0
-        hgt = 7.0
-        d.text(x0 - 6, y + 2, str(p.pos), 3.2, "r", bold=True)
-        d.polyline([(x0, y), (x0 + w, y), (x0 + w, y + hgt), (x0, y + hgt), (x0, y)], LW_THICK)
-        d.line((x0 - 3, y + hgt / 2), (x0 + w + 3, y + hgt / 2), LW_THIN, dash=[6, 1, 1, 1], color=GREY)
-        for face, z, off, dia in p.holes:
-            xx = x0 + w * z / p.length
-            d.c.setLineWidth(LW_THIN)
-            d.c.circle(xx, y + hgt / 2, 1.2)
-        d.dim_h(x0, x0 + w, y + hgt, y + hgt, y + hgt + 4, p.length, f"L_{p.ref}", "geometria_pieza")
-        desc = f"{p.ref}  {p.profile.code}  {p.material}  L={fmt(p.length)}  90°/90°  ×{counts[p.key]}"
-        if p.holes:
-            zs = sorted(h[2] for h in [(h[0], h[2], h[1]) for h in p.holes])
-            desc += f"  Taladros Ø{p.holes[0][3]:g} en cara exterior a: " + ", ".join(fmt(h[1]) for h in p.holes)
-        d.text(x0 + w + 6, y + 2, desc[:110], 2.4, "l")
-        y -= 17
-        if y < 95:
-            break
-    # plan de corte
-    y -= 2
-    d.text(32, y, "PLAN DE CORTE DE BARRAS", 3.2, "l", bold=True)
-    y -= 7
-    for c in X.plan["cutting"]:
-        head = (f"{c['profile']} {c['material']} — barras de {fmt(c['bar_length'])} mm: {c['n_bars']} "
-                f"(cota inferior {c['lower_bound']}, aprovechamiento {c['utilization'] * 100:.1f} %, sierra "
-                f"{fmt(c['kerf'])} mm")
-        extra = f", despuntes {fmt(c['trim_start'])}/{fmt(c['trim_end'])} mm, {c['n_cuts']} cortes)"
-        lim = (TB_RESERVED[0] - 4 if y - 5 < TB_RESERVED[3] else 405) - 32
-        if text_width(head + extra, 2.6) <= lim:
-            d.text(32, y, head + extra, 2.6)
-        else:              # sin sitio (junto al cajetín): los despuntes y cortes en una segunda línea
-            d.text(32, y, head + ")", 2.6)
-            y -= 4.5
-            d.text(32, y, f"Despuntes {fmt(c['trim_start'])}/{fmt(c['trim_end'])} mm · {c['n_cuts']} cortes", 2.6)
-        y -= 5
-        for b in c["bars"]:
-            x = 40.0
-            src = f" (retal {b['stock_id']})" if b["source"] == "retal" else ""
-            lbl = f"Barra {b['bar']}{src}: {b['n_cuts']} cortes · retal {fmt(b['remnant'])} mm ({b['remnant_status']})"
-            # a la altura del cajetín la barra se acorta para que su rótulo termine antes de él
-            W = 180.0 if y > TB_RESERVED[3] else min(180.0, TB_RESERVED[0] - 4 - 3 - text_width(lbl, 2.2) - x)
-            k = W / c["bar_length"]
-            W = b["length"] * k          # un retal del inventario se dibuja a su longitud, en la misma escala
-            d.polyline([(x, y), (x + W, y), (x + W, y + 3.5), (x, y + 3.5), (x, y)], LW_THIN)
-            xx = x + b["trim_start"] * k
-            for cut in b["cuts"]:
-                ww = cut["length"] * k
-                d.c.setFillColorRGB(0.82, 0.86, 0.9)
-                d.c.rect(xx, y, ww, 3.5, stroke=1, fill=1)
-                d.c.setFillColorRGB(0, 0, 0)
-                if ww > 9:
-                    d.text(xx + ww / 2, y + 0.9, cut["ref"].split("-")[-1], 2.0, "c")
-                xx += ww + c["kerf"] * k
-            d.text(x + W + 3, y + 0.6, lbl, 2.2)
-            y -= 5.5
-            if y < 22:
-                return
-        y -= 2
+    pages = profile_flow(m, X.plan)
+    drawn_bars: dict[int, int] = defaultdict(int)
+    drawn_cuts: dict[int, int] = defaultdict(int)
+    index = {id(c): k for k, c in enumerate(X.plan["cutting"], start=1)}
+    for n, ops in enumerate(pages, start=1):
+        d.new_sheet("02B" if n == 1 else f"02B.{n}", "Perfiles: longitudes de corte, mecanizados y plan de corte"
+                    + (f" ({n}/{len(pages)})" if len(pages) > 1 else ""), "Sin escala",
+                    m.params.values["MATERIAL_ESTRUCTURAL"])
+        for op in ops:
+            kind, y = op[0], op[1]
+            if kind == "perfil":
+                _, _, p, w, lines = op
+                x0, hgt = 40.0, 7.0
+                d.text(x0 - 6, y + 2, str(p.pos), 3.2, "r", bold=True)
+                d.polyline([(x0, y), (x0 + w, y), (x0 + w, y + hgt), (x0, y + hgt), (x0, y)], LW_THICK)
+                d.line((x0 - 3, y + hgt / 2), (x0 + w + 3, y + hgt / 2), LW_THIN, dash=[6, 1, 1, 1], color=GREY)
+                for _face, z, _off, _dia in p.holes:
+                    d.c.setLineWidth(LW_THIN)
+                    d.c.circle(x0 + w * z / p.length, y + hgt / 2, 1.2)
+                d.dim_h(x0, x0 + w, y + hgt, y + hgt, y + hgt + 4, p.length, f"L_{p.ref}", "geometria_pieza")
+                desc = f"{p.ref}  {p.profile.code}  {p.material}  L={fmt(p.length)}  90°/90°  ×{counts[p.key]}"
+                d.text(x0 + w + 6, y + (5.0 if lines else 2), desc, 2.4, "l")
+                for k, ln in enumerate(lines):
+                    d.text(x0 + w + 6, y + 1.2 - HOLE_LINE_STEP * k, ln, 2.4, "l")
+                if p.holes:                     # control plano ↔ modelo: posiciones de taladro impresas
+                    d.record_dim(f"TAL_{p.ref}", hole_positions_in(lines), "mecanizado")
+            elif kind == "titulo":
+                d.text(32, y, "PLAN DE CORTE DE BARRAS", 3.2, "l", bold=True)
+            elif kind == "cabecera":
+                _, _, c, cont = op
+                head, extra = cut_header(c)
+                if cont:
+                    d.text(32, y, f"{c['profile']} {c['material']} (continuación)", 2.6)
+                elif not _cut_header_two_lines(c, y):
+                    d.text(32, y, head + extra, 2.6)
+                else:              # sin sitio (junto al cajetín): los despuntes y cortes en una segunda línea
+                    d.text(32, y, head + ")", 2.6)
+                    d.text(32, y - 4.5, f"Despuntes {fmt(c['trim_start'])}/{fmt(c['trim_end'])} mm · "
+                                        f"{c['n_cuts']} cortes", 2.6)
+            else:
+                _, _, c, g = op
+                b, x, lbl = g[0], 40.0, bar_label(g)
+                # a la altura del cajetín la barra se acorta para que su rótulo, completo, termine antes de él
+                xr, W0 = (222.0, 110.0) if y < TB_TOP else (400.0, 180.0)
+                W0 = max(40.0, min(W0, xr - x - 3 - text_width(lbl, 2.2)))
+                k = W0 / c["bar_length"]
+                W = b["length"] * k          # un retal del inventario se dibuja a su longitud, en la misma escala
+                d.polyline([(x, y), (x + W, y), (x + W, y + 3.5), (x, y + 3.5), (x, y)], LW_THIN)
+                xx = x + b["trim_start"] * k
+                for cut in b["cuts"]:
+                    ww = cut["length"] * k
+                    d.c.setFillColorRGB(0.82, 0.86, 0.9)
+                    d.c.rect(xx, y, ww, 3.5, stroke=1, fill=1)
+                    d.c.setFillColorRGB(0, 0, 0)
+                    if ww > 9:
+                        d.text(xx + ww / 2, y + 0.9, cut["ref"].split("-")[-1], 2.0, "c")
+                    xx += ww + c["kerf"] * k
+                d.text(x + W0 + 3, y + 0.6, lbl, 2.2)
+                drawn_bars[index[id(c)]] += len(g)
+                drawn_cuts[index[id(c)]] += len(g) * len(b["cuts"])
+    for k in index.values():                    # control plano ↔ plan de corte: barras y piezas representadas
+        d.record_dim(f"BARRAS_{k}", drawn_bars[k], "plan de corte")
+        d.record_dim(f"PIEZAS_CORTE_{k}", drawn_cuts[k], "plan de corte")
 
 
 def plan_sheet_part(d: Drawing, X: _Ctx, part: SheetPart, number: str):
@@ -496,23 +630,32 @@ def plan_flat(d: Drawing, X: _Ctx, part: SheetPart, number: str):
     for a_, b_ in zip(chain[:-1], chain[1:]):
         d.dim_v(P(0, a_)[1], P(0, b_)[1], ox, ox, ox - 7, b_ - a_)
     spec = part.spec
-    rows = []
-    for n, ho in enumerate(fp.holes[:40], start=1):
-        rows.append([n, round(ho["x"], 2), round(ho["y"], 2),
-                     f"Ø{fmt(ho['d'])}" if ho["kind"] == "round" else f"□{fmt(ho['w'])}x{fmt(ho['h'])}"])
-    if rows:
-        d.table(40, 86, [("Nº", 10, "c"), ("X", 22, "r"), ("Y", 22, "r"), ("Forma", 22, "c")], rows[:12], row_h=4.4,
-                text_h=2.2)
-        if len(rows) > 12:
-            d.table(122, 86, [("Nº", 10, "c"), ("X", 22, "r"), ("Y", 22, "r"), ("Forma", 22, "c")], rows[12:24],
-                    row_h=4.4, text_h=2.2)
+    # perforaciones regulares (paneles): se acotan como patrón; en la tabla sólo los taladros sueltos. Lo que no cabe
+    # en la tabla se declara (sus posiciones están en el DXF de corte): nada se omite sin decirlo.
+    rects = [ho for ho in fp.holes if ho["kind"] == "rect"]
+    listed, grid = fp.holes, None
+    if len(rects) > 24:
+        listed = [ho for ho in fp.holes if ho["kind"] != "rect"]
+        gx = sorted({round(ho["x"], 3) for ho in rects})
+        gy = sorted({round(ho["y"], 3) for ho in rects})
+        grid = (f"Perforación cuadrada {fmt(rects[0]['w'])}x{fmt(rects[0]['h'])}: {len(gx)} × {len(gy)} = {len(rects)} "
+                f"agujeros a paso {fmt(gx[1] - gx[0], 1)} × {fmt(gy[1] - gy[0], 1)} mm; primer agujero (centro) en X "
+                f"{fmt(gx[0], 2)} · Y {fmt(gy[0], 2)} desde el origen del desarrollo.")
+    rows = [[n, round(ho["x"], 2), round(ho["y"], 2),
+             f"Ø{fmt(ho['d'])}" if ho["kind"] == "round" else f"cuad. {fmt(ho['w'])}x{fmt(ho['h'])}"]
+            for n, ho in enumerate(listed[:24], start=1)]
+    for c in range(2):
+        if len(rows) > c * 12:
+            d.table(40 + c * 82, 86, [("Nº", 10, "c"), ("X", 22, "r"), ("Y", 22, "r"), ("Forma", 22, "c")],
+                    rows[c * 12:c * 12 + 12], row_h=4.4, text_h=2.2)
+    more = [f"Taladros 25 a {len(listed)}: posiciones en el fichero DXF de corte."] if len(listed) > 24 else []
     d.notes(32, 268, [
         f"Desarrollo plano de {part.ref} — origen en la esquina inferior izquierda · espesor {fmt(spec.t)} mm · Ri "
         f"{fmt(spec.r)} mm · K {spec.K:.3f} (DIN 6935) · BA = π/2·(Ri+K·t) = {fmt(spec.BA, 3)} mm · BD = "
         f"{fmt(spec.BD, 3)} mm.",
         f"Contorno neto {fmt(fp.net_area() / 1e6, 4)} m² · longitud de corte {fmt(fp.cut_length() / 1000, 2)} m · "
         f"fichero de corte 03_DXF_CORTE/{part.ref}.dxf (escala 1:1, mm) · tolerancias EN ISO 9013 clase 2.",
-    ], width=370)
+        *([grid] if grid else []), *more], width=370)
 
 
 def is_perforated_plate(p) -> bool:
@@ -666,14 +809,29 @@ def plan_welds(d: Drawing, X: _Ctx):
         f"Cordón total {fmt(w['total_length_mm'] / 1000, 2)} m · depositado {fmt(w['deposit_kg'], 3)} kg · hilo "
         f"{fmt(w['wire_kg'], 3)} kg · gas {fmt(w['gas_l'], 0)} l.",
         f"Calidad EN ISO 5817-C · {m.params.values['CLASE_EJECUCION']} (EN 1090-2).",
-        m.structure.get("weld_sequence") or (
-            "Secuencia: 1) puntear bastidor superior en mesa plana con escuadras; 2) puntear patas y verificar "
-            "diagonales; 3) bastidor inferior; 4) soldar alternando esquinas opuestas; 5) placas base y tuercas; "
-            "6) enderezar, amolar caras enrasadas y verificar planitud."),
-        "Pared de 2 mm: cordones cortos alternos para limitar la distorsión.",
+        m.structure.get("weld_sequence") or default_weld_sequence(m),
+        thin_wall_note(m),
         "Garganta a < 3 mm: requiere WPS cualificada (EN ISO 15614-1)." if any(
             j.weld["a"] < 3 for j in m.joints if j.kind == "soldadura") else "",
     ], h=2.2, width=104, bold_first=True)
+
+
+def default_weld_sequence(m) -> str:
+    """Secuencia de soldeo por defecto según el producto: por niveles y montantes, o bastidores y patas."""
+    if any(i.structural and i.role == "montante" for i in m.instances):
+        return ("Secuencia: 1) puntear los bastidores de cada nivel en mesa plana con escuadras; 2) puntear los "
+                "montantes y verificar diagonales y plomo; 3) soldar alternando lados y niveles; 4) placas base y "
+                "tuercas; 5) enderezar, amolar las caras enrasadas y verificar planitud.")
+    return ("Secuencia: 1) puntear bastidor superior en mesa plana con escuadras; 2) puntear patas y verificar "
+            "diagonales; 3) bastidores inferiores; 4) soldar alternando esquinas opuestas; 5) placas base y tuercas; "
+            "6) enderezar, amolar caras enrasadas y verificar planitud.")
+
+
+def thin_wall_note(m) -> str:
+    """Aviso de pared delgada con el espesor real de los perfiles (sin valores fijos)."""
+    ts = [i.part.profile.t for i in m.instances if i.part.kind == "perfil"]
+    return (f"Pared de {min(ts):g} mm: cordones cortos alternos para limitar la distorsión." if ts and min(ts) <= 3
+            else "")
 
 
 def plan_exploded(d: Drawing, X: _Ctx):
@@ -729,25 +887,39 @@ ASSEMBLY_TEXTS = assembly.DEFAULT_TEXTS
 def assembly_notes(m) -> list[str]:
     """Herramientas, pares, desmontaje y seguridad: lo propio de la familia más lo que se deduce de los
     componentes comerciales del modelo (herramienta y par de cada uno)."""
-    sups = m.structure.get("supports") or []
-    castor = bool(sups) and catalog.component(sups[0]["component"])["category"].startswith("ruedas")
-    base = m.structure.get("assembly_notes") or [
-        "HERRAMIENTAS:", *([] if castor else ["· Nivel de burbuja"]), "",
-        "DESMONTAJE:", "Encimera y balda desmontables (uniones atornilladas). La estructura es un",
-        "subconjunto soldado no desmontable.", "",
-        "SEGURIDAD:", "Manipular la encimera entre dos personas; usar guantes", "(cantos de chapa)."]
-    return assembly.notes(m, base)
+    return assembly.notes(m, assembly.default_notes(m))
+
+
+BOM_ROWS_PER_SHEET = 28
+"""Filas del despiece por hoja: la tabla ocupa todo el ancho y no baja hasta el cajetín."""
+
+
+def bom_columns(rows: list[list[Any]]) -> list[tuple[str, float, str]]:
+    """Columnas del despiece: referencia y material al ancho de su contenido (se leen completos: son los que citan
+    las instrucciones y el estado de validación) y la descripción con el resto, hasta 370 mm de tabla."""
+    need = lambda k, lo: max([lo] + [text_width(str(r[k]), 2.4) + 3.4 for r in rows])     # noqa: E731
+    ref, mat, desc = need(1, 42.0), need(3, 42.0), need(2, 80.0)
+    desc = min(desc, 370.0 - 121.0 - ref - mat)
+    return [("Pos", 10, "c"), ("Referencia", ref, "l"), ("Descripción", desc, "l"), ("Material", mat, "l"),
+            ("Espesor", 16, "r"), ("Largo", 20, "r"), ("Ancho", 18, "r"), ("Cant.", 13, "c"),
+            ("Peso unit. kg", 22, "r"), ("Peso total kg", 22, "r")]
 
 
 def plan_bom(d: Drawing, X: _Ctx):
-    rows = [[r["pos"], r["ref"], r["description"], r["material"] or "", r["thickness"], r["length"], r["width"],
-             r["qty"], r["unit_mass"], r["total_mass"]] for r in X.bom["rows"]]
-    d.new_sheet("08", "Despiece y lista de materiales", "—", "Ver lista")
-    y = d.table(30, 268, [("Pos", 10, "c"), ("Referencia", 42, "l"), ("Descripción", 105, "l"), ("Material", 42, "l"),
-                          ("Espesor", 16, "r"), ("Largo", 20, "r"), ("Ancho", 18, "r"), ("Cant.", 13, "c"),
-                          ("Peso unit. kg", 22, "r"), ("Peso total kg", 22, "r")], rows, row_h=5.2, text_h=2.4)
-    for r in X.bom["rows"]:                     # control BOM ↔ planos ↔ 3D
-        d.record_dim(f"CANT_{r['ref']}", r["qty"], "despiece")
+    # dimensiones y pesos con las mismas cifras que el BOM (Excel y CSV), no con el formato de cotas
+    rows = [[r["pos"], r["ref"], r["description"], r["material"] or "", bom_num(r["thickness"]), bom_num(r["length"]),
+             bom_num(r["width"]), r["qty"], bom_num(r["unit_mass"]), bom_num(r["total_mass"])] for r in X.bom["rows"]]
+    cols = bom_columns(rows)
+    n_pages = max(1, math.ceil(len(rows) / BOM_ROWS_PER_SHEET))
+    y = 268.0
+    for n in range(n_pages):
+        d.new_sheet("08" if n == 0 else f"08.{n + 1}", "Despiece y lista de materiales"
+                    + (f" ({n + 1}/{n_pages})" if n_pages > 1 else ""), "—", "Ver lista")
+        part = rows[n * BOM_ROWS_PER_SHEET:(n + 1) * BOM_ROWS_PER_SHEET]
+        y = d.table(30, 268, cols, part, row_h=5.2, text_h=2.4)
+        for r, row in zip(X.bom["rows"][n * BOM_ROWS_PER_SHEET:], part):    # control BOM ↔ planos ↔ 3D, tal como se imprime
+            d.record_dim(f"CANT_{r['ref']}", r["qty"], "despiece")
+            d.record_dim(f"PESO_G_{r['ref']}", float(row[8].replace(",", ".")) * 1000, "despiece")
     t = X.bom["totals"]
     d.notes(30, y - 6, [f"Componentes: {t['components']} ({t['manufactured_parts']} fabricados, {t['standard_parts']} "
                         f"normalizados) · Referencias distintas: {t['distinct_parts']} · Masa total: "
@@ -757,12 +929,26 @@ def plan_bom(d: Drawing, X: _Ctx):
             width_chars=150)
 
 
+def drawing_expected(model, plan) -> dict[str, float]:
+    """Lo que debe figurar en los planos según el modelo y el plan de corte (no según lo dibujado): taladros de cada
+    perfil y barras y piezas de cada grupo del plan. ``qa.drawing_consistency`` lo compara con lo impreso."""
+    exp: dict[str, float] = {}
+    for p in model.parts.values():
+        if isinstance(p, ProfilePart) and p.holes:
+            exp[f"TAL_{p.ref}"] = len(p.holes)
+    for k, c in enumerate(plan["cutting"], start=1):
+        exp[f"BARRAS_{k}"] = len(c["bars"])
+        exp[f"PIEZAS_CORTE_{k}"] = sum(len(b["cuts"]) for b in c["bars"])
+    return exp
+
+
 def generate(model, plan, bom, eng, info, path: Path) -> dict[str, Any]:
     X = _Ctx(model, plan, bom, eng, info)
     sheets = [p for p in model.parts.values() if isinstance(p, SheetPart)]
     plates = [p for p in model.parts.values() if isinstance(p, PlatePart) and not is_perforated_plate(p)]
     perf = [p for p in model.parts.values() if is_perforated_plate(p)]
-    total = 2 + 1 + len(sheets) * 2 + (1 if plates else 0) + len(perf) + 4
+    n_bom = max(1, math.ceil(len(bom["rows"]) / BOM_ROWS_PER_SHEET))
+    total = 2 + len(profile_flow(model, plan)) + len(sheets) * 2 + (1 if plates else 0) + len(perf) + 3 + n_bom
     info = dict(info, total_sheets=total)
     d = Drawing(str(path), info)
     plan_general(d, X)
@@ -781,4 +967,5 @@ def generate(model, plan, bom, eng, info, path: Path) -> dict[str, Any]:
     plan_assembly(d, X)
     plan_bom(d, X)
     d.finish()
-    return {"path": str(path), "sheets": d.pages, "total": len(d.pages)}
+    return {"path": str(path), "sheets": d.pages, "total": len(d.pages), "announced": total,
+            "expected": drawing_expected(model, plan)}

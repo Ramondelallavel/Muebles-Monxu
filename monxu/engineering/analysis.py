@@ -283,19 +283,43 @@ def imperfection_cases(model, sm, cases_v=("G", "Q")) -> dict[str, Any]:
     return {"phi": phi, "alpha_h": alpha_h, "h": h, "V": V}
 
 
-def alpha_cr(res, imp: dict[str, Any], fac: dict[str, float]) -> dict[str, Any]:
+def alpha_cr(res, imp: dict[str, Any], fac: dict[str, float], nodes: list[int] | None = None) -> dict[str, Any]:
     """α_cr por el método de Horne (EN 1993-1-1 §5.2.1(4)B): α_cr = (H_Ed/V_Ed)·(h/δ_H,Ed) con las fuerzas
-    equivalentes φ·V_Ed como acción horizontal, en X y en Y; δ es el mayor desplazamiento horizontal de un nudo."""
+    equivalentes φ·V_Ed como acción horizontal, en X y en Y. δ es el desplome: el mayor desplazamiento horizontal de
+    los nudos de las columnas (no la flexión local de brazos o vigas)."""
     out = {}
-    nn = len(res.frame.nodes)
+    nodes = nodes if nodes else range(len(res.frame.nodes))
     for d, comp in (("X", 0), ("Y", 1)):
         f = {f"I{d}{c}": fac[c] for c in imp["V"] if c in fac}
         if not f:
             continue
         u = res.combine(f)
-        delta = max(abs(u[6 * n + comp]) for n in range(nn))
+        delta = max(abs(u[6 * n + comp]) for n in nodes)
         a = imp["phi"] * imp["h"] / delta if delta > 1e-12 else math.inf
         out[d] = {"alpha_cr": a, "delta_mm": delta}
+    return out
+
+
+def anchored_alpha_cr(model, sm, imp: dict[str, Any], fac: dict[str, float],
+                      nodes: list[int] | None = None) -> dict[str, Any]:
+    """α_cr (Horne) con todos los apoyos coaccionados en X e Y: en una estructura anclada cada taco impide el
+    deslizamiento de su pie. El modelo general de apoyos es isostático en planta (un pie fijo y otro deslizante) y
+    lleva toda la acción horizontal a un único apoyo: no representa el desplome de una estructura anclada.
+    Devuelve además el mayor cortante de las fuerzas equivalentes φ·V_Ed en un apoyo (N), dato para validar el taco."""
+    fr = sm.frame
+    saved = dict(fr.fixed)
+    sups = model.structure.get("supports", [])
+    try:
+        for sup in sups:
+            fr.support(sup["node"], (True, True, True, False, False, False))
+        res = fr.solve(sorted(c for c in fr.loads if c[:2] in ("IX", "IY")))
+        out = alpha_cr(res, imp, fac, nodes)
+        for d in out:
+            f = {f"I{d}{c}": fac[c] for c in imp["V"] if c in fac}
+            reac = res.reactions(res.combine(f), res.combine_loads(f))
+            out[d]["shear_N"] = max((math.hypot(reac[s["node"]][0], reac[s["node"]][1]) for s in sups), default=0.0)
+    finally:
+        fr.fixed = saved
     return out
 
 
@@ -491,7 +515,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         "compresión en las vigas; sin análisis de segundo orden explícito (con α_cr < 3 la verificación no se da por "
         "superada). Las imperfecciones de barra quedan incluidas en las curvas de pandeo.",
         "Uniones soldadas consideradas rígidas; excentricidades de unión entre ejes no modeladas.",
-        "Chapas de encimera y balda verificadas como placas simplemente apoyadas en el emparrillado "
+        "Chapas de las superficies de carga verificadas como placas simplemente apoyadas en el emparrillado "
         "(Navier); no se considera su contribución a la rigidez del bastidor.",
         "Comprobaciones de barras por el método simplificado lineal de EN 1993-1-1 §6.2.1(7) y §6.3.3 "
         "con coeficientes de interacción unitarios (conservador).",
@@ -644,11 +668,16 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
         for n in top_nodes:
             fr.add_nodal_load("HX", n, (H_N / len(top_nodes), 0, 0))
             fr.add_nodal_load("HY", n, (0, H_N / len(top_nodes), 0))
+        # textos por defecto según el producto: «encimera» solo si la tiene
+        worktop = any(sf["id"] == "encimera" for sf in st.get("surfaces", []))
         cases.append({"id": "HX/HY", "label": st.get("push_label", "Empuje horizontal en el plano de la encimera "
-                                                                    "(direcciones X e Y)"),
+                                                                    "(direcciones X e Y)" if worktop else
+                                                     "Empuje horizontal en el nivel superior (direcciones X e Y)"),
                       "value": f"{H_N:g} N", "total_N": H_N})
         if model.params.sources.get("CARGA_HORIZONTAL") == "defecto":
-            hyp.append(f"Empuje horizontal de {H_N:g} N: {st.get('push_note', crit['horizontal_service_load_note'])}")
+            note = st.get("push_note") or (crit["horizontal_service_load_note"] if worktop else
+                                           crit["horizontal_service_load_note_generic"])
+            hyp.append(f"Empuje horizontal de {H_N:g} N: {note}")
 
     # ---------------------------------------------------------------- imperfecciones globales (EN 1993-1-1 §5.3.2)
     imp = imperfection_cases(model, sm)
@@ -685,7 +714,19 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
 
     res = fr.solve()
     # sensibilidad a segundo orden y amplificación de las acciones horizontales (EN 1993-1-1 §5.2.1, §5.2.2(5)B)
-    acr = alpha_cr(res, imp, {"G": gG, "Q": gQ})
+    col_nodes = sorted({n for lid in st.get("leg_ids", []) if lid in sm.chains for _, n in sm.chains[lid]})
+    acr = alpha_cr(res, imp, {"G": gG, "Q": gQ}, col_nodes)
+    # Estructura anclada con α_cr < 3 en el modelo isostático: se calcula también con los apoyos anclados
+    # coaccionados en planta. Si con ellos α_cr ≥ 3, la comprobación no se da por buena: queda PENDIENTE DE
+    # VALIDACIÓN (el cortante de los tacos y la hipótesis de apoyo los valida el técnico).
+    # (anclada = parámetro ANCLAJE: durante el dimensionado el taco todavía no está elegido ni en el modelo)
+    anchored = ps.get("ANCLAJE") == "al_suelo"
+    if anchored and any(v["alpha_cr"] < 3.0 for v in acr.values()):
+        acr_anc = anchored_alpha_cr(model, sm, imp, {"G": gG, "Q": gQ}, col_nodes)
+        for d, v in acr.items():
+            w = acr_anc.get(d)
+            if v["alpha_cr"] < 3.0 and w and w["alpha_cr"] > v["alpha_cr"]:
+                acr[d] = {**w, "anchored": True, "alpha_cr_iso": v["alpha_cr"], "delta_iso_mm": v["delta_mm"]}
     k_amp = {d: (1 / (1 - 1 / v["alpha_cr"]) if 3.0 <= v["alpha_cr"] < 10.0 else 1.0) for d, v in acr.items()}
     if use_imp:              # fuerzas equivalentes en las combinaciones de ELU, con los factores de G y Q de cada una
         new_uls = {}
@@ -717,17 +758,34 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
     else:
         hyp.append(f"Imperfección global omitida: H_Ed = {H_Ed:.0f} N ≥ 0,15·V_Ed = {0.15 * V_Ed:.0f} N "
                    "(EN 1993-1-1 §5.3.2(4)B).")
+    n_sup = len(st.get("supports", []))
     for d, v in acr.items():
         a = v["alpha_cr"]
         fin = math.isfinite(a)
         note = ("análisis de primer orden suficiente (α_cr ≥ 10)" if a >= 10 else
                 f"efectos de segundo orden por amplificación 1/(1 − 1/α_cr) = {k_amp[d]:.3f} de las acciones horizontales"
                 if a >= 3 else "α_cr < 3: requiere análisis de segundo orden, no disponible en este método")
+        det = {"delta_mm": v["delta_mm"], "h_mm": imp["h"], "k_amplificacion": k_amp[d]}
+        st_acr = _status(3.0 / a) if fin else OK
+        if v.get("anchored"):
+            # valor con los apoyos anclados: se declara junto al del modelo isostático y no se da por verificado
+            note += (f"; α_cr con los {n_sup} apoyos anclados coaccionados en planta "
+                     f"({v['alpha_cr_iso']:.2f} con el apoyo isostático, sin contar los tacos)")
+            det.update({"modelo_apoyos": "anclado", "alpha_cr_isostatico": round(v["alpha_cr_iso"], 2),
+                        "delta_isostatico_mm": v["delta_iso_mm"], "cortante_taco_imperfeccion_N": round(v["shear_N"], 1)})
+            if st_acr == OK:
+                st_acr = VAL
+                det["validacion"] = (f"α_cr,{d} = {v['alpha_cr_iso']:.2f} < 3 sin contar los tacos; α_cr,{d} = {a:.2f} sólo "
+                                     "si los tacos impiden el deslizamiento de todos los pies: validar el cortante de "
+                                     "tacos y vástagos de los pies o hacer un análisis de segundo orden")
+                hyp.append(f"Estabilidad global en {d}: α_cr = {v['alpha_cr_iso']:.2f} con el modelo de apoyos isostático "
+                           f"(toda la acción horizontal en un apoyo) y α_cr = {a:.2f} con los {n_sup} apoyos anclados "
+                           "coaccionados en planta. Se adopta este último, PENDIENTE DE VALIDACIÓN del cortante de los "
+                           "tacos y de los vástagos de los pies.")
         checks.append(Check(f"S.ALFA-CR-{d}", "estabilidad", "Estructura",
                             f"Sensibilidad a efectos de segundo orden en {d} (método de Horne): {note}",
                             "EN 1993-1-1 §5.2.1(3) y (4)B, §5.2.2(5)B", round(a, 2) if fin else None, 3.0, "-",
-                            round(3.0 / a, 4) if fin else 0.0, _status(3.0 / a) if fin else OK, "ELU",
-                            {"delta_mm": v["delta_mm"], "h_mm": imp["h"], "k_amplificacion": k_amp[d]}))
+                            round(3.0 / a, 4) if fin else 0.0, st_acr, "ELU", det))
 
     # ---------------------------------------------------------------- barras
     alpha = crit["imperfection_factors"][crit["buckling_curve_cold_formed_hollow"]]
@@ -1087,7 +1145,7 @@ def analyze(model, include_stability: bool = True, include_welds: bool = True) -
             "deslizante en X que impide el giro en planta, y los demás sólo verticales); no se cuenta con el "
             "rozamiento.",
             f"Cargas de superficie repartidas al emparrillado mediante la regla de 45° (áreas tributarias).",
-            f"Longitud de pandeo de patas: {beta_leg}·L (pórtico traslacional, conservador).",
+            f"Longitud de pandeo de patas: {beta_leg:g}·L (pórtico traslacional, conservador).",
             f"Curva de pandeo '{crit['buckling_curve_cold_formed_hollow']}' para perfiles huecos conformados en frío "
             "(EN 1993-1-1 tabla 6.2).",
         ],

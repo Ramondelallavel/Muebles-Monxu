@@ -330,6 +330,7 @@ class Armario(Estanteria):
     def _shelf_structure(self, model, d, legs):
         st = super()._shelf_structure(model, d, legs)
         st["attached_masses"] = model.structure.get("attached_masses", [])
+        st["attached_instances"] = model.structure.get("attached_instances", [])
         st["product_word"] = "armario"
         n = d["enc_n_doors"]
         st["assembly_texts"] = {

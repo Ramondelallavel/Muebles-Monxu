@@ -46,5 +46,6 @@
   "national_annex": {
     "applied": null,
     "note": "valores recomendados de EN 1990 y EN 1993, sin anejo nacional; el anejo nacional del país de instalación puede fijar otros (p. ej. γM0 y γM1) y debe confirmarse antes de aprobar el cálculo"
-  }
+  },
+  "horizontal_service_load_note_generic": "Hipótesis por defecto de empuje horizontal en el nivel superior de la estructura. Debe confirmarse según el uso real."
 }

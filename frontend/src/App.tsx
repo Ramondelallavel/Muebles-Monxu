@@ -381,12 +381,12 @@ function ApprovalPanel({ project, reload }: { project: Project; reload: () => vo
 
 /** Inventario de retales reutilizables: los compatibles se ofrecen al plan de corte y al anidado; al liberar una revisión se
  *  consumen los usados y se dan de alta los nuevos. */
-function InventoryPanel() {
+function InventoryPanel({ stamp }: { stamp: string }) {
   const [items, setItems] = useState<Dict[] | null>(null);
   const [f, setF] = useState<Dict>({ kind: "barra", profile: "", material: "", thickness: "", length: "", width: "" });
   const [msg, setMsg] = useState("");
   const load = async () => { try { setItems(await api.remnants("disponible")); } catch (e) { setMsg((e as Error).message); } };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [stamp]);          // se recarga cuando cambia el proyecto (p. ej. al liberar una revisión)
   const add = async () => {
     try {
       await api.addRemnant({ kind: f.kind, material: f.material, length: +f.length, profile: f.kind === "barra" ? f.profile : null,
@@ -469,7 +469,7 @@ function DocsPanel({ project, reload, design, stale, compact }: { project: Proje
               {fl.map((f) => <div key={f.path}>{IS_LOCAL ? <span>{f.path}</span> : <a href={api.fileUrl(project.code, rev, f.path) ?? undefined} target="_blank">{f.path}</a>} <span className="muted">{Math.max(1, Math.round(f.bytes / 1024))} kB · sha256 {f.sha256.slice(0, 12)}…</span></div>)}
             </div>))}
           <ApprovalPanel project={project} reload={reload} />
-          <InventoryPanel />
+          <InventoryPanel stamp={`${project.updated}|${project.approval?.state ?? ""}`} />
           <h4>Estado del proyecto</h4>
           <p className="muted">«Aprobado técnicamente» y «Liberado para fabricación» se alcanzan con las firmas de la aprobación técnica.</p>
           <div className="row">

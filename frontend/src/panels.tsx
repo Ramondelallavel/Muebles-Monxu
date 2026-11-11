@@ -190,12 +190,15 @@ export function PropsPanel({ id, design, viewer }: { id: string | null; design: 
 const LV: Record<string, string> = { bloqueante: "bad", error: "bad", NO_CUMPLE: "bad", advertencia: "warn", ADVERTENCIA: "warn",
   pendiente: "pend", PENDIENTE: "pend", PENDIENTE_VALIDACION: "pend", NO_APLICA: "info", ok: "good", CUMPLE: "good", propuesta: "info", info: "info" };
 
-/** Corrección automática comprobada para un diseño que no cumple por valores fijados (sólo se ofrece si con ella CUMPLE). */
+/** Corrección automática comprobada para un diseño que no cumple por valores fijados: sólo se ofrece si con ella ninguna
+ *  comprobación incumple; lo que siga pendiente de validación se dice (no es una aprobación). */
 export function FixBox({ fix, onApply, busy }: { fix: Dict | null | undefined; onApply?: (f: Dict) => void; busy?: boolean }) {
   if (!fix) return null;
+  const pend = fix.validation_pending ?? 0;
   return (
     <div className="fixbox" role="status">
-      <b>Corrección automática comprobada:</b> con estos cambios el diseño CUMPLE todas las verificaciones.
+      <b>Corrección automática comprobada:</b> con estos cambios ninguna comprobación calculada incumple
+      {fix.verdict && fix.verdict !== "CUMPLE" ? <>; el cálculo queda <b>{fix.verdict}</b>{pend ? ` (${pend} ${pend === 1 ? "comprobación" : "comprobaciones"} por validar)` : ""}</> : null}.
       <ul>{fix.reasons.map((r: string) => <li key={r}>{r}</li>)}</ul>
       {onApply && <button className="primary" disabled={busy} onClick={() => onApply(fix)}>Aplicar la corrección y regenerar</button>}
     </div>
@@ -261,7 +264,7 @@ export function BomPanel({ bom }: { bom: Dict }) {
         <th>Ancho</th><th>Cant.</th><th>Peso unit.</th><th>Peso total</th></tr></thead>
         <tbody>{bom.rows.map((r: Dict) => (
           <tr key={r.ref}><td>{r.pos}</td><td>{r.ref}</td><td>{r.description}</td><td>{r.material}</td><td>{fmt(r.thickness)}</td>
-            <td>{fmt(r.length)}</td><td>{fmt(r.width)}</td><td>{r.qty}</td><td>{fmt(r.unit_mass, 3)}</td><td>{fmt(r.total_mass, 3)}</td></tr>))}
+            <td>{fmt(r.length)}</td><td>{fmt(r.width)}</td><td>{r.qty}</td><td>{fmt(r.unit_mass, 4)}</td><td>{fmt(r.total_mass, 4)}</td></tr>))}
           <tr className="total"><td colSpan={7}>Totales: {t.components} componentes ({t.manufactured_parts} fabricados, {t.standard_parts} normalizados)</td>
             <td>{t.components}</td><td /><td>{fmt(t.total_mass, 2)} kg</td></tr>
         </tbody></table></div>

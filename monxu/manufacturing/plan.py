@@ -172,7 +172,7 @@ def purchases(model, mp: dict[str, Any], welding: dict[str, Any], painting: dict
     for c in mp["cutting"]:
         if c["n_bars"]:
             out.append({"type": "Perfil", "description": f"Barra {c['profile']} {c['material']} L={c['bar_length']:.0f} mm",
-                        "qty": c["n_bars"], "unit": "barra", "mass_kg": round(c["n_bars"] * c["mass_per_bar_kg"], 2),
+                        "qty": c["n_bars"], "unit": "barra", "mass_kg": round(c["purchased_length"] * c["kg_per_m"] / 1000, 2),
                         "basis": "plan de corte", "group": f"{c['profile']} {c['material']}"})
         if c["n_stock_used"]:
             out.append({"type": "Perfil (retal de inventario)", "description": f"Retales {c['profile']} {c['material']}: "
@@ -277,23 +277,44 @@ def manufacturing_plan(model, stock: list[dict[str, Any]] | None = None) -> dict
 
 
 # ============================================================================ DFM
-def flush_weld_joints(model, tol: float = 0.05) -> int:
-    """Uniones soldadas de un perfil con una pata en las que ambos comparten una cara exterior vertical (enrase)."""
-    legs = set(model.structure.get("leg_ids", []))
-    n = 0
+def weld_face_conditions(model, tol: float = 0.05) -> dict[str, Any]:
+    """Posición de las caras laterales de cada barra soldada a tope sobre otra, calculada desde la geometría.
+
+    * ``flush``: uniones en las que una cara de la barra queda enrasada con la de la barra de apoyo (misma cara
+      exterior o mismo canto): en esa cara el cordón cae sobre el radio de esquina.
+    * ``corner``: uniones en las que una cara queda a menos del radio de esquina de la cara de apoyo, sin enrasar:
+      en ese lado el cordón es en bisel abocinado sobre el radio. ``corner_min`` es la menor distancia y
+      ``corner_r`` el radio de esquina de esa barra de apoyo."""
+    flush = corner = 0
+    dmin = rmin = None
     for j in model.joints:
-        if j.kind != "soldadura" or len(j.members) < 2:
+        fem = (j.weld or {}).get("fem") if j.kind == "soldadura" else None
+        if not fem:
             continue
-        ms = [model.instance(i) for i in j.members]
-        if not all(m.part.kind == "perfil" for m in ms[:2]):
-            continue
-        a, b = ms[0], ms[1]
-        if (a.id in legs) == (b.id in legs):
+        a, b = model.instance(fem["member"]), model.instance(fem["onto"])
+        if a.part.kind != "perfil" or b.part.kind != "perfil":
             continue
         (alo, ahi), (blo, bhi) = a.bbox, b.bbox
-        if any(abs(alo[k] - blo[k]) <= tol or abs(ahi[k] - bhi[k]) <= tol for k in (0, 1)):
-            n += 1
-    return n
+        r = b.part.profile.r_out
+        ax_a = max(range(3), key=lambda k: abs(a.axis[1][k] - a.axis[0][k]))
+        ax_b = max(range(3), key=lambda k: abs(b.axis[1][k] - b.axis[0][k]))
+        state, d_c = None, None
+        for k in range(3):
+            if k in (ax_a, ax_b) or not (alo[k] >= blo[k] - tol and ahi[k] <= bhi[k] + tol):
+                continue                      # eje transversal a las dos barras con la barra dentro del ancho del apoyo
+            d = min(alo[k] - blo[k], bhi[k] - ahi[k])
+            if d <= tol:
+                state = "flush"
+            elif d < r - tol and state != "flush":
+                state, d_c = "corner", d if d_c is None else min(d_c, d)
+        if state == "flush":
+            flush += 1
+        elif state == "corner":
+            corner += 1
+            if dmin is None or d_c < dmin:
+                dmin, rmin = d_c, r
+    return {"flush": flush, "corner": corner, "corner_min": None if dmin is None else round(float(dmin), 2),
+            "corner_r": None if rmin is None else round(float(rmin), 2)}
 
 
 def dfm_check(model, plan: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -443,17 +464,22 @@ def dfm_check(model, plan: dict[str, Any] | None = None) -> list[dict[str, Any]]
         add("advertencia", "SOL-DISIMILAR", "Uniones soldadas", f"{len(dissimilar)} uniones soldadas entre acero al "
             f"carbono e inoxidable (p. ej. {dissimilar[0]}): soldadura disimilar con aporte austenítico (tipo 309L) y "
             "riesgo de corrosión en ambiente húmedo.", "Usar el mismo material en las piezas soldadas.")
+    # caras enrasadas o dentro del radio de esquina de la barra de apoyo: siempre desde la geometría (no supuesto)
+    wf = weld_face_conditions(model)
+    if wf["flush"]:
+        add("advertencia", "SOL-ENRASE", "Uniones soldadas", f"{wf['flush']} uniones con una cara enrasada con la de la "
+            "barra a la que se sueldan (misma cara exterior o mismo canto): en esa cara el cordón cae sobre el radio de "
+            "esquina (ángulo exterior o borde).", "Amolar esos cordones donde apoye una chapa y antes de pintar.")
+    if wf["corner"]:
+        add("advertencia", "SOL-RADIO-ESQUINA", "Uniones soldadas", f"{wf['corner']} uniones con una cara lateral a "
+            f"{wf['corner_min']:g} mm de la cara de la barra de apoyo, dentro de su radio de esquina ({wf['corner_r']:g} mm): "
+            "en ese lado el cordón es en bisel abocinado sobre el radio, con garganta efectiva reducida.",
+            "Recogerlo en la WPS o separar la barra de la cara al menos el radio de esquina.")
     weld_notes = model.structure.get("dfm_weld_notes")     # advertencias de soldeo propias de la familia
     if weld_notes is None:
-        weld_notes = []
-        n_flush = flush_weld_joints(model)
-        if n_flush:          # solo si la geometría tiene caras enrasadas (calculado, no supuesto)
-            weld_notes.append(("SOL-ENRASE", "Bastidores", f"{n_flush} uniones de largueros o travesaños enrasados con la "
-                               "cara exterior de las patas: en la cara enrasada el cordón es en ángulo exterior/borde y "
-                               "debe amolarse antes de pintar."))
-        weld_notes.append(("SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: "
-                           "puntear en mesa plana con escuadras, soldar en secuencia simétrica alterna y verificar la "
-                           "planitud de las superficies de apoyo de las chapas (EN ISO 13920 clase F)."))
+        weld_notes = [("SOL-DEFORMACION", "Estructura soldada", "Riesgo de distorsión en bastidores de pared delgada: "
+                       "puntear en mesa plana con escuadras, soldar en secuencia simétrica alterna y verificar la "
+                       "planitud de las superficies de apoyo de las chapas (EN ISO 13920 clase F).")]
     for code, elem, msg in weld_notes:
         add("advertencia", code, elem, msg)
     # galvanizado en caliente: los tubos cerrados por soldadura necesitan venteo y drenaje (no modelados)

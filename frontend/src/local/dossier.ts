@@ -9,7 +9,7 @@ import { family } from "../engine/families";
 import { BALANCE_HEADER, CUT_PLAN_HEADER, PURCHASE_HEADER, balanceRows, csv, cutPlanRows, flatSvg, nestingDxf, nestingSvg, optimizationSummary, partDxf, purchaseRows,
   reportHtml, sha256, stlBinary, verifyNestingDxf, verifyStl, weightSummaryRows, zipAsync } from "../engine/docs";
 import { assemblyStep, partStep } from "../engine/step";
-import { assemblyInstructions, drawingConsistency, drawingSet, isPerforatedPlate } from "../engine/drawings";
+import { assemblyInstructions, drawingConsistency, drawingSet } from "../engine/drawings";
 import { workbook } from "../engine/xlsx";
 import { g, pyRound } from "../engine/util";
 import { modelBBox, partGeometry } from "../engine/geometry";
@@ -72,14 +72,13 @@ export async function buildDossier(project, rev, model, summary, onProgress = nu
   await step("Expediente: planos PDF (proyección con líneas ocultas)");
   const dr = await drawingSet(model, summary, info, onProgress);
   add(`02_PLANOS/${code}_planos.pdf`, dr.pdf);
-  const cons = drawingConsistency(model, dr.sheets);
-  const parts = Object.values(model.parts);
-  const expected = 3 + 2 * parts.filter((p) => p.kind === "chapa").length + (parts.some((p) => p.kind === "pletina" && !isPerforatedPlate(p)) ? 1 : 0)
-    + parts.filter(isPerforatedPlate).length + 4;
+  const cons = drawingConsistency(model, dr);
+  const expected = dr.announced;      // hojas calculadas antes de dibujar (perfiles y despiece pueden ocupar varias)
   q.add(dr.total === expected ? "ok" : "bloqueante", "EXP-PDF", `Planos PDF: ${dr.total} hojas A3 (esperadas ${expected}): conjunto, estructura, perfiles, piezas de chapa, desarrollos, `
     + "pletinas, soldaduras, explosionado, montaje y despiece.");
-  q.add(cons.mismatches.length ? "bloqueante" : "ok", "PLANO-GEOMETRIA", cons.mismatches.length ? `Cotas de plano no coincidentes con la geometría: ${JSON.stringify(cons.mismatches)}`
-    : `${cons.checked_dims} cotas de plano verificadas frente a la geometría y los parámetros.`);
+  q.add(cons.mismatches.length ? "bloqueante" : "ok", "PLANO-GEOMETRIA", cons.mismatches.length
+    ? `Planos no coincidentes con el modelo (cotas, cantidades, pesos, taladros, barras del plan de corte o textos cortados): ${JSON.stringify(cons.mismatches)}`
+    : `${cons.checked_dims} cotas y registros de plano verificados frente a la geometría, los parámetros, el despiece y el plan de corte; ninguno ausente ni truncado.`);
   for (const p of Object.values(model.parts)) if (p.kind === "chapa") add(`02_PLANOS/${p.ref}_desarrollo.svg`, flatSvg(p, { ...info, revision: rev.rev, stamp: info.status_stamp }));
   // ---- 03 DXF
   await step("Expediente: DXF de corte");
@@ -118,10 +117,11 @@ export async function buildDossier(project, rev, model, summary, onProgress = nu
   const cost = summary.cost;
   if (cost) {
     add("04_LISTA_MATERIALES/presupuesto_estimado.csv", csv(["Partida", "Concepto", "Cantidad", "Unidad", "Precio unitario EUR", "Importe EUR", "Base"],
-      [...cost.lines.map((l) => [l.group, l.concept, l.qty, l.unit, l.unit_eur, l.eur, l.basis ?? ""]), ["", "Coste directo", "", "", "", cost.direct],
-        ["", `Gastos generales ${cost.overhead_rate * 100} %`, "", "", "", cost.overheads], ["", "Coste total", "", "", "", cost.cost],
-        ["", `Margen ${cost.margin_rate * 100} %`, "", "", "", cost.margin], ["", "Precio de venta estimado", "", "", "", cost.price, `material: ${cost.material_basis}`],
-        ...cost.by_lot.map((x) => ["Lote", `${x.lot} ud`, "", "", "coste/precio por unidad", `${x.cost} / ${x.price}`])]));
+      [...cost.lines.map((l) => [l.group, l.concept, l.qty, l.unit, l.unit_eur, l.eur, l.basis ?? ""]), ["", "Coste directo", "", "", "", cost.direct, ""],
+        ["", `Gastos generales ${g(cost.overhead_rate * 100)} %`, "", "", "", cost.overheads, ""], ["", "Coste total", "", "", "", cost.cost, ""],
+        ["", `Margen ${g(cost.margin_rate * 100)} %`, "", "", "", cost.margin, ""], ["", "Precio de venta estimado", "", "", "", cost.price, `material: ${cost.material_basis}`],
+        // mismas celdas que el servidor: importes con coma decimal también dentro del texto «coste / precio»
+        ...cost.by_lot.map((x) => ["Lote", `${x.lot} ud`, "", "", "coste/precio por unidad", `${String(x.cost).replace(".", ",")} / ${String(x.price).replace(".", ",")}`, ""])]));
     add("04_LISTA_MATERIALES/presupuesto_estimado.json", JSON.stringify(cost, null, 2));
   }
   add("04_LISTA_MATERIALES/pesos_materiales.csv", csv(["Pos", "Referencia", "Descripción", "Material", "Cantidad", "Peso unit kg", "Peso total kg"],
@@ -137,6 +137,10 @@ export async function buildDossier(project, rev, model, summary, onProgress = nu
   const mo = await assemblyInstructions(model, summary, info, dr.ctx, onProgress);
   add("06_DOCUMENTACION/instrucciones_montaje.pdf", mo.pdf);
   add("06_DOCUMENTACION/documentacion_tecnica.pdf", dr.pdf);
+  // tablas de piezas de cada paso: referencias y descripciones completas (son las que cita el texto del paso)
+  const cut = mo.sheets.flatMap((sh) => (sh.truncated ?? []).map((t) => `${sh.number}: ${t}`));
+  q.add(cut.length ? "bloqueante" : "ok", "PLANO-MONTAJE", cut.length ? `Instrucciones de montaje con textos cortados o tablas incompletas: ${cut.join("; ")}`
+    : `Instrucciones de montaje (${mo.total} hojas): tablas de piezas completas, sin referencias ni descripciones cortadas.`);
   // legibilidad: auditoría de todo lo dibujado (textos, cotas, globos, símbolos y geometría de las vistas)
   const lay = { total: dr.layout.total + mo.layout.total, by: { ...dr.layout.by } };
   for (const [k, v] of Object.entries(mo.layout.by)) lay.by[k] = (lay.by[k] ?? 0) + v;

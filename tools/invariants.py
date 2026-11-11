@@ -70,10 +70,15 @@ def check_case(fid: str, values: dict) -> list[str]:
         acc[0] += r["Rx_N"]
         acc[1] += r["Ry_N"]
         acc[2] += r["Rz_N"]
+    # imperfección global: fuerzas equivalentes φ·V de los casos IX<c> / IY<c> (c = G, Q) de las combinaciones de ELU
+    imp = next((c for c in eng["checks"] if c["id"] == "S.IMPERF"), None)
+    phi = imp["details"]["alpha_h"] / 200 if imp else 0.0
+    vert = {"G": tot.get("G", 0.0), "Q": q_total}
     for cname, f in combos.items():
         down = sum(fac * (q_total if case == "Q" else tot.get(case, 0.0)) for case, fac in f.items()
-                   if case not in ("HX", "HY"))
-        hx, hy = f.get("HX", 0.0) * Hn, f.get("HY", 0.0) * Hn
+                   if case not in ("HX", "HY") and not case.startswith(("IX", "IY")))
+        hx = f.get("HX", 0.0) * Hn + sum(fac * phi * vert[case[2:]] for case, fac in f.items() if case.startswith("IX"))
+        hy = f.get("HY", 0.0) * Hn + sum(fac * phi * vert[case[2:]] for case, fac in f.items() if case.startswith("IY"))
         rx, ry, rz = reac[cname]
         tol = max(1.0, 2e-4 * (abs(down) + abs(hx) + abs(hy)))       # las reacciones se redondean a 0,1 N
         if abs(rz - down) > tol or abs(rx + hx) > tol or abs(ry + hy) > tol:

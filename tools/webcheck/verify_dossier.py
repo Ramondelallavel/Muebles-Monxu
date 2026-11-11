@@ -90,6 +90,55 @@ with tempfile.TemporaryDirectory() as td:
     data = z.read(stl)
     ntri = struct.unpack("<I", data[80:84])[0]
     print("STL:", ntri, "triángulos, tamaño coherente:", len(data) == 84 + 50 * ntri)
+# ---------------- CSV: mismas filas, celdas y formato que los del servidor
+import re
+from monxu import pipeline as PL
+from monxu.manufacturing.costing import quotation
+NUM = re.compile(r"-?\d+(?:[.,]\d+)?")
+
+
+def csv_diffs(got: str, exp: str, rel: float = 2e-3) -> list[str]:
+    """Diferencias entre un CSV del navegador y el del servidor. Las celdas deben ser idénticas salvo los números,
+    que admiten la tolerancia entre el sólido B-rep del servidor y la definición analítica del navegador (y un
+    escalón de redondeo); un número con punto decimal en una celda numérica es un error de formato."""
+    out = []
+    gr, er = [ln.split(";") for ln in got.splitlines()], [ln.split(";") for ln in exp.splitlines()]
+    if len(gr) != len(er):
+        return [f"{len(gr)} filas frente a {len(er)}"]
+    for k, (a, b) in enumerate(zip(gr, er), 1):
+        if len(a) != len(b):
+            out.append(f"fila {k}: {len(a)} celdas frente a {len(b)}")
+            continue
+        for x, y in zip(a, b):
+            if x == y:
+                continue
+            if any(re.fullmatch(r"-?\d+\.\d+", c) for c in (x, y)):
+                out.append(f"fila {k}: número con punto decimal ({x!r} / {y!r})")
+                continue
+            nx, ny = NUM.findall(x), NUM.findall(y)
+            same = NUM.sub("#", x) == NUM.sub("#", y)
+            for p_, q_ in zip(nx, ny):
+                u, v = float(p_.replace(",", ".")), float(q_.replace(",", "."))
+                step = 10.0 ** -min(len(t.replace(",", ".").partition(".")[2]) for t in (p_, q_))
+                same = same and abs(u - v) <= rel * max(abs(u), abs(v)) + 1.01 * step
+            if not same:
+                out.append(f"fila {k}: {x!r} frente a {y!r}")
+    return out
+
+
+plan = manufacturing_plan(m)
+cost = quotation(m, plan)
+L = "04_LISTA_MATERIALES"
+expected_csv = {f"{L}/lista_compras.csv": (PL.PURCHASE_HEADER, PL.purchase_rows(bom, plan.get("lot", 1)), False),
+                f"{L}/presupuesto_estimado.csv": (PL.QUOTE_HEADER, PL.quote_rows(cost), False),
+                f"{L}/pesos_materiales.csv": (PL.WEIGHT_HEADER, PL.weight_rows(bom), False),
+                "05_OPTIMIZACION/plan_corte_perfiles.csv": (PL.CUT_PLAN_HEADER, PL.cut_plan_rows(plan), True),
+                "05_OPTIMIZACION/balance_material.csv": (PL.BALANCE_HEADER, PL.balance_rows(plan), True)}
+for n, (header, rows, exact) in expected_csv.items():
+    got, exp_txt = z.read(f"{root}/{n}").decode("utf-8"), PL.csv_text(header, rows)
+    dif = ([] if got == exp_txt else ["no es idéntico byte a byte"] + csv_diffs(got, exp_txt)[:3]) if exact else csv_diffs(got, exp_txt)
+    print(f"CSV {n:<45} {'idéntico al servidor' if got == exp_txt else 'igual al servidor dentro de tolerancia' if not dif else 'DIFERENTE: ' + '; '.join(dif[:4])}")
+    errs += bool(dif)
 qa = json.loads(z.read(f"{root}/06_DOCUMENTACION/informe_verificaciones.json"))["qa"]
 print("QA del navegador:", qa["summary"])
 print("ERRORES", errs)

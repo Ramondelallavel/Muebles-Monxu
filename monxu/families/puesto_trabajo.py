@@ -437,6 +437,7 @@ class PuestoTrabajo(MesaIndustrial):
                                    "area_mm2": (v["LONGITUD"] - 2 * d["c"]) * d["est_D"] - 2 * notch * notch,
                                    "count_param": "NUMERO_TRAVESANOS_ESTANTE"})
         st["attached_masses"] = model.structure.get("attached_masses", [])
+        st["attached_instances"] = model.structure.get("attached_instances", [])
         st["product_word"] = "puesto"
         st["assembly_texts"] = {
             "ALT": "Colocar el estante superior sobre su bastidor, con las escotaduras traseras alrededor de los "
