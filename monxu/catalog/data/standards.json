@@ -1,0 +1,209 @@
+{
+  "_meta": {
+    "version": "2026.11-3",
+    "reviewed": "2026-11-05",
+    "note": "Relación de normas y requisitos de referencia por familia y mercado. Las versiones deben revisarse periódicamente: este fichero es editable y versionado. La identificación de normas aplicables es orientativa y no sustituye el análisis de un técnico competente. Cada norma solo se lista si aplica al proyecto: «materials» limita por familia de material usada, «requires» por proceso presente (soldadura, corte térmico) o por norma de producto de un material o perfil realmente empleado (norma_material)."
+  },
+  "standards": [
+    {
+      "code": "EN 1990",
+      "version": "2002+A1:2005",
+      "title": "Bases de cálculo de estructuras",
+      "scope": ["calculo"],
+      "families": ["*"],
+      "markets": ["EU"]
+    },
+    {
+      "code": "EN 1993-1-1",
+      "version": "2005+A1:2014",
+      "title": "Eurocódigo 3. Proyecto de estructuras de acero. Reglas generales",
+      "scope": ["calculo"],
+      "families": ["*"],
+      "markets": ["EU"],
+      "materials": ["acero_carbono", "acero_inoxidable"]
+    },
+    {
+      "code": "EN 1993-1-3",
+      "version": "2006",
+      "title": "Eurocódigo 3. Perfiles y chapas conformados en frío",
+      "scope": ["calculo"],
+      "families": ["*"],
+      "markets": ["EU"],
+      "materials": ["acero_carbono", "acero_inoxidable"]
+    },
+    {
+      "code": "EN 1993-1-4",
+      "version": "2006+A2:2020",
+      "title": "Eurocódigo 3. Aceros inoxidables",
+      "scope": ["calculo"],
+      "families": ["*"],
+      "markets": ["EU"],
+      "materials": ["acero_inoxidable"]
+    },
+    {
+      "code": "EN 1993-1-8",
+      "version": "2005",
+      "title": "Eurocódigo 3. Uniones",
+      "scope": ["calculo", "soldadura"],
+      "families": ["*"],
+      "markets": ["EU"],
+      "materials": ["acero_carbono", "acero_inoxidable"]
+    },
+    {
+      "code": "EN 1999-1-1",
+      "version": "2007+A2:2013",
+      "title": "Eurocódigo 9. Estructuras de aluminio",
+      "scope": ["calculo"],
+      "families": ["*"],
+      "markets": ["EU"],
+      "materials": ["aluminio"]
+    },
+    {
+      "code": "EN 1090-2",
+      "version": "2018+A1:2024",
+      "title": "Ejecución de estructuras de acero. Requisitos técnicos",
+      "scope": ["fabricacion"],
+      "families": ["*"],
+      "markets": ["EU"],
+      "materials": ["acero_carbono", "acero_inoxidable"],
+      "requires": ["soldadura"]
+    },
+    {
+      "code": "EN ISO 2553",
+      "version": "2019",
+      "title": "Soldeo. Representación simbólica en planos",
+      "scope": ["planos", "soldadura"],
+      "families": ["*"],
+      "markets": ["*"],
+      "requires": ["soldadura"]
+    },
+    {
+      "code": "EN ISO 5817",
+      "version": "2023",
+      "title": "Soldeo. Niveles de calidad de imperfecciones (acero)",
+      "scope": ["soldadura"],
+      "families": ["*"],
+      "markets": ["*"],
+      "requires": ["soldadura"]
+    },
+    {
+      "code": "EN ISO 13920",
+      "version": "2023",
+      "title": "Soldeo. Tolerancias generales para construcciones soldadas",
+      "scope": ["planos", "soldadura"],
+      "families": ["*"],
+      "markets": ["*"],
+      "requires": ["soldadura"]
+    },
+    {
+      "code": "ISO 2768-1",
+      "version": "1989",
+      "title": "Tolerancias generales. Dimensiones lineales y angulares",
+      "scope": ["planos"],
+      "families": ["*"],
+      "markets": ["*"]
+    },
+    {
+      "code": "EN ISO 9013",
+      "version": "2017",
+      "title": "Corte térmico. Clasificación y tolerancias",
+      "scope": ["fabricacion", "corte"],
+      "families": ["*"],
+      "markets": ["*"],
+      "requires": ["corte_termico"]
+    },
+    {
+      "code": "ISO 7200",
+      "version": "2004",
+      "title": "Documentación técnica de productos. Cuadros de rotulación",
+      "scope": ["planos"],
+      "families": ["*"],
+      "markets": ["*"]
+    },
+    {
+      "code": "ISO 128-2",
+      "version": "2020",
+      "title": "Documentación técnica de productos. Representación. Líneas",
+      "scope": ["planos"],
+      "families": ["*"],
+      "markets": ["*"]
+    },
+    {
+      "code": "ISO 129-1",
+      "version": "2018",
+      "title": "Documentación técnica de productos. Acotación",
+      "scope": ["planos"],
+      "families": ["*"],
+      "markets": ["*"]
+    },
+    {
+      "code": "EN 10219-2",
+      "version": "2006",
+      "title": "Perfiles huecos conformados en frío. Tolerancias, dimensiones y propiedades",
+      "scope": ["materiales"],
+      "families": ["*"],
+      "markets": ["EU"],
+      "requires": ["norma_material"]
+    },
+    {
+      "code": "EN 10025-2",
+      "version": "2019",
+      "title": "Productos laminados en caliente de aceros estructurales no aleados",
+      "scope": ["materiales"],
+      "families": ["*"],
+      "markets": ["EU"],
+      "requires": ["norma_material"]
+    },
+    {
+      "code": "Reglamento (UE) 2023/988",
+      "version": "2023",
+      "title": "Seguridad general de los productos (GPSR)",
+      "scope": ["mercado"],
+      "families": ["*"],
+      "markets": ["EU"]
+    },
+    {
+      "code": "EN 13150",
+      "version": "2001",
+      "title": "Mesas de trabajo para laboratorio. Dimensiones, seguridad y durabilidad",
+      "scope": ["producto"],
+      "families": ["mesa_industrial", "puesto_trabajo"],
+      "markets": ["EU"],
+      "applicability": "Sólo si el uso es de laboratorio"
+    },
+    {
+      "code": "EN ISO 14738",
+      "version": "2008",
+      "title": "Seguridad de las máquinas. Requisitos antropométricos para puestos de trabajo",
+      "scope": ["ergonomia"],
+      "families": ["mesa_industrial", "puesto_trabajo"],
+      "markets": ["*"]
+    },
+    {
+      "code": "EN 15635",
+      "version": "2008",
+      "title": "Almacenaje en estanterías metálicas. Uso y mantenimiento",
+      "scope": ["producto"],
+      "families": ["estanteria", "estanteria_bateria", "cantilever"],
+      "markets": ["EU"]
+    },
+    {
+      "code": "EN 15512",
+      "version": "2020+A1:2022",
+      "title": "Sistemas de almacenamiento en estanterías de acero. Principios de cálculo",
+      "scope": ["calculo"],
+      "families": ["estanteria"],
+      "markets": ["EU"],
+      "applicability": "Estanterías de carga paletizada; para estantería ligera es referencia de criterio"
+    },
+    {
+      "code": "EN 14073-2",
+      "version": "2004",
+      "title": "Mobiliario de oficina. Armarios. Requisitos de seguridad",
+      "scope": ["producto"],
+      "families": ["armario"],
+      "markets": ["EU"],
+      "applicability": "Referencia de ensayos de estabilidad para armarios"
+    }
+  ]
+}

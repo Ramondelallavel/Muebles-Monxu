@@ -1,0 +1,78 @@
+{
+  "_meta": {
+    "version": "2026.11-4",
+    "note": "Espesores y formatos comerciales habituales. Las reglas tecnológicas corresponden a la configuración de taller por defecto y deben ajustarse a la maquinaria real (láser, plegadora, utillaje)."
+  },
+  "thicknesses_mm": {
+    "S235JR": [1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 15.0, 20.0],
+    "DC01": [0.8, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0],
+    "1.4301": [0.8, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0],
+    "1.4404": [1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0],
+    "EN AW-5754 H22": [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0],
+    "S275JR": [2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 15.0, 20.0],
+    "S355JR": [2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 15.0, 20.0],
+    "S250GD+Z": [0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0],
+    "DX51D+Z": [0.5, 0.6, 0.75, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0],
+    "1.4016": [0.5, 0.8, 1.0, 1.2, 1.5, 2.0, 3.0]
+  },
+  "formats_mm": [
+    {
+      "code": "2000x1000",
+      "length": 2000,
+      "width": 1000
+    },
+    {
+      "code": "2500x1250",
+      "length": 2500,
+      "width": 1250
+    },
+    {
+      "code": "3000x1500",
+      "length": 3000,
+      "width": 1500
+    },
+    {
+      "code": "4000x2000",
+      "length": 4000,
+      "width": 2000
+    }
+  ],
+  "laser": {
+    "max_thickness_mm": {
+      "acero_carbono": 20,
+      "acero_inoxidable": 15,
+      "aluminio": 12
+    },
+    "kerf_mm": 0.3,
+    "part_spacing_mm": 8.0,
+    "sheet_margin_mm": 10.0,
+    "min_hole_diameter_factor": {
+      "acero_carbono": 1.0,
+      "acero_inoxidable": 1.5,
+      "aluminio": 1.5
+    },
+    "min_web_factor": 1.0,
+    "min_edge_distance_factor": 1.0,
+    "tolerance_standard": "EN ISO 9013:2017 clase 2"
+  },
+  "press_brake": {
+    "max_bend_length_mm": 3000,
+    "tonnage_t": 100,
+    "v_die_factor": 8,
+    "v_dies_mm": [8, 12, 16, 24, 32, 40, 50],
+    "min_inner_radius_factor": {
+      "acero_carbono": 1.0,
+      "acero_inoxidable": 1.5,
+      "aluminio": 1.5
+    },
+    "min_hole_to_bend_factor_t": 2.0,
+    "k_factor_method": "DIN 6935",
+    "angle_tolerance_deg": 1.0
+  },
+  "purchase": {
+    "custom_cut_min_utilization": 0.1,
+    "remnant_min_mm": 300.0,
+    "custom_cut_round_mm": 10.0,
+    "note": "La última chapa de un anidado con aprovechamiento menor que custom_cut_min_utilization se compra cortada a medida (rectángulo mínimo de sus piezas + margen, redondeado). En las chapas enteras se registra como retal reutilizable la franja libre de un solo corte cuyos dos lados alcanzan remnant_min_mm."
+  }
+}

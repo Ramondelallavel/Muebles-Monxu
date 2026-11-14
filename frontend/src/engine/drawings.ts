@@ -1,0 +1,1540 @@
+// @ts-nocheck
+// Planos de fabricación en PDF generados en el navegador (port de monxu/docs/plans.py + drawing_kit.py):
+// A3 horizontal, primer diedro, cuadro de rotulación ISO 7200, líneas ISO 128-2, acotación ISO 129-1,
+// símbolos de soldadura ISO 2553. Las vistas se obtienen de los sólidos facetados (hlr.ts).
+import * as C from "./catalog";
+import { explodeOf, instanceBBox, instanceCentroid, modelBBox, partGeometry } from "./geometry";
+import { project, projectPoint } from "./hlr";
+import { mmul, translation } from "./model";
+import { PDF, textWidth } from "./pdf";
+import { Occupancy, auditPage, boxesOverlap, segHitsBox, segsCross, summarize, textBox } from "./layout";
+import { f as fx, g, pyRound } from "./util";
+
+const FRAME = [20, 10, 410, 287];
+const TB_W = 180, TB_H = 58;
+const LW_THICK = 0.5, LW_THIN = 0.25, LW_DIM = 0.18;
+const SCALES = [[1, 1], [1, 2], [1, 5], [1, 10], [1, 20], [1, 50], [1, 100]];
+const RED = [0.78, 0.1, 0.1], GREY = [0.45, 0.45, 0.45], BLACK = [0, 0, 0];
+const TB_RESERVED = [226, 6, 412, 80];
+
+export const fmt = (v, dec = 1) => (Math.abs(v - Math.round(v)) < 0.05 ? String(Math.round(v)) : v.toFixed(dec).replace(".", ","));
+/** Valor numérico del BOM tal como figura en la lista de materiales: hasta 4 decimales, sin ceros finales y con coma
+ *  decimal (= drawing_kit.bom_num). El formato de cotas daba «0» para un tornillo de 3,8 g y «158» para 157,95 kg. */
+export const bomNum = (v) => (v === null || v === undefined || v === "" ? "" : typeof v !== "number" ? String(v)
+  : fx(v, 4).replace(/0+$/, "").replace(/\.$/, "").replace(".", ","));
+const scaleLabel = (s) => (s ? `${s[0]}:${s[1]}` : "S/E");
+function fitText(s, width, h) {
+  s = String(s);
+  if (textWidth(s, h) <= width) return s;
+  while (s && textWidth(s + "…", h) > width) s = s.slice(0, -1);
+  return s + "…";
+}
+
+/** Parte un texto en líneas del ancho dado, por los espacios (= drawing_kit.wrap_text). */
+function wrapText(s, width, h) {
+  if (textWidth(s, h) <= width) return [s];
+  const out = [];
+  let cur = "";
+  for (const word of s.split(" ")) {
+    const cand = cur ? cur + " " + word : word;
+    if (cur && textWidth(cand, h) > width) { out.push(cur); cur = word; } else cur = cand;
+  }
+  out.push(cur);
+  return out;
+}
+/** Texto de una celda de tabla (los decimales sueltos, con el formato de cotas). */
+const cellText = (v) => (v === null || v === undefined ? "" : typeof v === "number" && !Number.isInteger(v) ? fmt(v, 2) : String(v));
+
+// ============================================================================ kit de dibujo
+const TB_BOX = [228, 8, 412, 80];               // cuadro de rotulación + sello de estado
+const AREA = [FRAME[0] + 1.5, FRAME[1] + 1.5, FRAME[2] - 1.5, FRAME[3] - 1.5];
+
+/** Partición en líneas de ancho máximo `width` (mm): [{ s, para }] (s = null para una línea en blanco). */
+function wrap(lines, h, width, bold = false) {
+  const out = [];
+  lines.forEach((ln0, para) => {
+    let ln = ln0;
+    if (!ln) { out.push({ s: null, para }); return; }
+    while (ln) {
+      const words = ln.split(" ");
+      let part = "";
+      for (const w of words) { const cand = (part + " " + w).trim(); if (textWidth(cand, h, bold) > width && part) break; part = cand; }
+      if (!part) part = ln;
+      out.push({ s: part, para });
+      ln = ln.slice(part.length).trimStart();
+    }
+  });
+  return out;
+}
+/** Caja de un bloque de notas con la primera línea base en yTop. */
+function notesBox(x, yTop, lines, h, width, boldFirst) {
+  let y = yTop, w = 0, last = yTop;
+  for (const l of wrap(lines, h, width)) {
+    if (l.s === null) { y -= h * 0.8; continue; }
+    w = Math.max(w, textWidth(l.s, h, boldFirst && l.para === 0));
+    last = y; y -= h * 1.55;
+  }
+  return [x, last - 0.22 * h, x + w, yTop + 1.18 * h];
+}
+
+export class Drawing {
+  constructor(info) {
+    this.pdf = new PDF({ title: info.title ?? "Planos", author: info.designer ?? "", subject: `${info.project_code ?? ""} Rev.${info.revision ?? ""}` });
+    this.info = info; this.pages = []; this.gidSeq = 0; this.pendingLabels = []; this.pendingDimTexts = [];
+  }
+  get page() { return this.pages.at(-1); }
+  get occ() { return this.page.occ; }
+  recordDim(name, value, source) { this.page.dims.push({ name, value: Math.round(value * 1000) / 1000, source }); }
+  /** Ejecuta fn con una categoría y un identificador de grupo para todo lo que dibuje. */
+  group(cat, fn) {
+    const pc = this.pdf.cat, pg = this.pdf.gid;
+    this.pdf.cat = cat; this.pdf.gid = ++this.gidSeq;
+    try { return fn(this.pdf.gid); } finally { this.pdf.cat = pc; this.pdf.gid = pg; }
+  }
+  newSheet(number, title, scale, material = "Ver lista") {
+    this.flushLabels();
+    this.pdf.page(420, 297);
+    const occ = new Occupancy();
+    this.pdf.rec = occ;
+    this.pages.push({ number, title, scale, dims: [], occ, forbid: [TB_BOX] });
+    this.group("frame", () => this.frame());
+    this.group("tb", () => this.titleBlock(number, title, scale, material));
+  }
+  /** Reserva zonas en las que no deben colocarse textos ni globos automáticos (p. ej. una tabla que se dibujará después). */
+  reserve(box) { this.page.forbid.push(box); }
+  async finish() { this.flushLabels(); this.pdf.rec = null; return this.pdf.save(); }
+  /** Coste de colocar una caja: conflictos con lo ya dibujado, zonas reservadas y salida del área útil. */
+  boxCost(box, opts = {}) {
+    let n = this.occ.cost(box, { region: opts.region ?? AREA, ignoreGid: opts.ignoreGid ?? null, cats: opts.cats ?? null });
+    for (const f of this.page.forbid) if (boxesOverlap(box, f, 0)) n += 50;
+    return n;
+  }
+  /** Elige entre posiciones candidatas la de menor coste ([x, y, align, angle]) y dibuja el texto. */
+  placeText(s, h, cands, opts = {}) {
+    const bold = !!opts.bold, w = textWidth(s, h, bold);
+    let best = null;
+    cands.forEach(([x, y, align = "l", angle = 0], k) => {
+      const dx = align === "c" ? -w / 2 : align === "r" ? -w : 0;
+      const a = (angle * Math.PI) / 180;
+      const box = textBox(x + dx * Math.cos(a), y + dx * Math.sin(a), w, h, angle);
+      const c = this.boxCost(box, opts) * 10 + k * (opts.orderWeight ?? 0.01);
+      if (!best || c < best.c) best = { c, x, y, align, angle, box };
+    });
+    if (best) this.text(best.x, best.y, s, h, best.align, best.angle, bold, opts.color ?? BLACK);
+    return best;
+  }
+  text(x, y, s, h = 3.5, align = "l", angle = 0, bold = false, color = BLACK) { this.pdf.text(x, y, s, h, { align, angle, bold, color }); }
+  label(x, y, s) { this.text(x, y, s, 1.8, "l", 0, false, GREY); }
+  field(x, y, w, h, label, value, bold = false) { this.label(x + 1.5, y + h - 2.5, label); this.text(x + 2, y + 2, fitText(value ?? "", w - 3, h >= 10 ? 3.0 : 2.8), h >= 10 ? 3.0 : 2.8, "l", 0, bold); }
+  line(p, q, lw = LW_THIN, dash = null, color = BLACK) { this.pdf.lw(lw).dash(dash).stroke(color).line(p[0], p[1], q[0], q[1]); this.pdf.dash(null).stroke(BLACK); }
+  polyline(pts, lw = LW_THICK, dash = null, color = BLACK, close = false) { this.pdf.lw(lw).dash(dash).stroke(color).poly(pts, close); this.pdf.dash(null).stroke(BLACK); }
+  rect(x, y, w, h, lw = LW_THIN, fill = null) {
+    this.pdf.lw(lw);
+    if (fill) { this.pdf.fill(fill).rect(x, y, w, h, "B"); this.pdf.fill(BLACK); } else this.pdf.rect(x, y, w, h);
+  }
+  circle(cx, cy, r, lw = LW_THIN, fill = null) { this.pdf.lw(lw); if (fill) { this.pdf.fill(fill).circle(cx, cy, r, "B"); this.pdf.fill(BLACK); } else this.pdf.circle(cx, cy, r); }
+  arrow(tip, dir, size = 3.0) {
+    const n = Math.hypot(dir[0], dir[1]) || 1, dx = dir[0] / n, dy = dir[1] / n;
+    const w = size * Math.tan((10 * Math.PI) / 180), bx = tip[0] - dx * size, by = tip[1] - dy * size;
+    this.pdf.fill(BLACK).poly([tip, [bx - dy * w, by + dx * w], [bx + dy * w, by - dx * w]], true, "f");
+  }
+  frame() {
+    const [x0, y0, x1, y1] = FRAME;
+    this.pdf.lw(0.7).rect(x0, y0, x1 - x0, y1 - y0);
+    for (let i = 0; i < 8; i++) this.text(x0 + ((x1 - x0) * (i + 0.5)) / 8, y1 + 2.5, String(i + 1), 2.5, "c");
+    "ABCDEF".split("").forEach((ch, j) => this.text(x0 - 3, y1 - ((y1 - y0) * (j + 0.5)) / 6, ch, 2.5, "c"));
+    this.line([210, y1], [210, y1 + 4]); this.line([210, y0], [210, y0 - 4]);
+  }
+  titleBlock(number, title, scale, material) {
+    const I = this.info, x1 = FRAME[2], y0 = FRAME[1], x0 = x1 - TB_W, y1 = y0 + TB_H;
+    this.pdf.lw(0.5).rect(x0, y0, TB_W, TB_H);
+    for (const y of [y0 + 10, y0 + 20, y0 + 30, y0 + 46]) this.line([x0, y], [x1, y]);
+    for (const x of [x0 + 45, x0 + 90, x0 + 135]) this.line([x, y0 + 46], [x, y1]);
+    this.field(x0, y0 + 46, 45, 12, "Diseñado", I.designer ?? "");
+    this.field(x0 + 45, y0 + 46, 45, 12, "Comprobado", I.checked ?? "—");
+    this.field(x0 + 90, y0 + 46, 45, 12, "Aprobado", I.approved ?? "—");
+    this.field(x0 + 135, y0 + 46, 45, 12, "Fecha", I.date ?? "");
+    this.label(x0 + 1.5, y0 + 43.5, "Título");
+    this.text(x0 + 3, y0 + 37.5, fitText(I.product_name ?? "", TB_W - 6, 4.2), 4.2, "l", 0, true);
+    this.text(x0 + 3, y0 + 32, fitText(title, TB_W - 6, 3.2), 3.2, "l");
+    for (const x of [x0 + 40, x0 + 75, x0 + 100, x0 + 125, x0 + 150]) this.line([x, y0 + 20], [x, y0 + 30]);
+    this.field(x0, y0 + 20, 40, 10, "Nº de plano", number, true);
+    this.field(x0 + 40, y0 + 20, 35, 10, "Código proyecto", I.project_code ?? "");
+    this.field(x0 + 75, y0 + 20, 25, 10, "Revisión", String(I.revision ?? ""), true);
+    this.field(x0 + 100, y0 + 20, 25, 10, "Escala", scale);
+    this.field(x0 + 125, y0 + 20, 25, 10, "Unidades", "mm");
+    this.field(x0 + 150, y0 + 20, 30, 10, "Hoja", `${this.pages.length}/${I.total_sheets ?? "?"}`);
+    for (const x of [x0 + 70, x0 + 125, x0 + 155]) this.line([x, y0 + 10], [x, y0 + 20]);
+    this.field(x0, y0 + 10, 70, 10, "Material", material);
+    this.field(x0 + 70, y0 + 10, 55, 10, "Ref. conjunto", I.assembly_ref ?? "");
+    this.field(x0 + 125, y0 + 10, 30, 10, "Cliente", I.client ?? "");
+    this.label(x0 + 156.5, y0 + 17.5, "Proyección");
+    this.firstAngle(x0 + 168.5, y0 + 13.2);
+    this.line([x0 + 120, y0], [x0 + 120, y0 + 10]);
+    this.label(x0 + 1.5, y0 + 7.5, "Tolerancias generales");
+    this.text(x0 + 3, y0 + 2.5, `${I.tolerances ?? "ISO 2768-mK"} · soldadura EN ISO 13920-BF`, 2.6, "l");
+    this.text(x0 + 121.5, y0 + 5.6, fitText(I.company ?? "MUEBLES MONXU", 57, 3.2), 3.2, "l", 0, true);
+    this.text(x0 + 121.5, y0 + 1.6, "Documento generado del modelo paramétrico", 1.9, "l");
+    if (I.status_stamp) {
+      const col = I.status_level === "error" ? RED : GREY;
+      this.pdf.lw(0.4).stroke(col).rect(x0, y1 + 2, TB_W, 7);
+      this.pdf.stroke(BLACK);
+      this.text(x0 + TB_W / 2, y1 + 4, fitText(I.status_stamp, TB_W - 4, 2.6), 2.6, "c", 0, true, col);
+    }
+  }
+  firstAngle(cx, cy) {
+    this.line([cx - 9, cy - 1.3], [cx - 9, cy + 1.3]); this.line([cx - 3, cy - 2.6], [cx - 3, cy + 2.6]);
+    this.line([cx - 9, cy + 1.3], [cx - 3, cy + 2.6]); this.line([cx - 9, cy - 1.3], [cx - 3, cy - 2.6]);
+    this.circle(cx + 4, cy, 2.6); this.circle(cx + 4, cy, 1.3);
+  }
+  /** Desplaza la línea de cota hacia fuera mientras se superponga a la línea de otra cota (cotas apiladas). */
+  _lane(lo, hi, pos, sgn, horizontal) {
+    for (let k = 0; k < 5; k++) {
+      const band = horizontal ? [lo + 0.8, pos - 0.6, hi - 0.8, pos + 0.6] : [pos - 0.6, lo + 0.8, pos + 0.6, hi - 0.8];
+      // las prolongaciones colineales de cotas cortas vecinas (≤ 5 mm) no cuentan como choque
+      // (flechas y prolongaciones de cotas cortas vecinas en la misma línea, a menos de 6 mm de los extremos)
+      const clash = this.occ.segsIn(band, ["dim"]).some((q) => {
+        const g = q.seg, a0 = Math.min(horizontal ? g[0] : g[1], horizontal ? g[2] : g[3]), a1 = Math.max(horizontal ? g[0] : g[1], horizontal ? g[2] : g[3]);
+        const c0 = horizontal ? g[1] : g[0], c1 = horizontal ? g[3] : g[2];
+        const onLine = Math.abs(c0 - pos) < 0.7 && Math.abs(c1 - pos) < 0.7;
+        return !(onLine && Math.min(a1, hi) - Math.max(a0, lo) <= 6);
+      });
+      if (!clash) return pos;
+      const nxt = pos + sgn * 7;
+      if (horizontal ? nxt < AREA[1] + 4 || nxt > AREA[3] - 4 : nxt < AREA[0] + 4 || nxt > AREA[2] - 4) return pos;
+      pos = nxt;
+    }
+    return pos;
+  }
+  /** Los textos de cota se colocan al final (cuando ya están todas las líneas de cota de la hoja). */
+  _dimText(fn) { this.pendingDimTexts.push(fn); }
+  flushDimTexts() { const q = this.pendingDimTexts; this.pendingDimTexts = []; for (const f of q) f(); }
+  dimH(x1, x2, yf1, yf2, yd, value, name = null, source = "geometria", prefix = "", lane = true) {
+    if (Math.abs(x2 - x1) < 0.5) return;
+    if (x1 > x2) { [x1, x2] = [x2, x1]; [yf1, yf2] = [yf2, yf1]; }
+    const sgn = yd >= Math.max(yf1, yf2) ? 1 : -1, h = 3.0, txt = prefix + fmt(value), w = textWidth(txt, h);
+    if (lane) yd = this._lane(x1, x2, yd, sgn, true);
+    this.group("dim", () => {
+      for (const [x, yf] of [[x1, yf1], [x2, yf2]]) this.line([x, yf + sgn], [x, yd + sgn * 2], LW_DIM);
+      this.line([x1, yd], [x2, yd], LW_DIM);
+      const inner = x2 - x1 > 9;
+      if (inner) { this.arrow([x1, yd], [-1, 0]); this.arrow([x2, yd], [1, 0]); }
+      else { this.line([x1 - 5, yd], [x2 + 5, yd], LW_DIM); this.arrow([x1, yd], [1, 0]); this.arrow([x2, yd], [-1, 0]); }
+    });
+    this._dimText(() => this.group("dim", () => {
+      const inner = x2 - x1 > 9;
+      const up = yd + 1.0, dn = yd - 1.0 - h, mid = (x1 + x2) / 2, fits = x2 - x1 > w + 3;
+      const c = [];
+      if (fits) { c.push([mid, up, "c"]); for (const f of [0.3, 0.7, 0.15, 0.85]) c.push([x1 + 1.5 + w / 2 + f * (x2 - x1 - 3 - w), up, "c"]); }
+      const xr = x2 + (inner ? 2.5 : 6), xl = x1 - (inner ? 2.5 : 6);
+      c.push([xr, up, "l"], [xl, up, "r"]);
+      if (fits) c.push([mid, dn, "c"]);
+      c.push([xr, dn, "l"], [xl, dn, "r"]);
+      // filas escalonadas más allá del extremo de las líneas de referencia (cadenas de cotas apretadas)
+      const far = sgn > 0 ? [yd + 3.2, yd + 7.6, yd + 12] : [yd - 3.2 - 1.18 * h, yd - 7.6 - 1.18 * h, yd - 12 - 1.18 * h];
+      for (const yy of far) c.push([mid, yy, "c"], [x1, yy, "c"], [x2, yy, "c"]);
+      const b = this.placeText(txt, h, c, { orderWeight: 0.6 });
+      if (b && b.align !== "c") {          // texto fuera de las líneas de referencia: prolongar la línea de cota bajo él
+        const e = b.align === "l" ? [x2, b.x + w + 0.5] : [b.x - w - 0.5, x1];
+        this.line([e[0], yd], [e[1], yd], LW_DIM);
+      }
+    }));
+    if (name) this.recordDim(name, value, source);
+  }
+  dimV(y1, y2, xf1, xf2, xd, value, name = null, source = "geometria", prefix = "", lane = true) {
+    if (Math.abs(y2 - y1) < 0.5) return;
+    if (y1 > y2) { [y1, y2] = [y2, y1]; [xf1, xf2] = [xf2, xf1]; }
+    const sgn = xd >= Math.max(xf1, xf2) ? 1 : -1, h = 3.0, txt = prefix + fmt(value), w = textWidth(txt, h);
+    if (lane) xd = this._lane(y1, y2, xd, sgn, false);
+    this.group("dim", () => {
+      for (const [y, xf] of [[y1, xf1], [y2, xf2]]) this.line([xf + sgn, y], [xd + sgn * 2, y], LW_DIM);
+      this.line([xd, y1], [xd, y2], LW_DIM);
+      const inner = y2 - y1 > 9;
+      if (inner) { this.arrow([xd, y1], [0, -1]); this.arrow([xd, y2], [0, 1]); }
+      else { this.line([xd, y1 - 5], [xd, y2 + 5], LW_DIM); this.arrow([xd, y1], [0, 1]); this.arrow([xd, y2], [0, -1]); }
+    });
+    this._dimText(() => this.group("dim", () => {
+      const inner = y2 - y1 > 9;
+      // texto girado 90°: la caja ocupa x ∈ [x − 1,18·h, x + 0,22·h]
+      const lf = xd - 1.0, rt = xd + 1.0 + 1.18 * h, mid = (y1 + y2) / 2, fits = y2 - y1 > w + 3;
+      const c = [];
+      if (fits) { c.push([lf, mid, "c", 90]); for (const f of [0.3, 0.7, 0.15, 0.85]) c.push([lf, y1 + 1.5 + w / 2 + f * (y2 - y1 - 3 - w), "c", 90]); }
+      const yu = y2 + (inner ? 2.5 : 6), yl = y1 - (inner ? 2.5 : 6);
+      c.push([lf, yu, "l", 90], [lf, yl, "r", 90]);
+      if (fits) c.push([rt, mid, "c", 90]);
+      c.push([rt, yu, "l", 90], [rt, yl, "r", 90]);
+      const far = sgn > 0 ? [xd + 3.2 + 1.18 * h, xd + 7.6 + 1.18 * h, xd + 12 + 1.18 * h] : [xd - 3.2, xd - 7.6, xd - 12];
+      for (const xx of far) c.push([xx, mid, "c", 90], [xx, y1, "c", 90], [xx, y2, "c", 90]);
+      const b = this.placeText(txt, h, c, { orderWeight: 0.6 });
+      if (b && b.align !== "c") {
+        const e = b.align === "l" ? [y2, b.y + w + 0.5] : [b.y - w - 0.5, y1];
+        this.line([xd, e[0]], [xd, e[1]], LW_DIM);
+      }
+    }));
+    if (name) this.recordDim(name, value, source);
+  }
+  /**
+   * Cadena de cotas a lo largo de un eje (coordenadas dibujadas `pts`, valores reales `vals`). Los tramos iguales
+   * consecutivos demasiado cortos para su texto se acotan juntos con la notación «n×paso» (cada tramo se registra).
+   */
+  dimChain(horizontal, pts, vals, f, pos, names = [], source = "geometria") {
+    let i = 0;
+    while (i < vals.length) {
+      let j = i;
+      while (j + 1 < vals.length && Math.abs(vals[j + 1] - vals[i]) < 0.05) j++;
+      const seg = Math.abs(pts[i + 1] - pts[i]), w = textWidth(fmt(vals[i]), 3.0);
+      const draw = (a, b, v, name, prefix = "") => horizontal ? this.dimH(pts[a], pts[b], f, f, pos, v, name, source, prefix) : this.dimV(pts[a], pts[b], f, f, pos, v, name, source, prefix);
+      if (j > i && seg < w + 3) {
+        draw(i, j + 1, vals[i], null, `${j - i + 1}×`);
+        for (let k = i; k <= j; k++) if (names[k]) this.recordDim(names[k], vals[k], source);
+      } else for (let k = i; k <= j; k++) draw(k, k + 1, vals[k], names[k] ?? null);
+      i = j + 1;
+    }
+  }
+  balloon(c, target, label, r = 4) {
+    this.group("balloon", () => {
+      const dx = target[0] - c[0], dy = target[1] - c[1], d = Math.hypot(dx, dy) || 1;
+      this.pdf.cat = "leader";
+      this.line([c[0] + (dx / d) * r, c[1] + (dy / d) * r], target, LW_THIN);
+      this.pdf.fill(BLACK).circle(target[0], target[1], 0.5, "f");
+      this.pdf.cat = "balloon";
+      this.circle(c[0], c[1], r, LW_THIN, [1, 1, 1]);
+      this.text(c[0], c[1] - 1.2, String(label), 3.2, "c", 0, true);
+    });
+  }
+  /** Caja que ocupa un símbolo de soldadura con su base en `base` (para colocarlo sin solapes). */
+  weldBox(base, a, length, process, side, tag) {
+    const [bx, by] = base, Lr = 22 * side, ex = bx + Lr;
+    const tw = textWidth(process + (tag ? `  ${tag}` : ""), 2.4) + 4;
+    const tx = bx + weldTriangleOffset(a, side), wa = textWidth(`a${fmt(a)}`, 2.6);
+    const xs = [bx - 2 * side, tx - 3.2 - wa, tx + 2.2, ex + (3.5 + tw) * side];
+    if (length) xs.push(tx + 3.0 + textWidth(fmt(length), 2.6));
+    return [Math.min(...xs), by - 2.8, Math.max(...xs), by + 4.6];
+  }
+  weldSymbol(target, base, a, allAround = true, process = "135", length = null, side = 1, tag = null) {
+    this.group("weld", () => {
+      const [bx, by] = base;
+      this.pdf.cat = "leader";
+      this.line(base, target, LW_THIN);
+      this.arrow(target, [target[0] - bx, target[1] - by], 2.5);
+      this.pdf.cat = "sym";
+      const Lr = 22 * side;
+      this.line([bx, by], [bx + Lr, by]);
+      this.line([bx, by - 1.2], [bx + Lr, by - 1.2], LW_THIN, [1.2, 0.8]);
+      // el valor de garganta va antes del triángulo: con texto ancho (a1,5) se aleja el triángulo para que el texto
+      // no invada el círculo de contorno ni la línea de referencia que sale de la base
+      const tx = bx + weldTriangleOffset(a, side);
+      this.pdf.lw(LW_THIN).poly([[tx - 2.2, by], [tx + 2.2, by], [tx - 2.2, by + 4.0]], true);
+      this.text(tx - 3.2, by + 0.8, `a${fmt(a)}`, 2.6, "r");
+      if (length) this.text(tx + 3.0, by + 0.8, fmt(length), 2.6, "l");
+      if (allAround) this.circle(bx, by, 1.6);
+      const ex = bx + Lr;
+      this.line([ex, by], [ex + 2.5 * side, by + 2.5]); this.line([ex, by], [ex + 2.5 * side, by - 2.5]);
+      this.text(ex + 3.5 * side, by - 1.0, process + (tag ? `  ${tag}` : ""), 2.4, side > 0 ? "l" : "r");
+    });
+  }
+  /** Tabla con cabecera. Ningún texto se corta sin aviso: el que no cabe en su columna se parte en varias líneas (la fila
+   *  crece); una palabra más ancha que la columna se reduce hasta el 70 % y, si aun así no cabe, se corta con «…» y se
+   *  registra en la hoja para que el control de planos lo bloquee (= drawing_kit.Drawing.table). */
+  table(x, yTop, cols, rows, rowH = 5.0, headH = 6.0, textH = 2.4) {
+    return this.group("table", () => {
+      const step = 1.5 * textH;            // interlínea mayor que el cuerpo de la letra (altura / 0,72)
+      const cells = rows.map((row) => cols.map(([, w, al], k) => (al === "l" ? wrapText(cellText(row[k]), w - 2.4, textH) : [cellText(row[k])])));
+      const heights = cells.map((rc) => rowH + step * (Math.max(...rc.map((ln) => ln.length)) - 1));
+      const W = cols.reduce((t, c) => t + c[1], 0), H = headH + heights.reduce((t, h) => t + h, 0);
+      this.pdf.lw(0.35).rect(x, yTop - H, W, H);
+      this.line([x, yTop - headH], [x + W, yTop - headH]);
+      let xx = x;
+      cols.forEach(([t, w], k) => { if (k) this.line([xx, yTop], [xx, yTop - H]); this.text(xx + w / 2, yTop - headH + 1.8, fitText(t, w - 1.2, 2.4), 2.4, "c", 0, true); xx += w; });
+      let yy = yTop - headH;
+      cells.forEach((rc, ri) => {
+        const rh = heights[ri];
+        yy -= rh;
+        if (ri) this.line([x, yy + rh], [x + W, yy + rh], 0.1);
+        let x2 = x;
+        cols.forEach(([, w, al], k) => {
+          rc[k].forEach((full, n) => {
+            const tw = textWidth(full, textH);
+            const h = tw <= w - 2.4 ? textH : Math.max(0.7 * textH, (textH * (w - 2.4)) / tw * 0.999);
+            const s = fitText(full, w - 2.4, h);
+            if (s !== full) (this.page.truncated ??= []).push(full);       // ni reducido cabe: control de planos
+            const ty = yy + rh - rowH + (rowH - textH) / 2 + 0.15 - step * n;
+            if (al === "c") this.text(x2 + w / 2, ty, s, h, "c"); else if (al === "r") this.text(x2 + w - 1.2, ty, s, h, "r"); else this.text(x2 + 1.2, ty, s, h, "l");
+          });
+          x2 += w;
+        });
+      });
+      return yTop - H;
+    });
+  }
+  notes(x, yTop, lines, h = 2.6, width = 180, boldFirst = false) {
+    return this.group("note", () => {
+      let y = yTop;
+      for (const l of wrap(lines, h, width)) {
+        if (l.s === null) { y -= h * 0.8; continue; }
+        this.text(x, y, l.s, h, "l", 0, boldFirst && l.para === 0);
+        y -= h * 1.55;
+      }
+      return y;
+    });
+  }
+  /** Coloca un bloque de notas en la posición candidata [x, yTop] de menor coste (sin conflictos si la hay). */
+  placeNotes(lines, cands, h = 2.6, width = 180, boldFirst = false) {
+    let best = null;
+    cands.forEach(([x, yTop, wd = width], k) => {
+      const c = this.boxCost(notesBox(x, yTop, lines, h, wd, boldFirst)) + k * 0.01;
+      if (!best || c < best.c) best = { c, x, yTop, wd };
+    });
+    if (best && best.c >= 1) {
+      // sin hueco en las posiciones previstas: búsqueda en toda la hoja, cerca de la primera posición pedida
+      const [ax, ay] = cands[0] ?? [30, 270];
+      for (const wd of [width, width * 0.75, width * 0.55]) for (let x = AREA[0] + 4; x < AREA[2] - 30; x += 8) for (let y = AREA[3] - 4; y > AREA[1] + 8; y -= 4) {
+        const c = this.boxCost(notesBox(x, y, lines, h, wd, boldFirst)) + Math.hypot(x - ax, y - ay) * 0.002 + (width - wd) * 0.001;
+        if (c < best.c) best = { c, x, yTop: y, wd };
+      }
+    }
+    return best ? this.notes(best.x, best.yTop, lines, h, best.wd, boldFirst) : null;
+  }
+  drawView(v, hidden = true, lw = LW_THICK) {
+    const segs = (list) => list.map(([a, b, c, d]) => [...v.P(a, b), ...v.P(c, d)]);
+    this.group("geom", () => {
+      this.pdf.lw(lw).dash(null).stroke(BLACK).segments(segs(v.proj.visible));
+      if (hidden && v.proj.hidden.length) { this.pdf.cat = "hidden"; this.pdf.lw(LW_THIN * 0.8).dash([2.0, 1.0]).stroke(GREY).segments(segs(v.proj.hidden)); this.pdf.dash(null).stroke(BLACK); }
+    });
+    if (v.label) this.viewLabel(v, v.label);
+  }
+  /** Rótulo de vista: se coloca al terminar la hoja, bajo la vista y fuera de sus cotas (o encima si no cabe). */
+  viewLabel(v, s, h = 3.0) { this.pendingLabels.push({ v, s, h }); }
+  flushLabels() {
+    if (!this.pages.length) { this.pendingLabels = []; this.pendingDimTexts = []; return; }
+    this.flushDimTexts();
+    for (const { v, s, h } of this.pendingLabels) {
+      const cx = v.ox + v.w / 2, c = [];
+      for (let k = 0; k <= 26; k++) c.push([cx, v.oy - 5 - h - k * 1.5, "c"]);
+      for (let k = 0; k <= 12; k++) c.push([cx, v.oy + v.h + 4 + k * 1.5, "c"]);
+      for (const dx of [-0.25, 0.25]) for (let k = 0; k <= 10; k++) c.push([cx + dx * v.w, v.oy - 5 - h - k * 2, "c"]);
+      // rótulo más ancho que la vista junto al borde: desplazado para que quede dentro del marco
+      const half = textWidth(s, h, true) / 2 + 1, cxc = Math.min(Math.max(cx, FRAME[0] + half), FRAME[2] - half);
+      if (Math.abs(cxc - cx) > 0.1) for (let k = 0; k <= 12; k++) c.push([cxc, v.oy - 5 - h - k * 1.5, "c"], [cxc, v.oy + v.h + 4 + k * 1.5, "c"]);
+      this.group("label", () => this.placeText(s, h, c, { bold: true, orderWeight: 0.05 }));
+    }
+    this.pendingLabels = [];
+  }
+}
+
+class View {
+  constructor(proj, scale, ox, oy, name) { Object.assign(this, { proj, scale, ox, oy, name, u0: proj.bbox[0], v0: proj.bbox[1], label: "" }); }
+  P(u, v) { return [this.ox + (u - this.u0) * this.scale, this.oy + (v - this.v0) * this.scale]; }
+  get w() { return (this.proj.bbox[2] - this.proj.bbox[0]) * this.scale; }
+  get h() { return (this.proj.bbox[3] - this.proj.bbox[1]) * this.scale; }
+  get box() { return [this.ox, this.oy, this.ox + this.w, this.oy + this.h]; }
+  at(p) { return this.P(...projectPoint(p, this.name)); }
+}
+const size = (proj) => [proj.bbox[2] - proj.bbox[0], proj.bbox[3] - proj.bbox[1]];
+const intersects = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+
+function layoutOrtho(projs, region, reserved = [], gap = 24, pad = 16) {
+  const [wf, hf] = size(projs.alzado), ws = size(projs.perfil)[0], ht = size(projs.planta)[1];
+  for (const s of SCALES) {
+    const k = s[0] / s[1], ox = region[0] + pad, top = region[3] - pad;
+    const fr = [ox, top - hf * k, ox + wf * k, top];
+    const rects = { alzado: fr, perfil: [fr[2] + gap, fr[1], fr[2] + gap + ws * k, top], planta: [ox, fr[1] - gap - ht * k, ox + wf * k, fr[1] - gap] };
+    let ok = true;
+    for (const r of Object.values(rects)) {
+      const p = [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad];
+      if (r[0] < region[0] || r[1] - pad < region[1] || r[2] > region[2] || r[3] > region[3]) ok = false;
+      if (reserved.some((z) => intersects(p, z))) ok = false;
+    }
+    if (ok) return [s, Object.fromEntries(Object.entries(rects).map(([n, r]) => [n, new View(projs[n], k, r[0], r[1], n)]))];
+  }
+  // sin escala normalizada: ajuste libre
+  const k = Math.min((region[2] - region[0] - 2 * pad - gap - 40) / (wf + ws), (region[3] - region[1] - 2 * pad - gap - 30) / (hf + ht));
+  const ox = region[0] + pad, top = region[3] - pad;
+  const fr = [ox, top - hf * k, ox + wf * k, top];
+  return [null, { alzado: new View(projs.alzado, k, fr[0], fr[1], "alzado"), perfil: new View(projs.perfil, k, fr[2] + gap, fr[1], "perfil"),
+    planta: new View(projs.planta, k, ox, fr[1] - gap - ht * k, "planta") }];
+}
+function fitView(proj, name, rect, scales = SCALES, free = false) {
+  let [w, h] = size(proj);
+  w = Math.max(w, 1e-3); h = Math.max(h, 1e-3);
+  if (!free) for (const s of scales) {
+    const k = s[0] / s[1];
+    if (w * k <= rect[2] - rect[0] && h * k <= rect[3] - rect[1])
+      return [s, new View(proj, k, rect[0] + (rect[2] - rect[0] - w * k) / 2, rect[1] + (rect[3] - rect[1] - h * k) / 2, name)];
+  }
+  const k = Math.min((rect[2] - rect[0]) / w, (rect[3] - rect[1]) / h);
+  return [null, new View(proj, k, rect[0] + (rect[2] - rect[0] - w * k) / 2, rect[1] + (rect[3] - rect[1] - h * k) / 2, name)];
+}
+
+/** Desenreda referencias: intercambia posiciones de dos elementos mientras sus líneas se crucen y el cambio reduzca cruces. */
+function untangle(items, leadOf, canSwap = () => true) {
+  const crosses = (i, j) => segsCross(leadOf(items[i]), leadOf(items[j]));
+  const count = (i) => items.reduce((n, _, j) => n + (j !== i && crosses(i, j) ? 1 : 0), 0);
+  for (let it = 0; it < 60; it++) {
+    let changed = false;
+    for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
+      if (!crosses(i, j) || !canSwap(items[i], items[j])) continue;
+      const before = count(i) + count(j);
+      [items[i].pos, items[j].pos] = [items[j].pos, items[i].pos];
+      if (count(i) + count(j) < before) changed = true; else [items[i].pos, items[j].pos] = [items[j].pos, items[i].pos];
+    }
+    if (!changed) break;
+  }
+}
+const segCircleHit = (sg, c, r) => {
+  const [x0, y0, x1, y1] = sg, dx = x1 - x0, dy = y1 - y0, L2 = dx * dx + dy * dy;
+  const t = L2 ? Math.max(0, Math.min(1, ((c[0] - x0) * dx + (c[1] - y0) * dy) / L2)) : 0;
+  return Math.hypot(x0 + t * dx - c[0], y0 + t * dy - c[1]) < r;
+};
+
+/**
+ * Globos de posición alrededor de una vista. Cada globo se coloca de forma voraz en la posición candidata de
+ * menor coste: sin pisar textos, cotas, otros globos ni la geometría, con la línea de referencia sin cruzar
+ * textos ni otras referencias y lo más corta posible. Los candidatos están en anillos alrededor de la vista,
+ * con preferencia por los lados indicados. Al final se intercambian globos cuyas referencias se crucen.
+ */
+/** Distancia de la base del símbolo de soldadura al triángulo (con signo de lado). */
+function weldTriangleOffset(a, side) {
+  const w = textWidth(`a${fmt(a)}`, 2.6);
+  return (side > 0 ? Math.max(9.0, 3.2 + w + 2.6) : 9.0) * side;
+}
+
+function balloons(d, v, targets, opts = {}) {
+  const r = opts.r ?? 4, sides = opts.sides ?? ["top", "right", "left", "bottom"], region = opts.region ?? AREA;
+  const pts = targets.map(([l, p]) => [l, v.at(p)]);
+  if (!pts.length) return;
+  const [bx0, by0, bx1, by1] = v.box, cx = (bx0 + bx1) / 2, cy = (by0 + by1) / 2;
+  const ang = (p) => { const a = Math.atan2(p[1] - cy, p[0] - cx); return (Math.PI * 2.75 - a) % (Math.PI * 2); };
+  pts.sort((a, b) => ang(a[1]) - ang(b[1]));
+  const ring0 = opts.ring0 ?? 10, step = 2 * r + 1.6;
+  const leadOf = (c, t) => { const dx = t[0] - c[0], dy = t[1] - c[1], L = Math.hypot(dx, dy) || 1; return [c[0] + (dx / L) * r, c[1] + (dy / L) * r, t[0], t[1]]; };
+  const candsOf = (t) => {
+    const cands = [];
+    sides.forEach((side, si) => {
+      for (let o = 0; o < 6; o++) {
+        const off = ring0 + o * (2 * r + 2);
+        for (let k = -12; k <= 12; k++) {
+          let c;
+          if (side === "top") c = [Math.min(bx1 + off, Math.max(bx0 - off, t[0])) + k * step, by1 + off];
+          else if (side === "bottom") c = [Math.min(bx1 + off, Math.max(bx0 - off, t[0])) + k * step, by0 - off];
+          else if (side === "right") c = [bx1 + off, Math.min(by1 + off, Math.max(by0 - off, t[1])) + k * step];
+          else c = [bx0 - off, Math.min(by1 + off, Math.max(by0 - off, t[1])) + k * step];
+          cands.push([c, o * 0.6 + si * 1.5 + Math.abs(k) * 0.08]);
+        }
+      }
+    });
+    // huecos libres cerca de la propia pieza (dentro del contorno de la vista si no pisan geometría)
+    if (opts.near !== false) for (const dist of [10, 13, 17, 22, 28]) for (let q = 0; q < 16; q++) {
+      const a = (q * Math.PI) / 8 + 0.2;
+      cands.push([[t[0] + dist * Math.cos(a), t[1] + dist * Math.sin(a)], 0.3]);
+    }
+    return cands;
+  };
+  /** Mejor posición del globo de 't' frente a los globos ya colocados ('others'); crossCost penaliza cruces. */
+  const bestFor = (t, others, crossCost) => {
+    let best = null;
+    for (const [c, pref] of candsOf(t)) {
+      const lead = leadOf(c, t), dist = Math.hypot(t[0] - c[0], t[1] - c[1]);
+      let cost = d.occ.circleCost(c, r, { region }) * 10 + d.occ.leaderCost(lead) * 6;
+      const bb = [c[0] - r, c[1] - r, c[0] + r, c[1] + r];
+      for (const f of d.page.forbid) if (boxesOverlap(bb, f, -1)) cost += 500;
+      for (const [, t2] of pts) if (t2 !== t && Math.hypot(t2[0] - c[0], t2[1] - c[1]) < r + 1.5) cost += 300;   // no tapar puntos señalados
+      for (const q of others) {
+        if (Math.hypot(q.pos[0] - c[0], q.pos[1] - c[1]) < 2 * r + 1.4) cost += 1000;
+        const ql = leadOf(q.pos, q.t);
+        if (segsCross(lead, ql)) cost += crossCost;
+        if (segCircleHit(lead, q.pos, r + 0.5) || segCircleHit(ql, c, r + 0.5)) cost += 300;
+      }
+      cost += dist * 0.05 + pref;
+      if (!best || cost < best.cost) best = { cost, c };
+    }
+    return best.c;
+  };
+  const placed = [];
+  for (const [l, t] of pts) placed.push({ l, t, pos: bestFor(t, placed, 30) });
+  untangle(placed, (q) => leadOf(q.pos, q.t), (a, b) => {
+    // el intercambio no debe hacer que una referencia atraviese textos o globos
+    const la = leadOf(b.pos, a.t), lb = leadOf(a.pos, b.t);
+    return d.occ.leaderCost(la) <= d.occ.leaderCost(leadOf(a.pos, a.t)) + 1 && d.occ.leaderCost(lb) <= d.occ.leaderCost(leadOf(b.pos, b.t)) + 1
+      && !segCircleHit(la, a.pos, r + 0.5) && !segCircleHit(lb, b.pos, r + 0.5)
+      && !placed.some((q) => q !== a && q !== b && (segCircleHit(la, q.pos, r + 0.5) || segCircleHit(lb, q.pos, r + 0.5)));
+  });
+  // reparación final: si dos referencias aún se cruzan, se recoloca uno de los dos globos con el cruce prohibido,
+  // sólo si la nueva posición no cruza, no pisa otra referencia ni otro globo
+  const crossesAny = (q, pos, others) => { const lq = leadOf(pos, q.t); return others.some((o) => segsCross(lq, leadOf(o.pos, o.t))); };
+  const clean = (q, pos, others) => {
+    const lq = leadOf(pos, q.t);
+    return others.every((o) => { const lo = leadOf(o.pos, o.t);
+      return !segsCross(lq, lo) && !segCircleHit(lq, o.pos, r + 0.5) && !segCircleHit(lo, pos, r + 0.5)
+        && Math.hypot(o.pos[0] - pos[0], o.pos[1] - pos[1]) >= 2 * r + 1.4; });
+  };
+  for (let it = 0; it < 3; it++) {
+    let changed = false;
+    for (const q of placed) {
+      const others = placed.filter((o) => o !== q);
+      if (!crossesAny(q, q.pos, others)) continue;
+      const lq = leadOf(q.pos, q.t);
+      const partners = others.filter((o) => segsCross(lq, leadOf(o.pos, o.t)));
+      for (const w of [q, ...partners]) {
+        const rest = placed.filter((o) => o !== w);
+        const c = bestFor(w.t, rest, 2000);
+        if (clean(w, c, rest)) { w.pos = c; changed = true; break; }
+      }
+    }
+    if (!changed) break;
+  }
+  for (const q of placed) d.balloon(q.pos, q.t, q.l, r);
+}
+// ============================================================================ contexto
+class Ctx {
+  constructor(model, summary, info, onProgress) {
+    Object.assign(this, { m: model, s: summary, plan: summary.manufacturing, bom: summary.bom, eng: summary.engineering, info, onProgress });
+    this.cache = new Map();
+  }
+  items(insts, explode = false) { return insts.map((i) => ({ part: i.part, T: explode ? mmul(translation(...explodeOf(this.m, i)), i.T) : i.T })); }
+  proj(key, insts, view, hidden = true, explode = false) {
+    const k = `${key}|${view}|${explode}`;
+    if (!this.cache.has(k)) { this.onProgress?.(`Planos: proyección ${view} (${key})`); this.cache.set(k, project(this.items(insts, explode), view, { hidden: true })); }
+    const p = this.cache.get(k);
+    return hidden ? p : { ...p, hidden: [] };
+  }
+  group(...g) { return this.m.instances.filter((i) => g.includes(i.group)); }
+  inst(id) { return this.m.instance(id); }
+}
+const LABEL = { alzado: "ALZADO", perfil: "PERFIL IZQUIERDO", planta: "PLANTA" };
+
+// ============================================================================ hojas
+/** Nota de altura según el tipo de apoyo (pies niveladores regulables o ruedas). */
+function supportLine(m) {
+  const sup = m.structure.supports?.[0];
+  if (!sup) return "";
+  const c = C.component(sup.component);
+  if (c.category.startsWith("ruedas")) return `Altura sobre ruedas Ø${fmt(c.wheel_d)} mm (altura de rueda ${fmt(c.nominal_height)} mm, sin regulación).`;
+  return `Altura con pies niveladores en posición nominal (regulación ±${fmt(c.adjust / 2)} mm).`;
+}
+
+const EDGE_NAMES = { y0: "delantero", y1: "trasero", x0: "izquierdo", x1: "derecho" };
+/** Sentido de los pliegues de una chapa: único o, si se mezclan, los bordes plegados hacia arriba. */
+export function bendDirectionText(spec) {
+  const ups = spec.flanges.filter((f) => f.direction === "up").map((f) => f.edge);
+  if (!ups.length) return "Pliegues a 90° hacia abajo";
+  if (ups.length === spec.flanges.length) return "Pliegues a 90° hacia arriba";
+  const names = ["y0", "y1", "x0", "x1"].filter((e) => ups.includes(e)).map((e) => EDGE_NAMES[e]);
+  return `Pliegues a 90° hacia abajo; borde${names.length > 1 ? "s" : ""} ${names.join(", ")} hacia arriba`;
+}
+
+function planGeneral(d, X) {
+  const m = X.m, insts = m.instances;
+  const projs = Object.fromEntries(["alzado", "perfil", "planta"].map((v) => [v, X.proj("all", insts, v, false)]));
+  const [s, V] = layoutOrtho(projs, [28, 18, 405, 272], [TB_RESERVED]);
+  const env = m.dims.envelope;
+  const envI = env.ids ? env.ids.map((i) => X.inst(i)) : insts.filter((i) => env.groups.includes(i.group));
+  const [lo, hi] = modelBBox(m, envI);
+  const [nx, ny] = env.names ?? ["LONGITUD", "ANCHURA"];
+  d.newSheet("01", "Conjunto general", scaleLabel(s), "Ver despiece (plano 08)");
+  for (const [n, v] of Object.entries(V)) { v.label = LABEL[n]; d.drawView(v, false); }
+  const a = V.alzado, p = V.perfil, pl = V.planta;
+  const [x0, ztop] = a.at([lo[0], 0, hi[2]]), [x1] = a.at([hi[0], 0, hi[2]]);
+  d.dimH(x0, x1, ztop, ztop, ztop + 9, hi[0] - lo[0], nx);
+  const [, yfloor] = a.at([0, 0, 0]);
+  const xl = a.ox;
+  // niveles: [nombre, instancia, cota explícita?]; sin cota, la cara superior de la instancia
+  const levels = (m.dims.levels ?? []).map(([name, iid, z]) => [name, z ?? instanceBBox(X.inst(iid))[1][2]]);
+  if (levels.length <= 1) {
+    d.dimV(yfloor, ztop, xl, xl, xl - 9, hi[2], "ALTURA");
+    for (const [name, z] of levels) { const [, ys] = a.at([0, 0, z]); d.dimV(yfloor, ys, xl, xl, xl - 17, z, name); }
+  } else {
+    d.dimV(yfloor, ztop, xl, xl, xl - 17, hi[2], "ALTURA");
+    const zs = [0, ...levels.map((l) => l[1]).sort((u, w) => u - w)];
+    d.dimChain(false, zs.map((z) => a.at([0, 0, z])[1]), zs.slice(1).map((z, k) => z - zs[k]), xl, xl - 9, zs.slice(1).map((_, k) => `DIST_NIVEL_${k + 1}`));
+  }
+  const [u0, zt] = p.at([0, hi[1], hi[2]]), [u1] = p.at([0, lo[1], hi[2]]);
+  d.dimH(u0, u1, zt, zt, zt + 9, hi[1] - lo[1], ny);
+  const [xa, ya] = pl.at([lo[0], lo[1], 0]), [xb, yb] = pl.at([hi[0], hi[1], 0]);
+  d.dimH(xa, xb, ya, ya, pl.oy - 9, hi[0] - lo[0]);
+  d.dimV(ya, yb, pl.ox, pl.ox, pl.ox - 9, hi[1] - lo[1]);
+  const iso = X.proj("all", insts, "iso", false);
+  const isoLabel = (sc) => "PERSPECTIVA ISOMÉTRICA" + (sc ? ` (E ${scaleLabel(sc)})` : " (sin escala)");
+  let best = null;
+  for (const r of [[p.ox + p.w + 18, 86, 405, 270], [pl.ox + pl.w + 22, 86, 405, p.oy - 14]]) {
+    const rr = [r[0], r[1] + 9, r[2], r[3]];          // sitio para el rótulo bajo la vista (antes podía ir encima, sobre otra vista)
+    if (rr[2] - rr[0] < 40 || rr[3] - rr[1] < 40) continue;
+    const [sc, vi] = fitView(iso, "iso", rr, [...SCALES, [1, 200]]);
+    const fits = textWidth(isoLabel(sc), 3.0, true) <= r[2] - r[0];      // a igual escala, el hueco donde cabe el rótulo
+    if (!best || vi.scale > best[1].scale + 1e-12 || (Math.abs(vi.scale - best[1].scale) <= 1e-12 && fits && !best[2])) best = [sc, vi, fits];
+  }
+  if (best) { best[1].label = isoLabel(best[0]); d.drawView(best[1], false, 0.35); }
+  const ps = m.params.values;
+  const [mblo, mbhi] = modelBBox(m);
+  const envTxt = [0, 1, 2].map((j) => fmt(mbhi[j] - mblo[j], 0)).join(" × ");
+  const lines = [`Producto: ${m.family_name} ${m.product_code}`, `Masa total calculada desde la geometría: ${X.bom.totals.total_mass.toFixed(1)} kg · envolvente máx. ${envTxt} mm`,
+    m.dims.load_text ?? "", `Cálculo: ${X.eng.verdict ?? X.eng.status_label}`, supportLine(m),
+    `Acabado: ${C.finish(ps.ACABADO).name}`];
+  d.flushLabels();
+  const cands = [];
+  for (let k = 0; k < 40; k++) cands.push([32, pl.oy - 14 - k * 2, 190]);
+  const xr = pl.ox + pl.w + 24, wr = Math.max(60, 222 - pl.ox - pl.w - 24);
+  for (let k = 0; k < 40; k++) cands.push([xr, Math.min(pl.oy + pl.h, 140) - k * 2, wr]);
+  d.placeNotes(lines, cands, 2.6, 190);
+}
+
+function planStructure(d, X) {
+  const m = X.m, est = X.group("EST");
+  const projs = Object.fromEntries(["alzado", "perfil", "planta"].map((v) => [v, X.proj("est", est, v, true)]));
+  const [s, V] = layoutOrtho(projs, [28, 18, 405, 272], [TB_RESERVED, [300, 80, 412, 272]]);
+  d.newSheet("02", "Estructura soldada: vistas y cotas", scaleLabel(s), m.params.values.MATERIAL_ESTRUCTURAL);
+  for (const [n, v] of Object.entries(V)) { v.label = LABEL[n]; d.drawView(v, true); }
+  const a = V.alzado, p = V.perfil, pl = V.planta;
+  const lv = m.structure.levels, legs = m.structure.leg_ids.map((i) => X.inst(i));
+  const [lo, hi] = modelBBox(m, est);
+  const [x0, yz] = a.at([lo[0], 0, hi[2]]), [x1] = a.at([hi[0], 0, hi[2]]);
+  d.dimH(x0, x1, yz, yz, yz + 9, hi[0] - lo[0], "EST_LONGITUD");
+  const [, yb] = a.at([0, 0, lo[2]]);
+  // niveles inferiores del primer módulo (en batería, los demás módulos repiten las cotas: claves "_M<j>")
+  const lower = Object.keys(lv).filter((k) => k !== "SUP" && !k.includes("_M")).map((k) => [instanceBBox(X.inst(lv[k].long[0]))[1][2], k]).sort((u, w) => u[0] - w[0]);
+  d.dimV(yb, yz, a.ox, a.ox, a.ox - (lower.length ? 17 : 9), hi[2] - lo[2], "EST_ALTURA");
+  if (lower.length === 1) { const [z, k] = lower[0]; const [, yr] = a.at([0, 0, z]); d.dimV(yb, yr, a.ox, a.ox, a.ox - 9, z - lo[2], `COTA_BASTIDOR_${k}`); }
+  else if (lower.length) {
+    const zs = [lo[2], ...lower.map((l) => l[0])];
+    d.dimChain(false, zs.map((z) => a.at([0, 0, z])[1]), zs.slice(1).map((z, k) => z - zs[k]), a.ox, a.ox - 9);
+  }
+  // planta: paso de travesaños intermedios (cadena); sin bastidor superior (cantilever), paso de columnas
+  const top = lv.SUP;
+  const ids = top ? [top.end[0], ...top.int, top.end[1]] : [...m.structure.leg_ids], pname = top ? "PASO_TRAVESANO" : "PASO_COLUMNA";
+  const xs = ids.map((i) => { const [l, h] = instanceBBox(X.inst(i)); return (l[0] + h[0]) / 2; });
+  d.dimChain(true, xs.map((x) => pl.at([x, lo[1], 0])[0]), xs.slice(1).map((x, k) => x - xs[k]), pl.at([0, lo[1], 0])[1], pl.oy - 9,
+    xs.slice(1).map((_, k) => `${pname}_${k + 1}`));
+  d.dimV(pl.at([0, lo[1], 0])[1], pl.at([0, hi[1], 0])[1], pl.ox, pl.ox, pl.ox - 9, hi[1] - lo[1], "EST_ANCHURA");
+  // perfil: separación de patas (o las cotas en fondo que declare la familia: p. ej. la longitud de los brazos)
+  for (const [y0, y1, name] of m.dims.structure_profile ?? [[instanceBBox(legs[0])[0][1], instanceBBox(legs[2])[1][1], null]]) {
+    const [pu0, pzt] = p.at([0, y1, hi[2]]), [pu1] = p.at([0, y0, hi[2]]);
+    d.dimH(pu0, pu1, pzt, pzt, pzt + 9, y1 - y0, name ?? undefined);
+  }
+  d.flushLabels();
+  const nl = m.dims.structure_notes ?? ["Estructura soldada (subconjunto EST).", `Clase de ejecución ${m.params.values.CLASE_EJECUCION} según EN 1090-2.`,
+    "Cotas a caras exteriores de perfil.", "Planitud de los planos de apoyo de las chapas: EN ISO 13920 clase F.", "Detalle de uniones soldadas: plano 05.",
+    "Longitudes de corte y mecanizados: plano 02B."];
+  const nc = [];
+  for (let k = 0; k < 30; k++) nc.push([305, 268 - k * 3, 100]);
+  for (let k = 0; k < 30; k++) nc.push([Math.max(p.ox + p.w + 14, 230), 268 - k * 3, 400 - Math.max(p.ox + p.w + 14, 230)]);
+  d.placeNotes(nl, nc, 2.6, 100);
+  const reps = new Map();
+  for (const i of est) if (i.part.kind === "perfil" && !reps.has(i.part.key)) reps.set(i.part.key, i);
+  balloons(d, a, [...reps.values()].map((i) => [String(i.part.pos), instanceCentroid(i)]), { sides: ["top", "left", "right", "bottom"] });
+}
+
+// Hoja 02B: cota del primer elemento, límite inferior de los perfiles y de las barras, y altura del cajetín.
+const PROFILE_Y0 = 262, PROFILE_Y_MIN = 105, CUT_Y_MIN = 22, TB_TOP = 86;
+const HOLE_LINE_STEP = 3.8;      // interlínea de los textos de mecanizado (altura 2,4): mayor que el cuerpo de la letra
+/** Espacio adicional bajo un perfil con n líneas de taladros para que la última quede por encima de la cota del siguiente. */
+const profileExtraDepth = (n) => Math.max(0, HOLE_LINE_STEP * (n - 1) - 2.2);
+
+/** Mecanizados de un perfil, completos y partidos en líneas del ancho disponible (un grupo por cara y diámetro).
+ *  Nunca se truncan: una posición cortada («890» → «89») es un error de fabricación (= plans.profile_hole_lines). */
+export function profileHoleLines(p, avail) {
+  const groups = new Map();
+  for (const [face, z, , dia] of p.holes) {
+    const k = `${face}|${dia}`;
+    if (!groups.has(k)) groups.set(k, { face, dia, zs: [] });
+    groups.get(k).zs.push(z);
+  }
+  const lines = [];
+  for (const { face, dia, zs } of groups.values()) {
+    const where = groups.size === 1 ? "cara exterior" : `cara ${face}`;
+    let cur = `Taladros Ø${g(dia).replace(".", ",")} en ${where} a: `, n = 0;
+    for (const z of [...zs].sort((a, b) => a - b)) {
+      const cand = cur + (n ? "; " : "") + fmt(z);
+      if (n && textWidth(cand, 2.4) > avail) { lines.push(cur + ";"); cur = fmt(z); } else cur = cand;
+      n++;
+    }
+    lines.push(cur);
+  }
+  return lines;
+}
+/** Número de posiciones de taladro que figuran en las líneas impresas (control plano ↔ modelo). Se separan con «;»: la
+ *  coma es el separador decimal y «60, 462,5, 890» sería ambiguo. */
+export const holePositionsIn = (lines) => lines.reduce((t, ln) => t + ln.split(": ").at(-1).split(";").filter((x) => x.trim()).length, 0);
+
+/** Barras consecutivas con el mismo patrón de corte: una sola fila del plano; los retales del inventario no se agrupan. */
+export function barGroups(c) {
+  const out = [];
+  let prev = null;
+  for (const b of c.bars) {
+    const key = JSON.stringify([b.source, b.length, b.trim_start, b.cuts.map((k) => [k.ref, k.length]), b.remnant, b.remnant_status]);
+    if (out.length && key === prev && b.source !== "retal") out.at(-1).push(b); else out.push([b]);
+    prev = key;
+  }
+  return out;
+}
+export function barLabel(grp) {
+  const b = grp[0];
+  if (grp.length === 1) return `Barra ${b.bar}${b.source === "retal" ? ` (retal ${b.stock_id})` : ""}: ${b.n_cuts} cortes · retal ${fmt(b.remnant)} mm (${b.remnant_status})`;
+  return `Barras ${b.bar} a ${grp.at(-1).bar} (${grp.length} iguales): ${b.n_cuts} cortes y retal de ${fmt(b.remnant)} mm en cada una (${b.remnant_status})`;
+}
+function cutHeader(c) {
+  return [`${c.profile} ${c.material} — barras de ${fmt(c.bar_length)} mm: ${c.n_bars} (cota inferior ${c.lower_bound}, aprovechamiento ${(c.utilization * 100).toFixed(1)} %, sierra ${fmt(c.kerf)} mm`,
+    `, despuntes ${fmt(c.trim_start)}/${fmt(c.trim_end)} mm, ${c.n_cuts} cortes)`];
+}
+const cutHeaderTwoLines = (c, y) => { const [head, extra] = cutHeader(c); return textWidth(head + extra, 2.6) > (y - 5 < TB_TOP ? 222 : 400) - 32; };
+
+/** Maquetación de la hoja 02B en una o varias hojas: [[tipo, y, datos…]] por hoja. Todos los perfiles, todos sus taladros
+ *  y todas las barras del plan de corte figuran; lo que no cabe pasa a una hoja de continuación (= plans.profile_flow). */
+export function profileFlow(m, plan) {
+  const profs = Object.values(m.parts).filter((p) => p.kind === "perfil").sort((a, b) => a.pos - b.pos);
+  const maxL = profs.reduce((mx, p) => Math.max(mx, p.length), 0) || 1;
+  const pages = [[]];
+  let y = PROFILE_Y0;
+  for (const p of profs) {
+    const w = (150 * p.length) / maxL + 20;
+    const lines = p.holes.length ? profileHoleLines(p, 400 - (40 + w + 6)) : [];
+    const depth = profileExtraDepth(lines.length);                // líneas de taladros por debajo de la barra
+    if (y - depth < PROFILE_Y_MIN) { pages.push([]); y = PROFILE_Y0; }
+    pages.at(-1).push(["perfil", y, p, w, lines]);
+    y -= 17 + depth;
+  }
+  if (!plan.cutting.length) return pages;
+  if (y - 2 - 7 - 4.5 - 5 < CUT_Y_MIN) { pages.push([]); y = PROFILE_Y0; }      // título, cabecera y una barra como mínimo
+  y -= 2;
+  pages.at(-1).push(["titulo", y]);
+  y -= 7;
+  for (const c of plan.cutting) {
+    if (y - (cutHeaderTwoLines(c, y) ? 4.5 : 0) - 5 < CUT_Y_MIN) { pages.push([]); y = PROFILE_Y0; }
+    pages.at(-1).push(["cabecera", y, c, false]);
+    y -= (cutHeaderTwoLines(c, y) ? 4.5 : 0) + 5;
+    for (const grp of barGroups(c)) {
+      if (y < CUT_Y_MIN) { pages.push([]); y = PROFILE_Y0; pages.at(-1).push(["cabecera", y, c, true]); y -= 5; }
+      pages.at(-1).push(["barra", y, c, grp]);
+      y -= 5.5;
+    }
+    y -= 2;
+  }
+  return pages;
+}
+
+function planProfiles(d, X) {
+  const m = X.m;
+  const counts = {};
+  for (const i of m.instances) counts[i.part.key] = (counts[i.part.key] ?? 0) + 1;
+  const pages = profileFlow(m, X.plan);
+  const index = new Map(X.plan.cutting.map((c, k) => [c, k + 1]));
+  const drawnBars = {}, drawnCuts = {};
+  pages.forEach((ops, n) => {
+    d.newSheet(n ? `02B.${n + 1}` : "02B", "Perfiles: longitudes de corte, mecanizados y plan de corte" + (pages.length > 1 ? ` (${n + 1}/${pages.length})` : ""),
+      "Sin escala", m.params.values.MATERIAL_ESTRUCTURAL);
+    for (const op of ops) {
+      const [kind, y] = op;
+      if (kind === "perfil") {
+        const [, , p, w, lines] = op;
+        const x0 = 40, hg = 7;
+        d.text(x0 - 6, y + 2, String(p.pos), 3.2, "r", 0, true);
+        d.polyline([[x0, y], [x0 + w, y], [x0 + w, y + hg], [x0, y + hg]], LW_THICK, null, BLACK, true);
+        d.line([x0 - 3, y + hg / 2], [x0 + w + 3, y + hg / 2], LW_THIN, [6, 1, 1, 1], GREY);
+        for (const [, z] of p.holes) d.circle(x0 + (w * z) / p.length, y + hg / 2, 1.2);
+        d.dimH(x0, x0 + w, y + hg, y + hg, y + hg + 4, p.length, `L_${p.ref}`, "geometria_pieza");
+        d.text(x0 + w + 6, y + (lines.length ? 5.0 : 2), `${p.ref}  ${p.profile.code}  ${p.material}  L=${fmt(p.length)}  90°/90°  ×${counts[p.key]}`, 2.4, "l");
+        lines.forEach((ln, k) => d.text(x0 + w + 6, y + 1.2 - HOLE_LINE_STEP * k, ln, 2.4, "l"));
+        if (p.holes.length) d.recordDim(`TAL_${p.ref}`, holePositionsIn(lines), "mecanizado");      // control plano ↔ modelo
+      } else if (kind === "titulo") d.text(32, y, "PLAN DE CORTE DE BARRAS", 3.2, "l", 0, true);
+      else if (kind === "cabecera") {
+        const [, , c, cont] = op;
+        const [head, extra] = cutHeader(c);
+        if (cont) d.text(32, y, `${c.profile} ${c.material} (continuación)`, 2.6);
+        else if (!cutHeaderTwoLines(c, y)) d.text(32, y, head + extra, 2.6);
+        else {            // sin sitio (junto al cajetín): los despuntes y cortes en una segunda línea
+          d.text(32, y, head + ")", 2.6);
+          d.text(32, y - 4.5, `Despuntes ${fmt(c.trim_start)}/${fmt(c.trim_end)} mm · ${c.n_cuts} cortes`, 2.6);
+        }
+      } else {
+        const [, , c, grp] = op;
+        const b = grp[0], x = 40, lbl = barLabel(grp);
+        // a la altura del cajetín la barra se acorta para que su rótulo, completo, termine antes de él
+        const [xr, w0] = y < TB_TOP ? [222, 110] : [400, 180];
+        const W0 = Math.max(40, Math.min(w0, xr - x - 3 - textWidth(lbl, 2.2)));
+        const k = W0 / c.bar_length, W = b.length * k;   // un retal del inventario, a su longitud
+        d.polyline([[x, y], [x + W, y], [x + W, y + 3.5], [x, y + 3.5]], LW_THIN, null, BLACK, true);
+        let xx = x + b.trim_start * k;
+        for (const cut of b.cuts) {
+          const ww = cut.length * k;
+          d.rect(xx, y, ww, 3.5, LW_THIN, [0.82, 0.86, 0.9]);
+          if (ww > 9) d.text(xx + ww / 2, y + 0.9, cut.ref.split("-").at(-1), 2.0, "c");
+          xx += ww + c.kerf * k;
+        }
+        d.text(x + W0 + 3, y + 0.6, lbl, 2.2);
+        const ci = index.get(c);
+        drawnBars[ci] = (drawnBars[ci] ?? 0) + grp.length;
+        drawnCuts[ci] = (drawnCuts[ci] ?? 0) + grp.length * b.cuts.length;
+      }
+    }
+  });
+  for (const ci of index.values()) {                 // control plano ↔ plan de corte: barras y piezas representadas
+    d.recordDim(`BARRAS_${ci}`, drawnBars[ci] ?? 0, "plan de corte");
+    d.recordDim(`PIEZAS_CORTE_${ci}`, drawnCuts[ci] ?? 0, "plan de corte");
+  }
+}
+
+function planSheetPart(d, X, part, number) {
+  const it = [{ part, T: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]] }];
+  X.onProgress?.(`Planos: pieza de chapa ${part.ref}`);
+  const projs = Object.fromEntries(["alzado", "perfil", "planta"].map((v) => [v, project(it, v, { hidden: true, res: 2000 })]));
+  const [s, V] = layoutOrtho(projs, [28, 18, 405, 272], [TB_RESERVED, [290, 80, 412, 272]]);
+  const spec = part.spec;
+  d.newSheet(number, `Pieza de chapa: ${part.name}`, scaleLabel(s), `${part.material} e=${fmt(spec.t)}`);
+  for (const [n, v] of Object.entries(V)) { v.label = LABEL[n]; d.drawView(v, true); }
+  const [lo, hi] = partGeometry(part).bbox;
+  const a = V.alzado, pl = V.planta;
+  const [xa, ya] = pl.at([lo[0], lo[1], 0]), [xb, yb] = pl.at([hi[0], hi[1], 0]);
+  d.dimH(xa, xb, ya, ya, pl.oy - 9, hi[0] - lo[0], `${part.ref}_LX`);
+  d.dimV(ya, yb, pl.ox, pl.ox, pl.ox - 9, hi[1] - lo[1], `${part.ref}_LY`);
+  const [, z0] = a.at([0, 0, lo[2]]), [, z1] = a.at([0, 0, hi[2]]);
+  if (lo[2] < -1e-6 && hi[2] > 1e-6) {     // pestañas hacia abajo (derecha) y peto hacia arriba (izquierda), desde la cara superior
+    const [, zm] = a.at([0, 0, 0]);
+    d.dimV(z0, zm, a.ox + a.w, a.ox + a.w, a.ox + a.w + 9, -lo[2], `${part.ref}_ALA`);
+    d.dimV(zm, z1, a.ox, a.ox, a.ox - 9, hi[2], `${part.ref}_PETO`);
+  } else d.dimV(z0, z1, a.ox + a.w, a.ox + a.w, a.ox + a.w + 9, hi[2] - lo[2], `${part.ref}_ALA`);
+  if (spec.notch[0]) { const [x1] = pl.at([spec.notch[0], lo[1], 0]); d.dimH(xa, x1, yb, yb, pl.oy + pl.h + 7, spec.notch[0], `${part.ref}_ESCOTADURA`); }
+  // sección A-A del ala (geometría exacta del pliegue)
+  const f0 = spec.flanges.find((f) => f.edge === "y0") ?? spec.flanges[0];
+  if (f0) {
+    const { t, r, R } = spec, hf = f0.height;
+    const rect = [296, 176, 404, 262];
+    const sc = [[5, 1], [2, 1], [1, 1]].find(([k]) => (hf + 15) * k <= rect[2] - rect[0] - 14 && (hf + 6) * k <= rect[3] - rect[1] - 6) ?? [1, 1];
+    const k = sc[0] / sc[1], ox = rect[0] + 12, oy = rect[1] + 3 + hf * k;
+    const Q = (y, z) => [ox + y * k, oy + z * k];       // y: desde la cara exterior del ala, z: desde la cara superior
+    const arcPts = (rr, a0, a1) => Array.from({ length: 13 }, (_, i) => { const an = a0 + ((a1 - a0) * i) / 12; return Q(R + rr * Math.cos(an), -R + rr * Math.sin(an)); });
+    const prof = [Q(R + 15, 0), ...arcPts(R, Math.PI / 2, Math.PI), Q(0, -hf), Q(t, -hf), ...arcPts(r, Math.PI, Math.PI / 2), Q(R + 15, -t)];
+    d.group("geom", () => { d.polyline(prof, LW_THICK); d.line(Q(R + 15, 0), Q(R + 15, -t), LW_THIN, [1.5, 1]); });
+    d.dimV(Q(0, -hf)[1], Q(0, 0)[1], Q(0, 0)[0], Q(0, 0)[0], Q(0, 0)[0] - 7, hf, `${part.ref}_ALA_SECCION`, "seccion");
+    d.dimH(Q(0, -hf)[0], Q(t, -hf)[0], Q(0, -hf)[1], Q(0, -hf)[1], Q(0, -hf)[1] - 4, t, `${part.ref}_ESPESOR`, "seccion");
+    // radio interior: texto en el hueco interior del pliegue con línea de referencia al arco interior
+    const c45 = Math.SQRT1_2, arcP = Q(R - r * c45, -R + r * c45), ri = `Ri ${fmt(r)}`;
+    const rc = [];
+    for (const dy of [5, 8, 11, 14, 18]) for (const dx of [5, 9, 14, 20]) rc.push([arcP[0] + dx, arcP[1] - dy, "l"]);
+    const rb = d.group("dim", () => d.placeText(ri, 2.6, rc));
+    if (rb) d.group("leader", () => { d.line([rb.box[0] - 0.6, rb.box[3] - 0.6], arcP, LW_DIM); d.arrow(arcP, [arcP[0] - rb.box[0], arcP[1] - rb.box[3]], 2.0); });
+    const tc = [];
+    for (let k = 0; k < 10; k++) tc.push([(rect[0] + rect[2]) / 2, rect[1] - 6 - k * 2, "c"]);
+    const tb = d.group("label", () => d.placeText(`SECCIÓN A-A (E ${scaleLabel(sc)})`, 3.0, tc, { bold: true }));
+    const y0n = (tb ? tb.box[1] : rect[1] - 8) - 5;
+    const sl = [`Espesor t = ${fmt(t)} mm · Ri = ${fmt(r)} mm · K = ${spec.K.toFixed(3)}`, `${bendDirectionText(spec)} · BD = ${fmt(spec.BD, 3)} mm`];
+    d.placeNotes(sl, Array.from({ length: 8 }, (_, k) => [rect[0], y0n - k * 2, 105]), 2.6, 105);
+  }
+  const holes = spec.flanges.reduce((s2, f) => s2 + f.holes.length, 0) + (spec.holes?.length ?? 0);
+  d.flushLabels();
+  d.placeNotes([`Referencia: ${part.ref}`, `Material: ${C.material(part.material).name}`, `Masa (desde sólido): ${part.mass.toFixed(2)} kg`,
+    `Taladros: ${holes} uds — posiciones en desarrollo (plano 04) y DXF`, `Acabado: ${part.finish ? C.finish(part.finish).name : "—"}`, "Rebabas eliminadas. Aristas vivas matadas 0,5 mm."],
+    Array.from({ length: 40 }, (_, k) => [296, 150 - k * 1.5, 105]), 2.6, 105);
+}
+
+function planFlat(d, X, part, number) {
+  const fp = part.flat.normalized();
+  const w = fp.width, h = fp.height, rect = [52, 100, 400, 238];
+  const s = SCALES.find(([a, b]) => (w * a) / b <= rect[2] - rect[0] && (h * a) / b <= rect[3] - rect[1]) ?? SCALES.at(-1);
+  const k = s[0] / s[1];
+  d.newSheet(number, `Desarrollo: ${part.name}`, scaleLabel(s), `${part.material} e=${fmt(part.spec.t)}`);
+  const ox = rect[0] + (rect[2] - rect[0] - w * k) / 2, oy = rect[1] + (rect[3] - rect[1] - h * k) / 2 + 4;
+  const P = (x, y) => [ox + x * k, oy + y * k];
+  d.polyline(fp.outline.map(([x, y]) => P(x, y)), LW_THICK, null, BLACK, true);
+  for (const ho of fp.holes) {
+    if (ho.kind === "round") { const [cx, cy] = P(ho.x, ho.y); d.circle(cx, cy, Math.max(0.4, (ho.d / 2) * k)); }
+    else { const [x0, y0] = P(ho.x - ho.w / 2, ho.y - ho.h / 2); d.rect(x0, y0, ho.w * k, ho.h * k); }
+  }
+  const xs = [], ys = [], bendLabels = [];
+  for (const b of fp.bends) {
+    const p0 = P(...b.p0), p1 = P(...b.p1);
+    d.line(p0, p1, LW_THIN, [6, 1.5, 1, 1.5]);
+    const horiz = Math.abs(p1[1] - p0[1]) < 1e-6, bc = [];
+    for (const f of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+      const q = [p0[0] + (p1[0] - p0[0]) * f, p0[1] + (p1[1] - p0[1]) * f];
+      if (horiz) bc.push([q[0], q[1] + 1.0, "c", 0], [q[0], q[1] - 3.6, "c", 0]); else bc.push([q[0] - 1.0, q[1], "c", 90], [q[0] + 3.6, q[1], "c", 90]);
+    }
+    // a continuación de los extremos de la línea de plegado (fuera de la chapa) cuando no cabe junto a ella
+    if (horiz) for (const gx of [3, 8, 14]) bc.push([ox + w * k + gx, p0[1] - 1.1, "l", 0], [ox - gx, p0[1] - 1.1, "r", 0]);
+    else for (const gy of [3, 8, 14]) bc.push([p0[0] + 1.1, oy + h * k + gy, "l", 90], [p0[0] + 1.1, oy - gy, "r", 90]);
+    bendLabels.push([`${b.direction} 90° Ri${fmt(b.radius)}`, bc]);
+    if (horiz) ys.push(b.p0[1]); else xs.push(b.p0[0]);
+  }
+  d.dimH(P(0, 0)[0], P(w, 0)[0], oy, oy, oy - 14, w, `${part.ref}_DESARROLLO_X`, "desarrollo");
+  d.dimV(P(0, 0)[1], P(0, h)[1], ox, ox, ox - 14, h, `${part.ref}_DESARROLLO_Y`, "desarrollo");
+  let chain = [0, ...xs.sort((a, b) => a - b), w];
+  if (chain.length > 2) d.dimChain(true, chain.map((c) => P(c, 0)[0]), chain.slice(1).map((c, i) => c - chain[i]), oy, oy - 7);
+  chain = [0, ...ys.sort((a, b) => a - b), h];
+  if (chain.length > 2) d.dimChain(false, chain.map((c) => P(0, c)[1]), chain.slice(1).map((c, i) => c - chain[i]), ox, ox - 7);
+  // rótulos de plegado después de las cotas, para que no caigan sobre ellas (piezas estrechas: puertas)
+  for (const [s, bc] of bendLabels) d.group("note", () => d.placeText(s, 2.2, bc, { color: GREY }));
+  const spec = part.spec;
+  // perforaciones regulares (paneles): se acotan como patrón; en la tabla sólo los taladros sueltos
+  const rects = fp.holes.filter((h) => h.kind === "rect");
+  let listed = fp.holes, grid = null;
+  if (rects.length > 24) {
+    listed = fp.holes.filter((h) => h.kind !== "rect");
+    const xs = [...new Set(rects.map((h) => Math.round(h.x * 1000) / 1000))].sort((a, b) => a - b);
+    const ys = [...new Set(rects.map((h) => Math.round(h.y * 1000) / 1000))].sort((a, b) => a - b);
+    grid = `Perforación cuadrada ${fmt(rects[0].w)}x${fmt(rects[0].h)}: ${xs.length} × ${ys.length} = ${rects.length} agujeros a paso ${fmt(xs[1] - xs[0], 1)} × ${fmt(ys[1] - ys[0], 1)} mm; `
+      + `primer agujero (centro) en X ${fmt(xs[0], 2)} · Y ${fmt(ys[0], 2)} desde el origen del desarrollo.`;
+  }
+  const rows = listed.slice(0, 24).map((ho, n) => [n + 1, Math.round(ho.x * 100) / 100, Math.round(ho.y * 100) / 100, ho.kind === "round" ? `Ø${fmt(ho.d)}` : `cuad. ${fmt(ho.w)}x${fmt(ho.h)}`]);
+  const cols = [["Nº", 10, "c"], ["X", 22, "r"], ["Y", 22, "r"], ["Forma", 22, "c"]];
+  for (let c = 0; c < 2 && rows.length > c * 12; c++) d.table(40 + c * 82, 86, cols, rows.slice(c * 12, c * 12 + 12), 4.4, 6, 2.2);
+  const more = listed.length > 24 ? [`Taladros 25 a ${listed.length}: posiciones en el fichero DXF de corte.`] : [];
+  d.placeNotes([`Desarrollo plano de ${part.ref} — origen en la esquina inferior izquierda · espesor ${fmt(spec.t)} mm · Ri ${fmt(spec.r)} mm · K ${spec.K.toFixed(3)} (DIN 6935) · `
+    + `BA = π/2·(Ri+K·t) = ${fmt(spec.BA, 3)} mm · BD = ${fmt(spec.BD, 3)} mm.`,
+  `Contorno neto ${fmt(fp.netArea / 1e6, 4)} m² · longitud de corte ${fmt(fp.cutLength / 1000, 2)} m · fichero de corte 03_DXF_CORTE/${part.ref}.dxf (escala 1:1, mm) · tolerancias EN ISO 9013 clase 2.`,
+  ...(grid ? [grid] : []), ...more], [[32, 268, 370], [32, 280, 370]], 2.6, 370);
+}
+
+/** Pletina con retícula de taladros (placa de mesa de soldadura): plano propio acotado como patrón. */
+export const isPerforatedPlate = (p) => p.kind === "pletina" && p.holes.length > 12;
+
+function planPerforatedPlate(d, X, p, number) {
+  const region = [48, 100, 396, 262];
+  const sc = [...SCALES].find(([a, b]) => (p.w * a) / b <= region[2] - region[0] - 28 && (p.h * a) / b <= region[3] - region[1] - 30) ?? SCALES.at(-1);
+  const k = sc[0] / sc[1];
+  const x = region[0] + 14, y = region[1] + 14;
+  d.newSheet(number, "Placa perforada: retícula de amarre", scaleLabel(sc), p.material);
+  const r = p.corner_r, pts = [];
+  for (const [cx, cy, a0] of [[p.w - r, r, -90], [p.w - r, p.h - r, 0], [r, p.h - r, 90], [r, r, 180]])
+    for (let j = 0; j <= 8; j++) { const an = ((a0 + (90 * j) / 8) * Math.PI) / 180; pts.push([x + (cx + r * Math.cos(an)) * k, y + (cy + r * Math.sin(an)) * k]); }
+  d.group("geom", () => {
+    d.polyline(pts, LW_THICK, null, BLACK, true);
+    for (const [hx, hy, hd] of p.holes) d.circle(x + hx * k, y + hy * k, (hd / 2) * k);
+  });
+  const xs = [...new Set(p.holes.map((h) => h[0]))].sort((a, b) => a - b), ys = [...new Set(p.holes.map((h) => h[1]))].sort((a, b) => a - b);
+  const dh = p.holes[0][2], pitch = xs.length > 1 ? xs[1] - xs[0] : ys[1] - ys[0];
+  // cotas de la placa y del patrón: primer taladro desde el canto y n×paso hasta el último
+  d.dimH(x, x + p.w * k, y, y, y - 9, p.w, `${p.ref}_W`, "geometria_pieza");
+  d.dimV(y, y + p.h * k, x, x, x - 9, p.h, `${p.ref}_H`, "geometria_pieza");
+  const yt = y + p.h * k, xr = x + p.w * k;
+  d.dimH(x, x + xs[0] * k, yt, yt, yt + 8, xs[0], `${p.ref}_RETICULA_X0`, "geometria_pieza");
+  if (xs.length > 1) d.dimH(x + xs[0] * k, x + xs.at(-1) * k, yt, yt, yt + 8, xs.at(-1) - xs[0], null, "geometria_pieza", `${xs.length - 1}×${fmt(pitch)} = `);
+  d.dimV(y, y + ys[0] * k, xr, xr, xr + 8, ys[0], `${p.ref}_RETICULA_Y0`, "geometria_pieza");
+  if (ys.length > 1) d.dimV(y + ys[0] * k, y + ys.at(-1) * k, xr, xr, xr + 8, ys.at(-1) - ys[0], null, "geometria_pieza", `${ys.length - 1}×${fmt(pitch)} = `);
+  d.flushLabels();
+  d.placeNotes([`Pos. ${p.pos} — ${p.ref}: ${p.name}`, `Material ${C.material(p.material).name}, espesor ${fmt(p.t)} mm, radio de esquina R${fmt(p.corner_r)}.`,
+    `Taladros: ${p.holes.length} × Ø${fmt(dh)} pasantes en retícula ${xs.length} × ${ys.length} a paso ${fmt(pitch)} mm, centrada en la placa `
+      + `(primer taladro a ${fmt(xs[0])} / ${fmt(ys[0])} mm de los cantos).`,
+    "Corte por láser del contorno y de los taladros (diámetro no menor que el espesor). Posición de taladros y planitud tras soldar: según especificación del cliente "
+      + "(no verificadas por el cálculo).",
+    `Masa (desde la definición): ${p.mass.toFixed(2)} kg. Sin pintura: se entrega aceitada.`],
+  Array.from({ length: 10 }, (_, i) => [48, 92 - i * 3, 172]), 2.6, 172);
+}
+
+function planPlates(d, X, number) {
+  const plates = Object.values(X.m.parts).filter((p) => p.kind === "pletina" && !isPerforatedPlate(p)).sort((a, b) => a.pos - b.pos);
+  if (!plates.length) return;
+  // escala y disposición en filas: la mayor escala normalizada con la que caben todas (con hueco para cotas y rótulos)
+  const region = [44, 92, 400, 266];
+  const layout = (k) => {
+    const pos = [];
+    let x = region[0], yTop = region[3], rowH = 0;
+    for (const p of plates) {
+      const w = p.w * k, h = p.h * k;
+      if (x + w > region[2] && x > region[0]) { x = region[0]; yTop -= rowH + 34; rowH = 0; }
+      pos.push([x, yTop - 16 - h]);
+      x += Math.max(w, 70) + 40; rowH = Math.max(rowH, h + 16);
+    }
+    return pos.every(([px, py], i) => py - 16 >= region[1] && px + plates[i].w * k <= region[2]) ? pos : null;
+  };
+  let sc = SCALES.at(-1), pos = null;
+  for (const s2 of [[2, 1], ...SCALES]) { const q = layout(s2[0] / s2[1]); if (q) { sc = s2; pos = q; break; } }
+  if (!pos) pos = layout(sc[0] / sc[1]) ?? plates.map((_, i) => [region[0] + i * 60, 150]);
+  const k = sc[0] / sc[1];
+  d.newSheet(number, "Pletinas cortadas por láser", scaleLabel(sc), [...new Set(plates.map((p) => p.material))].sort().join(", "));
+  plates.forEach((p, i) => {
+    const [x, y] = pos[i], r = p.corner_r;
+    const pts = [];
+    for (const [cx, cy, a0] of [[p.w - r, r, -90], [p.w - r, p.h - r, 0], [r, p.h - r, 90], [r, r, 180]])
+      for (let j = 0; j <= 8; j++) { const an = ((a0 + (90 * j) / 8) * Math.PI) / 180; pts.push([x + (cx + r * Math.cos(an)) * k, y + (cy + r * Math.sin(an)) * k]); }
+    d.group("geom", () => d.polyline(pts, LW_THICK, null, BLACK, true));
+    for (const [hx, hy, hd] of p.holes) {
+      const cx = x + hx * k, cy = y + hy * k;
+      d.group("geom", () => {
+        d.circle(cx, cy, (hd / 2) * k);
+        // ejes del taladro: sobresalen 2 mm del círculo (sin invadir rótulos ni piezas vecinas)
+        const ext = (hd * k) / 2 + 2;
+        d.line([cx - ext, cy], [cx + ext, cy], LW_THIN, [3, 1, 1, 1]); d.line([cx, cy - ext], [cx, cy + ext], LW_THIN, [3, 1, 1, 1]);
+      });
+    }
+    // cotas antes que los rótulos de taladro, para que éstos busquen hueco fuera de las líneas de cota
+    d.dimH(x, x + p.w * k, y, y, y - 9, p.w, `${p.ref}_W`, "geometria_pieza");
+    d.dimV(y, y + p.h * k, x, x, x - 9, p.h, `${p.ref}_H`, "geometria_pieza");
+    for (const [hx, hy, hd] of p.holes) {
+      const cx = x + hx * k, cy = y + hy * k;
+      const rr = (hd * k) / 2, hc = [];
+      for (const g of [2, 5, 9]) hc.push([cx + rr + g, cy + rr + g * 0.6], [cx + rr + g, cy - rr - 3.6 - g * 0.6], [cx - rr - g, cy + rr + g * 0.6, "r"], [cx - rr - g, cy - rr - 3.6 - g * 0.6, "r"]);
+      d.group("note", () => d.placeText(`Ø${fmt(hd)}`, 2.8, hc));
+    }
+    d.group("label", () => {
+      d.text(x, y + p.h * k + 11, `Pos. ${p.pos} — ${p.ref}`, 3.0, "l", 0, true);
+      d.text(x, y + p.h * k + 6, fitText(`${p.name} · ${p.material} e=${fmt(p.t)} · R${fmt(p.corner_r)}`, 100, 2.6), 2.6);
+    });
+  });
+}
+
+function detail(d, X, joint, members, rect, title, half = 60) {
+  const insts = members.map((id) => { try { return X.inst(id); } catch { return null; } }).filter(Boolean);
+  if (!insts.length) return;
+  const proj = project(X.items(insts), "iso", { hidden: false, res: 1600 });
+  const c = projectPoint(joint.location, "iso");
+  const win = [c[0] - half, c[1] - half, c[0] + half, c[1] + half];
+  const clip = (s) => {            // recorte de segmento a la ventana (Liang-Barsky)
+    let [x0, y0, x1, y1] = s, t0 = 0, t1 = 1;
+    const dx = x1 - x0, dy = y1 - y0;
+    for (const [p, q] of [[-dx, x0 - win[0]], [dx, win[2] - x0], [-dy, y0 - win[1]], [dy, win[3] - y0]]) {
+      if (p === 0) { if (q < 0) return null; continue; }
+      const r = q / p;
+      if (p < 0) { if (r > t1) return null; if (r > t0) t0 = r; } else { if (r < t0) return null; if (r < t1) t1 = r; }
+    }
+    return [x0 + t0 * dx, y0 + t0 * dy, x0 + t1 * dx, y0 + t1 * dy];
+  };
+  const vis = proj.visible.map(clip).filter(Boolean);
+  const sub = { visible: vis, hidden: [], bbox: win };
+  const [sc, v] = fitView(sub, "iso", [rect[0] + 4, rect[1] + 10, rect[2] - 30, rect[3] - 8], [[1, 1], [1, 2], [1, 5]]);
+  d.drawView(v, false, 0.35);
+  d.group("frame", () => d.rect(rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1], 0.3));
+  d.group("label", () => d.text(rect[0] + 3, rect[3] - 5, `${title} (E ${scaleLabel(sc)})`, 2.8, "l", 0, true));
+  placeWeld(d, v.P(...c), joint.weld, [rect[0] + 1, rect[1] + 1, rect[2] - 1, rect[3] - 7], null);
+}
+
+/** Coloca símbolos de soldadura [{ tgt, weld, tag }] en posiciones libres de `region`, sin cruces entre sus flechas. */
+function placeWelds(d, items, region, opts = {}) {
+  const placed = [];
+  for (const it of items) {
+    const { tgt, weld, tag } = it;
+    let best = null;
+    const tryBase = (base, side, pref) => {
+      const box = d.weldBox(base, weld.a, null, "135", side, tag);
+      const lead = [base[0], base[1], tgt[0], tgt[1]], L = Math.hypot(tgt[0] - base[0], tgt[1] - base[1]);
+      if (L < 6) return;
+      let cost = d.boxCost(box, { region }) * 10 + d.occ.leaderCost(lead) * 6 + L * 0.05 + pref
+        + (opts.view && boxesOverlap(box, opts.view, 0) ? 2 : 0)
+        + d.occ.segsIn([Math.min(lead[0], lead[2]), Math.min(lead[1], lead[3]), Math.max(lead[0], lead[2]), Math.max(lead[1], lead[3])], ["geom"]).filter((q) => segsCross(lead, q.seg)).length * 0.4;
+      for (const q of placed) {
+        if (boxesOverlap(box, q.box, -0.8)) cost += 1000;
+        if (segsCross(lead, [q.pos[0], q.pos[1], q.tgt[0], q.tgt[1]])) cost += 80;
+        if (segHitsBox(lead, q.box) || segHitsBox([q.pos[0], q.pos[1], q.tgt[0], q.tgt[1]], box)) cost += 300;
+      }
+      if (!best || cost < best.cost) best = { cost, base, side, box };
+    };
+    const cols = opts.cols ?? [[region[0] + 8, -1], [region[2] - 8, 1]];
+    for (let y = region[1] + 4; y <= region[3] - 5; y += 3.25) {
+      for (const [x, side] of cols) tryBase([x, y], side, 0);
+      for (const dx of [10, 16, 24, 32]) for (const side of [1, -1]) tryBase([tgt[0] + dx * side, y], side, 2);
+    }
+    if (best) placed.push({ ...it, pos: best.base, side: best.side, box: best.box });
+  }
+  for (const q of placed) q.pos = { p: q.pos, side: q.side };
+  const boxOf = (q) => d.weldBox(q.pos.p, q.weld.a, null, "135", q.pos.side, q.tag);
+  untangle(placed, (q) => [q.pos.p[0], q.pos.p[1], q.tgt[0], q.tgt[1]], (a, b) => {
+    const la = [b.pos.p[0], b.pos.p[1], a.tgt[0], a.tgt[1]], lb = [a.pos.p[0], a.pos.p[1], b.tgt[0], b.tgt[1]];
+    const ba = d.weldBox(b.pos.p, a.weld.a, null, "135", b.pos.side, a.tag), bb = d.weldBox(a.pos.p, b.weld.a, null, "135", a.pos.side, b.tag);
+    return d.occ.leaderCost(la) + d.occ.leaderCost(lb) <= d.occ.leaderCost([a.pos.p[0], a.pos.p[1], a.tgt[0], a.tgt[1]]) + d.occ.leaderCost([b.pos.p[0], b.pos.p[1], b.tgt[0], b.tgt[1]])
+      && d.boxCost(ba, { region }) + d.boxCost(bb, { region }) <= d.boxCost(boxOf(a), { region }) + d.boxCost(boxOf(b), { region })
+      && !placed.some((q) => q !== a && q !== b && (segHitsBox(la, boxOf(q)) || segHitsBox(lb, boxOf(q))));
+  });
+  for (const q of placed) d.weldSymbol(q.tgt, q.pos.p, q.weld.a, q.weld.all_around ?? true, "135", null, q.pos.side, q.tag);
+}
+function placeWeld(d, tgt, weld, region, tag, opts = {}) { placeWelds(d, [{ tgt, weld, tag }], region, opts); }
+
+function planWelds(d, X) {
+  const m = X.m, est = X.group("EST");
+  const proj = X.proj("est", est, "alzado", false);
+  const [s, v] = fitView(proj, "alzado", [80, 152, 250, 278]);
+  d.newSheet("05", "Uniones soldadas: símbolos, detalles y secuencia", scaleLabel(s), m.params.values.MATERIAL_ESTRUCTURAL);
+  v.label = "ALZADO DE LA ESTRUCTURA"; v.labelOffset = 8;
+  d.drawView(v, false);
+  const groups = new Map();
+  for (const j of m.joints) if (j.kind === "soldadura") { if (!groups.has(j.description)) groups.set(j.description, []); groups.get(j.description).push(j); }
+  const rows = [];
+  const region = [24, 146, 296, 284];
+  const cols = [[Math.max(region[0] + 44, v.ox - 5), -1], [Math.min(region[2] - 44, v.ox + v.w + 5), 1]];
+  const items = [], used = [];
+  const edge = (p) => Math.min(p[0] - v.ox, v.ox + v.w - p[0]);
+  [...groups.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).forEach(([desc, js], n0) => {
+    const n = n0 + 1, j = js[0];
+    // unión representativa: la más cercana al contorno de la vista cuyo punto no esté ya señalado por otro símbolo
+    const near = (p) => used.some((u) => Math.hypot(u[0] - p[0], u[1] - p[1]) < 3);
+    const cand = js.map((q) => v.at(q.location)).sort((a, b) => (near(a) - near(b)) || edge(a) - edge(b));
+    let tgt = cand[0];
+    for (let k = 1; near(tgt) && k < 8; k++) tgt = [cand[0][0], cand[0][1] + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * 3];
+    used.push(tgt);
+    items.push({ tgt, weld: j.weld, tag: `(${n})` });
+    const L = j.weld.length;
+    rows.push([n, desc, `a${fmt(j.weld.a)}`, j.weld.all_around ? "perimetral" : "3 cordones", fmt(L), js.length, fmt(L * js.length), j.weld.process ?? "135"]);
+  });
+  placeWelds(d, items, region, { cols, view: v.box });
+  d.flushLabels();
+  d.table(32, 140, [["Nº", 8, "c"], ["Unión", 76, "l"], ["Garganta", 19, "c"], ["Tipo", 19, "c"], ["L unit. mm", 18, "r"], ["Uds", 9, "c"], ["L total mm", 19, "r"], ["Proceso", 22, "c"]], rows, 4.4, 6, 2.2);
+  // detalles de las uniones: los que declare la familia o, por defecto, larguero–pata y placa base
+  let details = m.structure.weld_details;
+  if (!details) {
+    details = [];
+    const topLong = m.structure.levels.SUP.long[0];
+    if (m.joints.some((j) => j.id === `J.${topLong}.0`)) details.push([`J.${topLong}.0`, [], "DETALLE A: LARGUERO–PATA", 70]);
+    const jp = m.joints.find((j) => j.id.startsWith("J.PLACA."));
+    if (jp) details.push([jp.id, [jp.id.replace("J.PLACA", "EST.TUERCA")], "DETALLE B: PLACA BASE", 45]);
+  }
+  details.slice(0, 2).forEach(([jid, extra, title, half], k) => {
+    const jd = m.joints.find((j) => j.id === jid);
+    if (jd) detail(d, X, jd, [...jd.members, ...extra], k === 0 ? [300, 205, 405, 268] : [300, 140, 405, 203], title, half);
+  });
+  const w = X.plan.welding;
+  d.notes(300, 134, ["NOTAS DE SOLDADURA", "Representación simbólica EN ISO 2553. Proceso 135 (MAG, hilo macizo G3Si1).",
+    `Cordón total ${fmt(w.total_length_mm / 1000, 2)} m · depositado ${fmt(w.deposit_kg, 3)} kg · hilo ${fmt(w.wire_kg, 3)} kg · gas ${fmt(w.gas_l, 0)} l.`,
+    `Calidad EN ISO 5817-C · ${m.params.values.CLASE_EJECUCION} (EN 1090-2).`,
+    m.structure.weld_sequence ?? defaultWeldSequence(m),
+    thinWallNote(m),
+    m.joints.some((j) => j.kind === "soldadura" && j.weld.a < 3) ? "Garganta a < 3 mm: requiere WPS cualificada (EN ISO 15614-1)." : ""], 2.2, 104, true);
+}
+
+/** Punto señalado de cada pieza en la vista isométrica explosionada. Si la pieza se repite (pies, tuercas, tacos...), se elige
+ * la instancia visible más alejada de los puntos ya elegidos, para repartir los globos en vez de amontonarlos en una esquina. */
+function partTargets(X, insts, explode) {
+  const groups = new Map();
+  for (const i of insts) {
+    const [lo, hi] = instanceBBox(i), ex = explode ? explodeOf(X.m, i) : [0, 0, 0];
+    if (!groups.has(i.part.key)) groups.set(i.part.key, [String(i.part.pos), []]);
+    groups.get(i.part.key)[1].push(lo.map((v, k) => (v + hi[k]) / 2 + ex[k]));
+  }
+  const w = [1 / Math.sqrt(3), -1 / Math.sqrt(3), 1 / Math.sqrt(3)], u = [Math.SQRT1_2, Math.SQRT1_2, 0];     // vista «iso»
+  const vv = [w[1] * u[2] - w[2] * u[1], w[2] * u[0] - w[0] * u[2], w[0] * u[1] - w[1] * u[0]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const pic = (p) => [dot(p, u), dot(p, vv)];
+  const chosen = [], out = [];
+  for (const [pos, cands] of groups.values()) {
+    let best = cands[0];
+    if (cands.length > 1 && chosen.length) {
+      // la instancia más lejana del observador queda tapada por el conjunto: se descarta si hay al menos tres
+      const depth = cands.map((c) => dot(c, w)), dmin = Math.min(...depth);
+      const vis = cands.length >= 3 ? cands.filter((c, k) => depth[k] > dmin + 1e-6) : cands;
+      let bestD = -1;
+      for (const c of vis.length ? vis : cands) {
+        const pc = pic(c);
+        const dmin2 = Math.min(...chosen.map((q) => Math.hypot(pc[0] - q[0], pc[1] - q[1])));
+        if (dmin2 > bestD + 1e-6) { bestD = dmin2; best = c; }
+      }
+    }
+    chosen.push(pic(best));
+    out.push([pos, best]);
+  }
+  return out;
+}
+
+function planExploded(d, X) {
+  const m = X.m;
+  const proj = X.proj("all", m.instances, "iso", false, true);
+  // dos zonas posibles fuera de la tabla de piezas y del cuadro de rotulación: se elige la de mayor escala
+  let s = null, v = null;
+  for (const r of [[40, 92, 292, 262], [40, 30, 220, 262]]) {
+    const [s2, v2] = fitView(proj, "iso", r, [...SCALES, [1, 200]]);
+    if (!v || v2.scale > v.scale) [s, v] = [s2, v2];
+  }
+  d.newSheet("06", "Vista explosionada", scaleLabel(s), "Ver despiece");
+  v.label = "PERSPECTIVA ISOMÉTRICA EXPLOSIONADA";
+  d.drawView(v, false, 0.3);
+  d.flushLabels();
+  const ty = d.table(300, 262, [["Pos", 9, "c"], ["Ref", 10, "c"], ["Descripción", 70, "l"], ["Cant", 11, "c"]],
+    X.bom.rows.map((r) => [r.pos, r.kind !== "normalizado" ? r.ref.split("-").at(-1) : "N", r.description, r.qty]), 4.6, 6, 2.2);
+  d.reserve([298, ty - 2, 402, 264]);
+  balloons(d, v, partTargets(X, m.instances, true), { region: [24, 12, 296, 285] });
+}
+
+/** Secuencia de soldeo por defecto según el producto: por niveles y montantes, o bastidores y patas (= plans.default_weld_sequence). */
+export const defaultWeldSequence = (m) => m.instances.some((i) => i.structural && i.role === "montante")
+  ? "Secuencia: 1) puntear los bastidores de cada nivel en mesa plana con escuadras; 2) puntear los montantes y verificar diagonales y plomo; 3) soldar alternando lados y niveles; "
+    + "4) placas base y tuercas; 5) enderezar, amolar las caras enrasadas y verificar planitud."
+  : "Secuencia: 1) puntear bastidor superior en mesa plana con escuadras; 2) puntear patas y verificar diagonales; 3) bastidores inferiores; 4) soldar alternando esquinas opuestas; "
+    + "5) placas base y tuercas; 6) enderezar, amolar caras enrasadas y verificar planitud.";
+/** Aviso de pared delgada con el espesor real de los perfiles (sin valores fijos). */
+export function thinWallNote(m) {
+  const ts = m.instances.filter((i) => i.part.kind === "perfil").map((i) => i.part.profile.t);
+  return ts.length && Math.min(...ts) <= 3 ? `Pared de ${g(Math.min(...ts))} mm: cordones cortos alternos para limitar la distorsión.` : "";
+}
+export const ASSEMBLY_TEXTS = {
+  EST: "Recepción de la estructura soldada y pintada. Insertar las tuercas remachables en los taladros de largueros y travesaños.",
+  APO: "Roscar los pies niveladores en las tuercas soldadas de las placas base. Nivelar la mesa en su emplazamiento (nivel de burbuja sobre encimera al final).",
+  BAL: "Colocar la balda sobre el bastidor inferior, con las escotaduras alrededor de las patas, y fijarla con la tornillería indicada.",
+  ENC: "Colocar la encimera sobre el bastidor superior y fijarla por las pestañas con la tornillería indicada. Apretar en cruz desde el centro.",
+};
+// ---------------------------------------------------------------- instrucciones desde el modelo (= monxu/docs/assembly.py)
+const FASTENER_ROLES = ["tornillo", "tuerca_remachable", "anclaje", "pie_nivelador", "rueda"];
+const fmtc = (v) => g(v).replace(".", ",");
+/** Par de un tornillo en sus uniones: el menor entre el del tornillo y el máximo de la tuerca remachable; [par, validado]. */
+export function jointTorque(m, screw) {
+  const sc = C.component(screw);
+  let tq = sc.tightening_torque_Nm ?? null, ok = sc.validation?.status === "definido_por_norma";
+  for (const j of m.joints) if (j.kind === "atornillada" && j.data && j.data.screw === screw && j.data.rivet) {
+    const rn = C.component(j.data.rivet);
+    if (rn.max_torque_Nm != null) tq = tq === null ? rn.max_torque_Nm : Math.min(tq, rn.max_torque_Nm);
+    if (rn.validation?.status !== "definido_por_norma") ok = false;
+  }
+  return [tq, ok];
+}
+export function fastenerLine(m, group) {
+  const cnt = {};
+  for (const i of m.instances) if (i.group === group && i.part.kind === "normalizado" && FASTENER_ROLES.includes(i.part.role)) cnt[i.part.code] = (cnt[i.part.code] ?? 0) + 1;
+  const codes = Object.keys(cnt).sort();
+  if (!codes.length) return "";
+  return "Elementos según BOM: " + codes.map((code) => {
+    const c = C.component(code);
+    let txt = `${cnt[code]} × N-${code}`;
+    if (c.hole_d) txt += ` (taladro Ø${fmtc(c.hole_d)})`;
+    if (c.category === "tornilleria" && c.thread && c.length) {
+      const [tq, ok] = jointTorque(m, code);
+      if (tq !== null) txt += ` (par ${fmtc(pyRound(tq, 1))} N·m${ok ? "" : "*"})`;
+    }
+    return txt;
+  }).join(", ") + ".";
+}
+/** Texto final de cada paso: descripción de la familia + elementos del BOM + anclaje al suelo. */
+export function stepTexts(m) {
+  const texts = { ...ASSEMBLY_TEXTS, ...(m.structure.assembly_texts ?? {}) };
+  const anc = m.instances.find((i) => i.part.role === "anclaje");
+  if (anc) {
+    const c = anc.part.data;
+    texts[anc.group] = (texts[anc.group] ?? "") + ` Anclar al suelo con los tacos N-${anc.part.code} (taladro Ø${g(c.dims[0])} × ${g(c.embed_mm + 10)} mm; par según la ETA).`;
+  }
+  const out = {};
+  for (const sa of Object.values(m.subassemblies)) { const line = fastenerLine(m, sa.id); out[sa.id] = ((texts[sa.id] ?? "") + (line ? " " + line : "")).trim(); }
+  return out;
+}
+export function componentTools(m) {
+  const codes = [...new Set(m.instances.filter((i) => i.part.kind === "normalizado" && FASTENER_ROLES.includes(i.part.role)).map((i) => i.part.code))].sort();
+  const tools = [], torques = [];
+  for (const code of codes) {
+    const c = C.component(code);
+    if (c.tool && !tools.includes(c.tool)) tools.push(c.tool);
+    if (c.category === "tornilleria" && c.length) {
+      const [tq, ok] = jointTorque(m, code);
+      const nut = m.joints.find((j) => j.kind === "atornillada" && j.data && j.data.screw === code && j.data.rivet)?.data.rivet;
+      torques.push(`· N-${code}${nut ? ` en N-${nut}` : ""}: ` + (tq !== null ? `${fmtc(pyRound(tq, 1))} N·m` : "según ficha") + (ok ? "" : " (orientativo, PENDIENTE DE VALIDACIÓN)"));
+    } else if (c.category === "anclajes") torques.push(`· N-${code}: par de instalación según la ETA (PENDIENTE DE VALIDACIÓN)`);
+  }
+  return [tools, torques];
+}
+export function assemblyNotes(m) {
+  const sup = m.structure.supports?.[0];
+  const castor = !!sup && C.component(sup.component).category.startsWith("ruedas");
+  const base = m.structure.assembly_notes ?? ["HERRAMIENTAS:", ...(castor ? [] : ["· Nivel de burbuja"]), "", ...TOOLS_TAIL];
+  const [tools, torques] = componentTools(m);
+  const block = ["PARES DE APRIETE:", ...(torques.length ? torques : ["· Sin uniones atornilladas"])];
+  if (torques.some((t) => t.includes("PENDIENTE"))) block.push("* Par orientativo: confirmar con la ficha del fabricante.");
+  const k = base.indexOf("HERRAMIENTAS:");
+  if (k < 0) return ["HERRAMIENTAS:", ...tools.map((t) => `· ${t}`), "", ...block, "", ...base];
+  let end = base.findIndex((l, i) => i > k && l === "");
+  if (end < 0) end = base.length;
+  return [...base.slice(0, k + 1), ...tools.map((t) => `· ${t}`), ...base.slice(k + 1, end), "", ...block, ...base.slice(end)];
+}
+const TOOLS_TAIL = [
+  "DESMONTAJE:", "Chapas desmontables (uniones atornilladas). La estructura es un subconjunto soldado no desmontable.", "",
+  "SEGURIDAD:", "Manipular las chapas entre dos personas; usar guantes (cantos de chapa)."];
+/** Palabras de otro tipo de producto en los textos generados: «encimera» en un producto que no la tiene (= assembly.foreign_words). */
+export function foreignWords(m, texts) {
+  if ((m.structure.surfaces ?? []).some((sf) => sf.id === "encimera")) return [];
+  return [...new Set(texts.filter((t) => t.toLowerCase().includes("encimera")).map((t) => t.slice(0, 80)))].sort();
+}
+/** Referencias o designaciones de tornillería citadas en las instrucciones que no están en el BOM (= assembly.designation_issues). */
+export function designationIssues(m, texts) {
+  const codes = new Set(m.instances.filter((i) => i.part.kind === "normalizado").map((i) => i.part.code));
+  const des = new Set();
+  for (const code of codes) { const c = C.component(code); if (c.thread && c.length) des.add(`${Math.trunc(+c.thread.slice(1))}x${Math.trunc(c.length)}`); }
+  const bad = new Set();
+  for (const t of texts) {
+    for (const mm of t.matchAll(/\bN-[A-Z0-9_]+(?:x\d+)?[A-Z0-9_]*/g)) if (!codes.has(mm[0].slice(2))) bad.add(mm[0]);
+    for (const mm of t.matchAll(/\bM(\d+)\s*[x×]\s*(\d+)\b/g)) if (!des.has(`${+mm[1]}x${+mm[2]}`)) bad.add(mm[0]);
+  }
+  return [...bad].sort();
+}
+
+function planAssembly(d, X) {
+  const m = X.m;
+  const order = Object.values(m.subassemblies).sort((a, b) => a.step - b.step);
+  d.newSheet("07", "Instrucciones de montaje", "S/E", "—");
+  const cells = [[28, 178, 152, 270], [156, 178, 280, 270], [284, 178, 408, 270], [28, 84, 152, 174], [156, 84, 280, 174]];
+  const texts = stepTexts(m);
+  const shown = [];
+  order.slice(0, 4).forEach((sa, n) => {
+    shown.push(...m.instances.filter((i) => i.group === sa.id));
+    const proj = X.proj(`paso${n}`, [...shown], "iso", false);
+    const cell = cells[n];
+    const [, v] = fitView(proj, "iso", [cell[0] + 2, cell[1] + 18, cell[2] - 2, cell[3] - 9], [], true);
+    d.drawView(v, false, 0.25);
+    d.rect(cell[0], cell[1], cell[2] - cell[0], cell[3] - cell[1], 0.3);
+    d.text(cell[0] + 3, cell[3] - 6, `PASO ${n + 1}: ${sa.name.toUpperCase()}`, 3.0, "l", 0, true);
+    d.notes(cell[0] + 3, cell[1] + 14, [texts[sa.id] ?? ""], 2.1, 118);
+  });
+  d.rect(284, 84, 124, 90, 0.3);
+  d.notes(287, 170, assemblyNotes(m), 2.2, 118);
+}
+
+const BOM_ROWS_PER_SHEET = 28;      // filas del despiece por hoja: la tabla ocupa todo el ancho y no baja hasta el cajetín
+
+/** Columnas del despiece: referencia y material al ancho de su contenido (se leen completos: son los que citan las
+ *  instrucciones y el estado de validación) y la descripción con el resto, hasta 370 mm de tabla (= plans.bom_columns). */
+function bomColumns(rows) {
+  const need = (k, lo) => rows.reduce((mx, r) => Math.max(mx, textWidth(String(r[k]), 2.4) + 3.4), lo);
+  const ref = need(1, 42), mat = need(3, 42);
+  const desc = Math.min(need(2, 80), 370 - 121 - ref - mat);
+  return [["Pos", 10, "c"], ["Referencia", ref, "l"], ["Descripción", desc, "l"], ["Material", mat, "l"], ["Espesor", 16, "r"], ["Largo", 20, "r"], ["Ancho", 18, "r"],
+    ["Cant.", 13, "c"], ["Peso unit. kg", 22, "r"], ["Peso total kg", 22, "r"]];
+}
+
+function planBom(d, X) {
+  // dimensiones y pesos con las mismas cifras que el BOM (Excel y CSV), no con el formato de cotas
+  const rows = X.bom.rows.map((r) => [r.pos, r.ref, r.description, r.material ?? "", bomNum(r.thickness), bomNum(r.length), bomNum(r.width), r.qty,
+    bomNum(r.unit_mass), bomNum(r.total_mass)]);
+  const cols = bomColumns(rows);
+  const nPages = Math.max(1, Math.ceil(rows.length / BOM_ROWS_PER_SHEET));
+  let y = 268;
+  for (let n = 0; n < nPages; n++) {
+    d.newSheet(n ? `08.${n + 1}` : "08", "Despiece y lista de materiales" + (nPages > 1 ? ` (${n + 1}/${nPages})` : ""), "—", "Ver lista");
+    const part = rows.slice(n * BOM_ROWS_PER_SHEET, (n + 1) * BOM_ROWS_PER_SHEET);
+    y = d.table(30, 268, cols, part, 5.2, 6, 2.4);
+    part.forEach((row, k) => {       // control BOM ↔ planos ↔ 3D: cantidad y peso tal como se imprimen
+      const r = X.bom.rows[n * BOM_ROWS_PER_SHEET + k];
+      d.recordDim(`CANT_${r.ref}`, r.qty, "despiece");
+      d.recordDim(`PESO_G_${r.ref}`, parseFloat(row[8].replace(",", ".")) * 1000, "despiece");
+    });
+  }
+  const t = X.bom.totals;
+  d.notes(30, y - 6, [`Componentes: ${t.components} (${t.manufactured_parts} fabricados, ${t.standard_parts} normalizados) · Referencias distintas: ${t.distinct_parts} · Masa total: ${t.total_mass.toFixed(2)} kg (calculada desde los sólidos).`,
+    "Metros de perfil: " + Object.entries(t.profile_meters).map(([k, v]) => `${k}: ${v.toFixed(3)} m`).join("; "),
+    "Superficie de chapa: " + Object.entries(t.sheet_area_m2).map(([k, v]) => `${k}: ${v.toFixed(4)} m²`).join("; ")], 2.6, 360);
+}
+
+/** Lo que debe figurar en los planos según el modelo y el plan de corte (no según lo dibujado): taladros de cada perfil
+ *  y barras y piezas de cada grupo del plan (= plans.drawing_expected). drawingConsistency lo compara con lo impreso. */
+export function drawingExpected(model, plan) {
+  const exp = {};
+  for (const p of Object.values(model.parts)) if (p.kind === "perfil" && p.holes.length) exp[`TAL_${p.ref}`] = p.holes.length;
+  plan.cutting.forEach((c, k) => {
+    exp[`BARRAS_${k + 1}`] = c.bars.length;
+    exp[`PIEZAS_CORTE_${k + 1}`] = c.bars.reduce((t, b) => t + b.cuts.length, 0);
+  });
+  return exp;
+}
+
+/** Auditoría de legibilidad de todas las hojas (después de terminar el documento). Libera el registro de ocupación. */
+function layoutReport(d) {
+  const sheets = d.pages.map((p) => ({ number: p.number, title: p.title, conflicts: auditPage(p.occ, { titleBlock: TB_BOX }) }));
+  for (const p of d.pages) delete p.occ;
+  const all = sheets.flatMap((s) => s.conflicts);
+  return { total: all.length, by: summarize(all),
+    sheets: sheets.filter((s) => s.conflicts.length).map((s) => ({ number: s.number, title: s.title, by: summarize(s.conflicts), sample: s.conflicts.slice(0, 10) })) };
+}
+
+/** Juego completo de planos. Devuelve { pdf: Uint8Array, sheets, total, layout }. */
+export async function drawingSet(model, summary, info, onProgress = null) {
+  const X = new Ctx(model, summary, info, onProgress);
+  const sheets = Object.values(model.parts).filter((p) => p.kind === "chapa").sort((a, b) => a.pos - b.pos);
+  const plates = Object.values(model.parts).filter((p) => p.kind === "pletina" && !isPerforatedPlate(p));
+  const perf = Object.values(model.parts).filter(isPerforatedPlate).sort((a, b) => a.pos - b.pos);
+  const nBom = Math.max(1, Math.ceil(summary.bom.rows.length / BOM_ROWS_PER_SHEET));
+  const total = 2 + profileFlow(model, summary.manufacturing).length + sheets.length * 2 + (plates.length ? 1 : 0) + perf.length + 3 + nBom;
+  const d = new Drawing({ ...info, total_sheets: total, title: `Planos ${model.product_code}`, assembly_ref: model.product_code });
+  planGeneral(d, X);
+  planStructure(d, X);
+  planProfiles(d, X);
+  sheets.forEach((p, n) => planSheetPart(d, X, p, `03.${n + 1}`));
+  sheets.forEach((p, n) => planFlat(d, X, p, `04.${n + 1}`));
+  if (plates.length) planPlates(d, X, `04.${sheets.length + 1}`);
+  perf.forEach((p, n) => planPerforatedPlate(d, X, p, `04.${sheets.length + (plates.length ? 1 : 0) + n + 1}`));
+  planWelds(d, X);
+  planExploded(d, X);
+  planAssembly(d, X);
+  planBom(d, X);
+  onProgress?.("Planos: compresión del PDF");
+  const pdf = await d.finish();
+  const layout = layoutReport(d);
+  return { pdf, sheets: d.pages, total: d.pages.length, announced: total, expected: drawingExpected(model, summary.manufacturing), ctx: X, layout };
+}
+
+/** Instrucciones de montaje (documento independiente): portada + una hoja por paso con vista explosionada del paso. */
+export async function assemblyInstructions(model, summary, info, X = null, onProgress = null) {
+  X = X ?? new Ctx(model, summary, info, onProgress);
+  const m = model;
+  const order = Object.values(m.subassemblies).sort((a, b) => a.step - b.step);
+  const d = new Drawing({ ...info, total_sheets: order.length + 1, title: `Instrucciones de montaje ${m.product_code}`, assembly_ref: m.product_code });
+  const texts = stepTexts(m);
+  d.newSheet("M0", "Instrucciones de montaje: conjunto y herramientas", "S/E", "—");
+  const all = X.proj("all", m.instances, "iso", false, true);
+  const [, v0] = fitView(all, "iso", [30, 90, 270, 270], [], true);
+  v0.label = "CONJUNTO EXPLOSIONADO"; v0.labelOffset = 6;
+  d.drawView(v0, false, 0.3);
+  d.flushLabels();
+  d.group("frame", () => d.rect(284, 84, 124, 190, 0.3));
+  d.reserve([283, 83, 409, 275]);
+  balloons(d, v0, partTargets(X, m.instances, true), { region: [24, 84, 280, 285] });
+  let y = d.notes(287, 268, [`${m.family_name} ${m.product_code}`, `Masa total ${summary.bom.totals.total_mass.toFixed(1)} kg · ${summary.bom.totals.components} componentes`, "",
+    "ORDEN DE MONTAJE:", ...order.map((s, n) => `${n + 1}. ${s.name}`), "", ...assemblyNotes(m)], 2.4, 118, true);
+  void y;
+  const shown = [];
+  order.forEach((sa, n) => {
+    const now = m.instances.filter((i) => i.group === sa.id);
+    d.newSheet(`M${n + 1}`, `Paso ${n + 1}: ${sa.name}`, "S/E", "—");
+    const prev = project(X.items(shown), "iso", { hidden: false, res: 1800 });
+    const cur = project(now.map((i) => ({ part: i.part, T: mmul(translation(...explodeOf(m, i).map((e) => e * 0.6)), i.T) })), "iso", { hidden: false, res: 1800 });
+    const bb = [Math.min(prev.bbox[0], cur.bbox[0]), Math.min(prev.bbox[1], cur.bbox[1]), Math.max(prev.bbox[2], cur.bbox[2]), Math.max(prev.bbox[3], cur.bbox[3])];
+    const both = { visible: [], hidden: [], bbox: shown.length ? bb : cur.bbox };
+    const [, v] = fitView(both, "iso", [30, 86, 270, 270], [], true);
+    const vp = new View(prev, v.scale, v.ox + (prev.bbox[0] - both.bbox[0]) * v.scale, v.oy + (prev.bbox[1] - both.bbox[1]) * v.scale, "iso");
+    const vc = new View(cur, v.scale, v.ox + (cur.bbox[0] - both.bbox[0]) * v.scale, v.oy + (cur.bbox[1] - both.bbox[1]) * v.scale, "iso");
+    if (shown.length) { d.pdf.lw(0.18).stroke(GREY).segments(prev.visible.map(([a, b, c, e]) => [...vp.P(a, b), ...vp.P(c, e)])); d.pdf.stroke(BLACK); }
+    d.drawView(vc, false, 0.4);
+    const cnt = new Map();
+    for (const i of now) cnt.set(i.part.key, (cnt.get(i.part.key) ?? 0) + 1);
+    const rows = [...cnt.entries()].map(([k, q]) => { const p = m.parts[k]; return [p.pos, p.ref, p.name, q]; }).sort((a, b) => a[0] - b[0]);
+    d.text(30, 80, `PASO ${n + 1}: ${sa.name.toUpperCase()}`, 3.6, "l", 0, true);
+    d.notes(30, 72, [texts[sa.id] ?? ""], 2.8, 190);
+    // la referencia completa (es la que citan las instrucciones): su columna al ancho del contenido; ninguna fila se omite
+    const refW = Math.min(64, rows.reduce((mx, r) => Math.max(mx, textWidth(String(r[1]), 2.3) + 3.4), 34));
+    const yT = d.table(284, 268, [["Pos", 10, "c"], ["Ref", refW, "l"], ["Pieza", 100 - refW, "l"], ["Uds", 12, "c"]], rows, 5.2, 6, 2.3);
+    if (yT < 84) (d.page.truncated ??= []).push(`tabla de piezas del paso ${n + 1}: no cabe en la hoja`);
+    shown.push(...now);
+  });
+  const pdf = await d.finish();
+  return { pdf, sheets: d.pages, total: d.pages.length, layout: layoutReport(d) };
+}
+
+/** Coherencia de las cotas registradas al dibujar frente a parámetros y geometría (port de qa.drawing_consistency). */
+// Registros que deben figurar siempre en los planos (longitud y taladros de cada perfil, cantidad y peso de cada pieza del
+// despiece, barras y piezas de cada grupo del plan de corte).
+const REQUIRED_IN_DRAWINGS = ["L_", "CANT_", "PESO_G_", "TAL_", "BARRAS_", "PIEZAS_CORTE_"];
+
+/** Compara lo registrado al dibujar con el modelo. ``dr`` es el resultado de drawingSet (o sólo sus hojas). */
+export function drawingConsistency(model, dr) {
+  const sheets = Array.isArray(dr) ? dr : dr.sheets;
+  const env = model.dims.envelope ?? {};
+  const names = env.names ?? ["LONGITUD", "ANCHURA"];
+  const exp = {};
+  if (env.dx != null) exp[names[0]] = env.dx;
+  if (env.dy != null) exp[names[1]] = env.dy;
+  if (env.zmax != null) exp.ALTURA = env.zmax;
+  for (const [name] of model.dims.levels ?? []) if (model.dims[name] != null) exp[name] = model.dims[name];
+  Object.assign(exp, model.dims.drawing_expected ?? {});
+  for (const p of Object.values(model.parts)) {
+    if (p.kind === "chapa") {
+      exp[`${p.ref}_DESARROLLO_X`] = p.flat.width; exp[`${p.ref}_DESARROLLO_Y`] = p.flat.height;
+      exp[`${p.ref}_LX`] = p.spec.Lx; exp[`${p.ref}_LY`] = p.spec.Ly; exp[`${p.ref}_ESPESOR`] = p.spec.t;
+    }
+    if (p.kind === "perfil") exp[`L_${p.ref}`] = p.length;
+    // cantidades impresas en el despiece frente a las instancias del 3D, y peso unitario impreso (en gramos) frente
+    // al de la pieza con el redondeo del BOM
+    exp[`CANT_${p.ref}`] = model.instances.filter((i) => i.part.key === p.key).length;
+    exp[`PESO_G_${p.ref}`] = pyRound(p.mass, 4) * 1000;
+  }
+  if (!Array.isArray(dr)) Object.assign(exp, dr.expected ?? {});
+  const mism = [], drawn = new Set();
+  let checked = 0;
+  for (const sh of sheets) for (const dm of sh.dims) if (dm.name in exp) {
+    checked++;
+    drawn.add(dm.name);
+    if (Math.abs(dm.value - exp[dm.name]) > 0.05) mism.push({ sheet: sh.number, dim: dm.name, drawn: dm.value, expected: Math.round(exp[dm.name] * 1000) / 1000 });
+  }
+  // lo que debe figurar y no figura: un perfil sin su longitud o sus taladros, una pieza sin fila en el despiece, barras o
+  // piezas del plan de corte sin representar (una hoja llena no puede omitir nada sin aviso)
+  for (const name of Object.keys(exp).filter((n) => REQUIRED_IN_DRAWINGS.some((p) => n.startsWith(p)) && !drawn.has(n)).sort())
+    mism.push({ sheet: "—", dim: name, drawn: null, expected: Math.round(exp[name] * 1000) / 1000 });
+  for (const sh of sheets) for (const txt of sh.truncated ?? []) mism.push({ sheet: sh.number, dim: "TEXTO_TRUNCADO", drawn: null, expected: txt });   // un texto de tabla cortado no identifica nada
+  if (!Array.isArray(dr) && dr.announced != null && dr.announced !== sheets.length) mism.push({ sheet: "—", dim: "HOJAS", drawn: sheets.length, expected: dr.announced });
+  return { checked_dims: checked, mismatches: mism };
+}

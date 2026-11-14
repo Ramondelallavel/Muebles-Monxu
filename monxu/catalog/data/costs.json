@@ -1,0 +1,157 @@
+{
+  "_meta": {
+    "version": "2026.11-7",
+    "currency": "EUR",
+    "note": "Tarifas orientativas de taller (España, 2026) para estimar el coste de fabricación. Deben ajustarse a los precios reales del taller y de los proveedores. No incluyen transporte, embalaje especial, diseño ni impuestos."
+  },
+  "material_eur_kg": {
+    "acero_carbono": {
+      "tubo": 1.45,
+      "chapa": 1.15,
+      "pletina": 1.2
+    },
+    "acero_inoxidable": {
+      "tubo": 5.2,
+      "chapa": 4.4,
+      "pletina": 4.6
+    },
+    "aluminio": {
+      "tubo": 5.5,
+      "chapa": 5.0,
+      "pletina": 5.2
+    }
+  },
+  "material_overrides_eur_kg": {
+    "S250GD+Z": 1.35,
+    "DX51D+Z": 1.3,
+    "DC01": 1.2,
+    "S355JR": 1.3,
+    "S355J2H": 1.6,
+    "S275JR": 1.22,
+    "S275J0H": 1.52,
+    "1.4404": 6.2,
+    "1.4016": 3.2
+  },
+  "components_eur": [
+    ["ANCLAJE_M8", 0.8],
+    ["ANCLAJE_M10", 1.2],
+    ["ANCLAJE_M12", 1.8],
+    ["ANCLAJE_M16", 3.2],
+    ["BISAGRA_PERNIO_80_INOX", 7.5],
+    ["BISAGRA_PERNIO_80", 3.2],
+    ["CERRADURA_MANETA_INOX", 24.0],
+    ["CERRADURA_MANETA", 12.5],
+    ["PIE_NIV_M8", 2.1],
+    ["PIE_NIV_M10", 2.6],
+    ["PIE_NIV_M12_D80", 4.2],
+    ["PIE_NIV_M12", 3.4],
+    ["PIE_NIV_M16_D100", 8.9],
+    ["PIE_NIV_M16", 6.8],
+    ["PIE_NIV_M20", 11.5],
+    ["RUEDA_ESP_M12_D80_FRENO", 9.5],
+    ["RUEDA_ESP_M12_D80", 6.9],
+    ["RUEDA_ESP_M12_D100_FRENO", 11.8],
+    ["RUEDA_ESP_M12_D100", 8.4],
+    ["RUEDA_ESP_M16_D125_FRENO", 16.5],
+    ["RUEDA_ESP_M16_D125", 12.2],
+    ["RUEDA_ESP_M16_D160_FRENO", 24.0],
+    ["RUEDA_ESP_M16_D160", 18.5],
+    ["RUEDA_ESP_M20_D160_FRENO", 34.0],
+    ["RUEDA_ESP_M20_D160", 26.0],
+    ["RUEDA_ESP_M20_D200_FRENO", 45.0],
+    ["RUEDA_ESP_M20_D200", 34.0],
+    ["RUEDA_100", 9.0],
+    ["RUEDA_125", 13.0],
+    ["TUERCA_SOLDAR_M8_A2", 0.55],
+    ["TUERCA_SOLDAR_M10_A2", 0.7],
+    ["TUERCA_SOLDAR_M12_A2", 0.85],
+    ["TUERCA_SOLDAR_M16_A2", 1.4],
+    ["TUERCA_SOLDAR_M20_A2", 2.2],
+    ["TUERCA_SOLDAR_M8_AL", 0.45],
+    ["TUERCA_SOLDAR_M10_AL", 0.55],
+    ["TUERCA_SOLDAR_M12_AL", 0.7],
+    ["TUERCA_SOLDAR_M16_AL", 1.1],
+    ["TUERCA_SOLDAR_M20_AL", 1.8],
+    ["TUERCA_SOLDAR_M8", 0.18],
+    ["TUERCA_SOLDAR_M10", 0.22],
+    ["TUERCA_SOLDAR_M12", 0.28],
+    ["TUERCA_SOLDAR_M16", 0.45],
+    ["TUERCA_SOLDAR_M20", 0.7],
+    ["TUERCA_REMACHABLE", 0.12],
+    ["TORNILLO_ISO7380_M6", 0.09],
+    ["TORNILLO_ISO7380_M8", 0.14],
+    ["TAPON", 0.15]
+  ],
+  "component_default_eur": 0.5,
+  "consumables_eur": {
+    "hilo_kg": 3.2,
+    "gas_l": 0.025
+  },
+  "labor_eur_h": {
+    "taller": 32.0,
+    "soldadura": 36.0,
+    "montaje": 28.0,
+    "control": 34.0
+  },
+  "operations": {
+    "sierra_eur_corte": 0.45,
+    "taladro_eur": 0.35,
+    "laser_eur_m": [
+      [1.0, 0.7],
+      [1.5, 0.85],
+      [2.0, 1.0],
+      [3.0, 1.35],
+      [4.0, 1.75],
+      [5.0, 2.2],
+      [6.0, 2.7],
+      [8.0, 3.8],
+      [10.0, 5.0],
+      [12.0, 6.2],
+      [15.0, 8.1],
+      [20.0, 11.4]
+    ],
+    "laser_factor_material": {
+      "acero_inoxidable": 1.6,
+      "aluminio": 1.4
+    },
+    "laser_eur_perforacion": 0.04,
+    "plegado_eur_pliegue": 0.7,
+    "soldadura_factor_marcha": 0.3,
+    "montaje_min": {
+      "tornillo": 0.6,
+      "tuerca_remachable": 0.5,
+      "apoyo": 1.5,
+      "por_unidad": 20.0
+    },
+    "imputacion_material": "compra",
+    "imputacion_material_opciones": {
+      "compra": "barras y chapas comerciales que hay que comprar según el plan de corte y el anidado del lote",
+      "consumo": "material comprado menos los retales reutilizables que vuelven al inventario (desperdicio real incluido); nunca porcentajes genéricos"
+    },
+    "control_min": {
+      "por_unidad": 15.0,
+      "por_union_soldada": 0.5
+    }
+  },
+  "setup_eur": {
+    "sierra_por_perfil": 6.0,
+    "laser_por_referencia": 8.0,
+    "plegado_por_referencia": 12.0,
+    "soldadura_util": 25.0
+  },
+  "finishes_eur": {
+    "POLVO_m2": 9.5,
+    "CATAFORESIS_POLVO_m2": 15.0,
+    "GALVANIZADO_kg": 0.85,
+    "ZINCADO_CONTINUO_m2": 0.0,
+    "INOX_SATINADO_m2": 6.0,
+    "INOX_PULIDO_m2": 14.0,
+    "ANODIZADO_NATURAL_m2": 18.0,
+    "SIN_ACABADO_m2": 0.0
+  },
+  "overheads": {
+    "gastos_generales": 0.15,
+    "margen": 0.2
+  },
+  "lots": [1, 5, 10, 25, 50]
+}
