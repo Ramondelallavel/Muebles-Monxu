@@ -20,6 +20,8 @@ const now = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).
 // ---------------------------------------------------------------------------- almacenamiento
 const cap = (name) => (typeof window !== "undefined" && window.claude?.use ? window.claude.use(name).catch(() => null) : Promise.resolve(null));
 let storeP = null;
+/** Copia profunda y modificable de un documento de la base de datos (los que entrega el runtime están congelados). */
+const thaw = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
 function getStore() {
   if (storeP) return storeP;
   storeP = (async () => {
@@ -39,7 +41,8 @@ function getStore() {
       if (loaded) return;
       const t = new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 10000));
       const snap = await Promise.race([col.get(), t]);
-      snap.docs.forEach((d) => { const v = d.data(); if (d.id === SEQ_DOC) seq = v?.por_anio ?? {}; else if (d.id === INV_DOC) invItems = v?.items ?? []; else if (v?.code) cache.set(v.code, v); });
+      // la base de datos entrega los documentos congelados (solo lectura): se copian para poder migrarlos y editarlos
+      snap.docs.forEach((d) => { const v = thaw(d.data()); if (d.id === SEQ_DOC) seq = v?.por_anio ?? {}; else if (d.id === INV_DOC) invItems = v?.items ?? []; else if (v?.code) cache.set(v.code, v); });
       loaded = true;
     };
     return { kind: "db", label: "Base de datos privada del artefacto (sólo usted)", list: async () => { try { await load(); } catch { /* sin conexión: caché */ } return [...cache.values()]; },

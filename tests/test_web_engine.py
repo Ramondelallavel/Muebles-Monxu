@@ -85,3 +85,19 @@ def test_borrado_de_proyectos_en_el_navegador(tmp_path):
     assert r["deleted"]["code"] == b and sorted(r["after"]) == [a, c]
     assert r["next"][-4:] == "0004" and r["next2"][-4:] == "0005"
     assert "no encontrado" in r["get_deleted"] and "no encontrado" in r["delete_again"]
+
+
+@pytest.mark.skipif(not shutil.which("node") or not ESBUILD.exists(), reason="requiere node y las dependencias del frontend")
+def test_base_de_datos_del_artefacto_entrega_documentos_congelados(tmp_path):
+    """El runtime del artefacto entrega los documentos congelados (solo lectura): la migración de proyectos guardados
+    con versiones anteriores no puede modificarlos en sitio (antes la lista de proyectos fallaba en silencio)."""
+    bundle = tmp_path / "projects_frozen.mjs"
+    subprocess.run([str(ESBUILD), str(ROOT / "tools/webcheck/projects_frozen.ts"), "--bundle", "--platform=node", "--format=esm",
+                    f"--outfile={bundle}", "--log-level=warning"], cwd=ROOT / "frontend", check=True)
+    r = json.loads(subprocess.run(["node", str(bundle)], capture_output=True, text=True, check=True).stdout)
+    assert "error" not in r, r.get("error")
+    assert sorted(r["codes"]) == ["P-2026-0001", "P-2026-0002"]
+    assert r["status"] == {"P-2026-0001": "en_configuracion", "P-2026-0002": "pendiente_validacion"}   # la validación antigua no cubre las nuevas
+    assert r["migrated"] == {"P-2026-0001": 2, "P-2026-0002": 2}                                      # migrados y guardados
+    assert r["legacy_note"] == "Ing. Antes" and r["approval_state"] == "diseno_generado"
+    assert r["new_code"] == "P-2026-0003"
